@@ -19,5 +19,5 @@ done
 # uninstall hands the panel back and removes the files
 grep -q '/etc/init.d/gl_screen start' uninstall.sh || fail "uninstall.sh must restore gl_screen"
 grep -q '/usr/bin/mudi.py' uninstall.sh            || fail "uninstall.sh must remove mudi.py"
-grep -q '/etc/config/mudi' uninstall.sh            && fail "uninstall.sh must NOT delete user config /etc/config/mudi"
+grep -qE 'rm.*etc/config/mudi' uninstall.sh        && fail "uninstall.sh must NOT delete user config /etc/config/mudi"
 echo "install wiring OK"

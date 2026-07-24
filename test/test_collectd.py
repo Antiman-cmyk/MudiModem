@@ -33,8 +33,8 @@ class TestBroadcaster(unittest.TestCase):
     def test_publish_reaches_a_connected_client(self):
         bc = collectd.Broadcaster(self._sock())
         bc.start()
+        c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
-            c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             c.settimeout(2.0)
             c.connect(bc.path)
             time.sleep(0.05)                       # let accept register the client
@@ -42,19 +42,21 @@ class TestBroadcaster(unittest.TestCase):
             line = c.recv(4096).decode().strip()
             self.assertEqual(json.loads(line)["rsrp"], -101)
         finally:
+            c.close()
             bc.close()
 
     def test_new_client_gets_the_last_line_on_connect(self):
         bc = collectd.Broadcaster(self._sock())
         bc.start()
+        c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             bc.publish(json.dumps({"band": 71}))   # published BEFORE anyone connects
-            c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             c.settimeout(2.0)
             c.connect(bc.path)
             line = c.recv(4096).decode().strip()
             self.assertEqual(json.loads(line)["band"], 71)
         finally:
+            c.close()
             bc.close()
 
     def test_publish_survives_a_dead_client(self):

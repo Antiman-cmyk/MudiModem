@@ -361,8 +361,16 @@ if [ -n "${MM_PW:-}" ]; then
   printf '%s' "$RESP" | grep -q '"available"' \
     || fail "get_lcd did not return an availability snapshot (got: $RESP)"
   echo "   get_lcd round-trip OK"
+  RESP=$(ssh -o BatchMode=yes "root@$HOST" \
+    'curl -sk -X POST https://127.0.0.1/rpc -H "Content-Type: application/json" \
+       -d "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"call\",\"params\":[\"'"$SID"'\",\"mudimodem\",\"set_lcd\",{\"default_page\":0}]}"')
+  printf '%s' "$RESP" | grep -q -- '-32602' \
+    && fail "set_lcd was rejected by the arg validator (-32602): $RESP"
+  printf '%s' "$RESP" | grep -q '"available"' \
+    || fail "set_lcd did not return an availability snapshot (got: $RESP)"
+  echo "   set_lcd round-trip OK"
 else
-  echo "14b. SKIPPED — set MM_PW=<admin-password> to run the get_lcd /rpc round-trip"
+  echo "14b. SKIPPED — set MM_PW=<admin-password> to run the get_lcd/set_lcd /rpc round-trip"
 fi
 
 echo "ALL CHECKS PASSED"
