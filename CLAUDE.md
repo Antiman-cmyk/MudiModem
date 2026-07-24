@@ -165,6 +165,11 @@ return { get_config = function(args) ... end, set_config = function(args) ... en
 | `/usr/lib/mudimodem/mudimodem-at.py` | our own AT channel on `/dev/at_mdm0` (§7a); backend spawns it |
 | `/www/views/gl-sdk4-ui-mudimodem-console.common.js.gz` | the AT-console tab chunk (lazy-loaded) |
 | **`/usr/share/gl-validator.d/mudimodem.lua`** | **arg validator — REQUIRED for the AT console (§3), not optional** |
+| `/usr/bin/mudi.py` | vendored MudiUI front-LCD renderer (§12, 2026-07-24 merge); **default off** |
+| `/usr/bin/mudi-watch.py` | LCD watchdog (restarts `mudi.py` on crash/fb loss); **default off** |
+| `/etc/init.d/mudi` | procd service for the LCD renderer; **default off** |
+| `/etc/init.d/mudi-watch` | procd service for the LCD watchdog; **default off** |
+| `/etc/config/mudi` | UCI config for the LCD renderer (enabled, brightness, screen_timeout, default_page) |
 
 ⚠️ **The validator is NOT optional once a method takes free-form input.** oui applies a **default
 string-arg allowlist** (`^[%w%.%s%-_:#/]-$`) to every param when no per-object validator exists —
@@ -552,6 +557,7 @@ router and searchable. It's a differentiator no router UI has.
 | **2** | Band grid + cell lock, auto-revert, panic restore | ✅ **2a+2b done** (band read/write/revert). ⏳ cell lock (`QNWLOCK` §6a) + durability (make `set_bands` persist via `modem.set_sim_config`) remain. |
 | **3** | AT console + community library | ✅ done (2026-07-18). Own channel via /usr/lib/mudimodem/mudimodem-at.py; gl_modem slept during sends; library at /www/mudimodem/at-library.json.gz. |
 | **4** | SIM / APN | ✅ **done (2026-07-18)** — two DSDS slot cards (selected≠data made visible), roaming honesty, editable dial profile, slot switch, failover card. **Chunk-only, browser-direct to GL's undotted `modem.*` RPC — zero backend.** Slot switch is `modem.set_slot_failover_config {current_sim}` (verified live 1→2→1), **not** `mvas.switch_sim_slot`. |
+| **LCD merge** | LCD Display tab + consolidated modem reads | ✅ done 2026-07-24 — MudiUI folded into `src/lcd/`; `mudimodem-collectd` is the single reader, pushing over a Unix broadcast socket; new `get_lcd`/`set_lcd` backend; SIGHUP live-reload. |
 
 ## 11. Repo layout
 ```
@@ -562,13 +568,19 @@ MudiModem/
 ├── src/
 │   ├── views/mudimodem.js       ← chunk SOURCE (plain JS; gzipped at build → the shipped .gz)
 │   ├── menu/mudimodem.json      ← menu registration + global_sockets (level 1, icon "modem")
-│   └── at-library.snapshot.json ← baked fallback; sources in kevinherzig/mudi7-at-library (§7a)
+│   ├── at-library.snapshot.json ← baked fallback; sources in kevinherzig/mudi7-at-library (§7a)
+│   ├── rpc/mudimodem            ← backend, incl. get_lcd/set_lcd (§12, 2026-07-24 merge)
+│   ├── sbin/mudimodem-collectd  ← single modem-read daemon; broadcasts over Unix socket + latest.json
+│   └── lcd/                     ← vendored MudiUI front-LCD renderer (mudi.py, mudi-watch.py,
+│                                    mudi.init, mudi-watch.init, mudi.config); default off
 ├── tools/
 │   ├── build.sh                 ← "build" = gzip to gl-sdk4-ui-mudimodem.common.js.gz
 │   ├── deploy.sh                ← model-guarded push over ssh `cat` (no scp: no sftp-server)
 │   ├── verify.sh                ← on-device assertions (files, JSON parse, gzip_static, eval, backend, watchdog)
 │   └── mudimodem-at.py          ← our own AT channel on /dev/at_mdm0 (Python stdlib; Phase 3 console)
 ├── test/chunk.test.js           ← local Node test: evals the chunk exactly as the SPA does
+├── test/test_collectd.py        ← collectd broadcast socket + latest.json test
+├── test/test_lcd.py             ← LCD renderer / get_lcd / set_lcd test
 ├── build/                       ← generated, gitignored
 ├── docs/
 │   └── Quectel_RG50xQ&RM5xxQ_..._V1.1.1_Preliminary_20201009.pdf  ← ⚠️ 5-SERIES; box is 6-series
@@ -639,6 +651,16 @@ MudiModem/
 - ✅ **Battery charge limit (2026-07-22)** — Config tab toggle + GUI % target; ships
   glbattlimit + config-aware hotplug/init; default disabled. Spec:
   docs/superpowers/specs/2026-07-22-battery-charge-limit-design.md
+- ✅ **MudiUI merge — LCD Display tab (2026-07-24)** — sibling **MudiUI** front-LCD renderer folded
+  into this repo under `src/lcd/`, shipped as its own installable, **default-off** add-on. Modem
+  reads are now consolidated: `mudimodem-collectd` polls at 4s, keeps the retention history, and
+  additionally **broadcasts each sample over a Unix socket + writes `latest.json`**; MudiUI's
+  `CellularSource` was rewritten to be a **socket subscriber** instead of its own ubus/AT poller
+  (its other sources — WiFi, battery, ethernet — are untouched). New backend `get_lcd`/`set_lcd`
+  (enabled, brightness, screen_timeout, default_page) in `src/rpc/mudimodem`, with **SIGHUP
+  live-reload** so the renderer picks up config changes without a restart. Spec:
+  `docs/superpowers/specs/2026-07-24-merge-mudiui-lcd-tab-design.md`; plan:
+  `docs/superpowers/plans/2026-07-24-merge-mudiui-lcd-tab.md`.
 - 🔭 Later: `install.sh`/`uninstall.sh` (device-guarded + idempotent, mirroring MudiUI's); register
   the watchdog `boot-check` in a boot hook; `/etc/sysupgrade.conf`; ipk.
 
