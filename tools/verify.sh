@@ -323,4 +323,46 @@ if [ -f src/sbin/glbattlimit ]; then
     || fail "battlimit paths not in sysupgrade.conf (need bin+hotplug+init+json)"
 fi
 
+echo "13. LCD renderer files installed"
+ssh -o BatchMode=yes "root@$HOST" \
+  '[ -f /usr/bin/mudi.py ] && [ -f /usr/bin/mudi-watch.py ] && [ -f /etc/init.d/mudi ] && [ -f /etc/init.d/mudi-watch ]' \
+  || fail "LCD renderer files missing"
+
+echo "13b. LCD files registered in sysupgrade.conf"
+ssh -o BatchMode=yes "root@$HOST" 'for p in \
+    /usr/bin/mudi.py \
+    /usr/bin/mudi-watch.py \
+    /etc/init.d/mudi \
+    /etc/init.d/mudi-watch; do
+    grep -qxF "$p" /etc/sysupgrade.conf || { echo "missing: $p"; exit 1; }
+  done' \
+  || fail "LCD files not in sysupgrade.conf"
+
+echo "14. collectd broadcast socket + latest.json are live"
+ssh -o BatchMode=yes "root@$HOST" \
+  '[ -S /tmp/mudimodem/collectd.sock ] && [ -f /tmp/mudimodem/latest.json ] && python3 -c "import json,sys; json.load(open(\"/tmp/mudimodem/latest.json\"))"' \
+  || fail "collectd socket or latest.json missing/invalid (is the collector on the new build?)"
+
+# 14b. LIVE /rpc round-trip: get_lcd must pass the arg validator and return an
+#      availability snapshot. Needs an authenticated sid, so it runs only when
+#      MM_PW is provided (mirrors step 9b).
+if [ -n "${MM_PW:-}" ]; then
+  echo "14b. get_lcd survives the /rpc validator and returns availability"
+  SID=$(ssh -o BatchMode=yes "root@$HOST" \
+    'curl -sk -X POST https://127.0.0.1/rpc -H "Content-Type: application/json" \
+       -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"login\",\"params\":{\"username\":\"root\",\"password\":\"'"$MM_PW"'\"}}" \
+     | sed -n "s/.*\"sid\":\"\([^\"]*\)\".*/\1/p"')
+  [ -n "$SID" ] || fail "login for /rpc round-trip failed (is MM_PW correct?)"
+  RESP=$(ssh -o BatchMode=yes "root@$HOST" \
+    'curl -sk -X POST https://127.0.0.1/rpc -H "Content-Type: application/json" \
+       -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"call\",\"params\":[\"'"$SID"'\",\"mudimodem\",\"get_lcd\",{}]}"')
+  printf '%s' "$RESP" | grep -q -- '-32602' \
+    && fail "get_lcd was rejected by the arg validator (-32602): $RESP"
+  printf '%s' "$RESP" | grep -q '"available"' \
+    || fail "get_lcd did not return an availability snapshot (got: $RESP)"
+  echo "   get_lcd round-trip OK"
+else
+  echo "14b. SKIPPED — set MM_PW=<admin-password> to run the get_lcd /rpc round-trip"
+fi
+
 echo "ALL CHECKS PASSED"
