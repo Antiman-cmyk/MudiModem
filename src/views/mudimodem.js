@@ -102,6 +102,11 @@ module.exports = {
       battLimitBusy: false,
       battLimitErr: "",
       battLimitDraft: 80,     // local number input while editing
+      // LCD Display / MudiUI front panel (get_lcd / set_lcd)
+      lcd: null,
+      lcdBusy: false,
+      lcdErr: "",
+      lcdBrightnessDraft: 90,
       // Approximate downlink centre freq (MHz) per band, for spectrum ordering
       // and labels. Source: 3GPP TS 38.101-1 (NR) / 36.101 (LTE), rounded to the
       // marketing figure. Labels only — the modem is never sent a frequency.
@@ -281,6 +286,7 @@ module.exports = {
         this.checkAppVersion();   // re-check every open, per spec
         this.fetchBattLimit();    // refresh charge-limit snapshot every open
       }
+      if (t === "lcd") this.fetchLcd();
     },
     // A slot switch is done when GL's selected slot lands on the target.
     activeSlot(v) {
@@ -719,6 +725,38 @@ module.exports = {
           self.battLimitErr = (e && (e.message || e.type)) || "request failed";
         });
     },
+    fetchLcd() {
+      var self = this;
+      if (typeof window === "undefined" || !window.$rpcRequest) return Promise.resolve();
+      return window.$rpcRequest("call", ["sid", "mudimodem", "get_lcd", {}], { timeout: 8000 })
+        .then(function (r) {
+          self.lcd = r || null;
+          if (r && typeof r.brightness === "number") self.lcdBrightnessDraft = r.brightness;
+          self.lcdErr = (r && r.error) || "";
+        })
+        .catch(function (e) {
+          self.lcdErr = (e && (e.message || e.type)) || "request failed";
+        });
+    },
+    applyLcd(patch) {
+      var self = this;
+      if (this.lcdBusy || typeof window === "undefined" || !window.$rpcRequest) return;
+      this.lcdBusy = true;
+      this.lcdErr = "";
+      return window.$rpcRequest("call", ["sid", "mudimodem", "set_lcd", patch || {}], { timeout: 15000 })
+        .then(function (r) {
+          self.lcdBusy = false;
+          if (r && typeof r.available === "boolean") {
+            self.lcd = r;
+            if (typeof r.brightness === "number") self.lcdBrightnessDraft = r.brightness;
+          }
+          self.lcdErr = (r && r.error) || "";
+        })
+        .catch(function (e) {
+          self.lcdBusy = false;
+          self.lcdErr = (e && (e.message || e.type)) || "request failed";
+        });
+    },
     armUpdate() {
       var self = this;
       if (this.updateConfirm) return;         // already armed
@@ -897,6 +935,82 @@ module.exports = {
       var batt = h("div", { staticClass: "mm-card" }, battKids);
 
       return h("div", {}, [device, app, batt]);
+    },
+    renderLcd(h) {
+      var self = this;
+      var row = function (label, value) {
+        return h("div", { staticClass: "mm-kv" }, [
+          h("span", { staticClass: "mm-k" }, label),
+          h("span", { staticClass: "mm-v" }, value || "—")
+        ]);
+      };
+      var lc = this.lcd;
+      var kids = [h("div", { staticClass: "mm-card-h" }, "LCD Display (front panel)")];
+      if (!lc) {
+        kids.push(h("div", { staticClass: "mm-note" }, this.lcdErr || "Loading…"));
+      } else if (lc.available === false) {
+        kids.push(h("div", { staticClass: "mm-note" }, "Front panel not available on this device."));
+        if (this.lcdErr) kids.push(h("div", { staticClass: "mm-note" }, this.lcdErr));
+      } else {
+        kids.push(h("div", { staticClass: "mm-kv" }, [
+          h("label", { staticClass: "mm-k" }, [
+            h("input", {
+              attrs: { type: "checkbox", disabled: !!self.lcdBusy },
+              domProps: { checked: !!lc.enabled },
+              on: { change: function (e) {
+                self.applyLcd({ enabled: !!(e.target && e.target.checked) });
+              } }
+            }),
+            " Show status on the front LCD"
+          ])
+        ]));
+        kids.push(h("div", { staticClass: "mm-kv" }, [
+          h("span", { staticClass: "mm-k" }, "Brightness"),
+          h("span", { staticClass: "mm-v" }, [
+            h("input", {
+              attrs: { type: "number", min: 20, max: 120, step: 1,
+                       disabled: !lc.enabled || !!self.lcdBusy },
+              domProps: { value: self.lcdBrightnessDraft },
+              on: {
+                input: function (e) { self.lcdBrightnessDraft = Number(e.target && e.target.value); },
+                change: function () { self.applyLcd({ brightness: self.lcdBrightnessDraft }); }
+              }
+            })
+          ])
+        ]));
+        var TO = [["30", "30s"], ["60", "1m"], ["300", "5m"], ["600", "10m"],
+                  ["1200", "20m"], ["3600", "60m"], ["0", "Never"]];
+        kids.push(h("div", { staticClass: "mm-kv" }, [
+          h("span", { staticClass: "mm-k" }, "Screen timeout"),
+          h("span", { staticClass: "mm-v" }, [
+            h("select", {
+              attrs: { disabled: !lc.enabled || !!self.lcdBusy },
+              on: { change: function (e) { self.applyLcd({ screen_timeout: Number(e.target.value) }); } }
+            }, TO.map(function (o) {
+              return h("option",
+                { attrs: { value: o[0], selected: String(lc.screen_timeout) === o[0] } }, o[1]);
+            }))
+          ])
+        ]));
+        var PG = [["0", "Signal"], ["1", "WiFi"], ["2", "System"], ["3", "Ethernet"]];
+        kids.push(h("div", { staticClass: "mm-kv" }, [
+          h("span", { staticClass: "mm-k" }, "Default page"),
+          h("span", { staticClass: "mm-v" }, [
+            h("select", {
+              attrs: { disabled: !lc.enabled || !!self.lcdBusy },
+              on: { change: function (e) { self.applyLcd({ default_page: Number(e.target.value) }); } }
+            }, PG.map(function (o) {
+              return h("option",
+                { attrs: { value: o[0], selected: String(lc.default_page) === o[0] } }, o[1]);
+            }))
+          ])
+        ]));
+        kids.push(row("Status", lc.running ? "Running" : "Stopped"));
+        kids.push(h("div", { staticClass: "mm-note" },
+          "Enabling takes over the front panel from GL's stock screen. Long-press the panel (~1.6s) to toggle back."));
+        if (this.lcdErr) kids.push(h("div", { staticClass: "mm-note" }, this.lcdErr));
+      }
+      return h("div", {}, [h("div", { staticClass: "mm-card" }, kids)]);
     },
     askSwitch(slot) { this.switchConfirm = slot; this.switchErr = ""; },
     clearSwitchState() {
@@ -2129,7 +2243,8 @@ module.exports = {
     // "tracking" is an in-page tab like the rest — the strip + tab bar stay put;
     // its graph chunk is lazy-loaded into the panel on first open.
     var TABS = [["tracking", "Tracking"], ["sim", "SIM"], ["lock", "Cell lock"],
-      ["bands", "Bands"], ["at", "AT console"], ["speedtest", "Speedtest"], ["config", "Config"]];
+      ["bands", "Bands"], ["at", "AT console"], ["speedtest", "Speedtest"],
+      ["config", "Config"], ["lcd", "LCD Display"]];
     var tabs = h("div", { staticClass: "mm-tabs" }, TABS.map(function (t) {
       return h("button", {
         key: t[0], staticClass: "mm-tab" + (self.tab === t[0] ? " on" : ""),
@@ -2177,6 +2292,8 @@ module.exports = {
           this.speedtestErr ? "Couldn't load the speed test: " + this.speedtestErr
             : "Loading the speed test…")]);
       }
+    } else if (this.tab === "lcd") {
+      panel = this.renderLcd(h);
     } else {
       panel = h("div", { staticClass: "mm-card" }, [h("div", { staticClass: "mm-soon" }, "Unknown tab.")]);
     }

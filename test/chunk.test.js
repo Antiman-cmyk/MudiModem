@@ -1809,3 +1809,112 @@ test('applyBattLimit: rejects GUI that maps below gauge 50 without RPC', async (
     assert.match(vm.battLimitErr, /too low|50% gauge/i, 'gauge floor message');
   } finally { unstubRpc(); }
 });
+
+// ---------------------------------------------------------------------------
+// LCD Display tab (MudiUI front panel)
+// ---------------------------------------------------------------------------
+
+const LCD_OFF = { available: true, enabled: false, running: false,
+  brightness: 90, screen_timeout: 600, default_page: 0, error: null };
+const LCD_ON = { available: true, enabled: true, running: true,
+  brightness: 80, screen_timeout: 300, default_page: 1, error: null };
+const LCD_NA = { available: false, enabled: false, running: false,
+  brightness: 90, screen_timeout: 600, default_page: 0, error: "no front panel on this device" };
+
+test('LCD Display tab appears in the tab bar', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, LIVE);
+  const labels = walk(c.render.call(vm, h))
+    .filter((n) => n.data.staticClass && /\bmm-tab\b/.test(n.data.staticClass))
+    .map(textOf);
+  assert.ok(labels.includes('LCD Display'), 'LCD Display tab rendered');
+});
+
+test('lcd tab: null snapshot shows Loading, no controls', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, LIVE);
+  vm.tab = 'lcd';
+  vm.lcd = null;
+  const txt = textOf(vm.renderLcd(h));
+  assert.match(txt, /LCD Display/, 'card title present');
+  assert.match(txt, /Loading/, 'loading placeholder');
+});
+
+test('lcd tab: unavailable hardware shows a static note, no checkbox', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, LIVE);
+  vm.tab = 'lcd';
+  vm.lcd = Object.assign({}, LCD_NA);
+  const txt = textOf(vm.renderLcd(h));
+  assert.match(txt, /not available/i, 'unavailability note');
+  assert.doesNotMatch(txt, /Show status on the front LCD/, 'no enable toggle');
+});
+
+test('lcd tab: enabled renders controls + Running status', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, LIVE);
+  vm.tab = 'lcd';
+  vm.lcd = Object.assign({}, LCD_ON);
+  vm.lcdBrightnessDraft = 80;
+  const nodes = walk(vm.renderLcd(h));
+  const txt = textOf(nodes);
+  assert.match(txt, /Show status on the front LCD/, 'enable label');
+  assert.match(txt, /Brightness/, 'brightness row');
+  assert.match(txt, /Screen timeout/, 'timeout row');
+  assert.match(txt, /Default page/, 'default page row');
+  assert.match(txt, /Running/, 'status Running');
+  // knobs enabled when lc.enabled
+  const num = nodes.find((n) => n.tag === 'input' && (n.data.attrs || {}).type === 'number');
+  assert.ok(num && !num.data.attrs.disabled, 'brightness input enabled when on');
+});
+
+test('lcd tab: disabled greys the knobs but keeps the checkbox', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, LIVE);
+  vm.tab = 'lcd';
+  vm.lcd = Object.assign({}, LCD_OFF);
+  const nodes = walk(vm.renderLcd(h));
+  const cb = nodes.find((n) => n.tag === 'input' && (n.data.attrs || {}).type === 'checkbox');
+  assert.ok(cb && !cb.data.attrs.disabled, 'enable checkbox stays clickable');
+  const num = nodes.find((n) => n.tag === 'input' && (n.data.attrs || {}).type === 'number');
+  assert.ok(num && num.data.attrs.disabled, 'brightness disabled while off');
+  assert.match(textOf(nodes), /Stopped/, 'status Stopped');
+});
+
+test('fetchLcd calls get_lcd and seeds the brightness draft', async () => {
+  const calls = stubRpc([Object.assign({}, LCD_ON)]);
+  try {
+    const vm = makeVm(loadChunk(), LIVE);
+    await vm.fetchLcd();
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].params, ['sid', 'mudimodem', 'get_lcd', {}]);
+    assert.equal(vm.lcd.enabled, true);
+    assert.equal(vm.lcdBrightnessDraft, 80);
+  } finally { unstubRpc(); }
+});
+
+test('applyLcd posts set_lcd with the patch and stores the fresh snapshot', async () => {
+  const calls = stubRpc([Object.assign({}, LCD_ON)]);
+  try {
+    const vm = makeVm(loadChunk(), LIVE);
+    vm.lcd = Object.assign({}, LCD_OFF);
+    await vm.applyLcd({ enabled: true });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].params[2], 'set_lcd');
+    assert.deepEqual(calls[0].params[3], { enabled: true });
+    assert.equal(vm.lcd.enabled, true);
+    assert.equal(vm.lcdBusy, false);
+  } finally { unstubRpc(); }
+});
+
+test('opening the lcd tab fetches get_lcd', async () => {
+  const calls = stubRpc([Object.assign({}, LCD_OFF)]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    c.watch.tab.call(vm, 'lcd');
+    await Promise.resolve(); await Promise.resolve();
+    const lcdCalls = calls.filter((x) => x.params[2] === 'get_lcd');
+    assert.equal(lcdCalls.length, 1, 'get_lcd called on tab open');
+  } finally { unstubRpc(); }
+});
