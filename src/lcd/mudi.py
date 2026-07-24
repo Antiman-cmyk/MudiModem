@@ -948,6 +948,14 @@ class App:
                 _at('AT+QNWPREFCFG="mode_pref",%s' % MODE_AT.get(val, "AUTO"), slot)
         except Exception as e:
             print("modem apply", skey, "failed:", e)
+    def _reload_settings(self):
+        # Re-read uci and apply the live-appliable settings. Called from SIGHUP
+        # (web-side config change) — brightness applies now; screen_timeout and
+        # default_page are read where used, so a reload just refreshes settings.
+        self.settings.load()
+        if not self.blanked:
+            self._set_brightness(self._brightness())
+
     def apply_setting(self, skey, val):
         if skey in ("band_lock", "net_mode"):             # AT writes are slow -> off the touch thread
             threading.Thread(target=self._apply_modem, args=(skey, val), daemon=True).start(); return
@@ -1100,6 +1108,8 @@ class App:
         for s in (signal.SIGINT, signal.SIGTERM):
             signal.signal(s, lambda *_: self.stop.set())
         signal.signal(signal.SIGUSR1, lambda *_: self._toggle_req.set())   # long-press toggle
+        self._reload_req = threading.Event()
+        signal.signal(signal.SIGHUP, lambda *_: self._reload_req.set())    # web settings reload
         threading.Thread(target=self._touch, daemon=True).start()
         self.show(start)
         th = self.theme; prev_anim = False; first = True; t0 = time.monotonic()
@@ -1108,6 +1118,8 @@ class App:
                 while not self.stop.is_set():
                     if self._toggle_req.is_set():
                         self._toggle_req.clear(); self._do_toggle(); first = True
+                    if self._reload_req.is_set():
+                        self._reload_req.clear(); self._reload_settings(); first = True
                     if self.paused:                        # gl_screen owns the panel; sit idle
                         self.wake.wait(0.2)
                         if duration and time.monotonic()-t0 > duration: break

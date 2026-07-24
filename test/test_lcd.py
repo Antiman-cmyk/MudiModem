@@ -739,5 +739,35 @@ class TestCellularSampleMapping(unittest.TestCase):
         self.assertNotIn("signal.rsrp", s)          # null rsrp is not emitted
 
 
+class TestSighupReload(unittest.TestCase):
+    """A web-side uci change reaches the running renderer via SIGHUP: re-read
+    settings, re-apply brightness live (unless the panel is blanked)."""
+
+    def _app(self):
+        a = mudi.MockApp()
+        applied = []
+        a.blanked = False
+        a._set_brightness = lambda v: applied.append(int(v))
+        a._brightness = lambda: int(a.settings.get("brightness"))
+        # simulate the web having written a new value into uci
+        def fake_load():
+            a.settings.vals["brightness"] = "77"
+        a.settings.load = fake_load
+        return a, applied
+
+    def test_reload_rereads_uci_and_applies_brightness(self):
+        a, applied = self._app()
+        mudi.App._reload_settings(a)
+        self.assertEqual(a.settings.get("brightness"), "77")
+        self.assertEqual(applied[-1], 77)
+
+    def test_reload_does_not_touch_backlight_while_blanked(self):
+        a, applied = self._app()
+        a.blanked = True
+        mudi.App._reload_settings(a)
+        self.assertEqual(a.settings.get("brightness"), "77")   # still re-read
+        self.assertEqual(applied, [])                          # but not applied
+
+
 if __name__ == "__main__":
     unittest.main()
