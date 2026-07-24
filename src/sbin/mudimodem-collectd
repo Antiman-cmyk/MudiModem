@@ -27,6 +27,7 @@ SAMPLE_MAX_AGE  = 24 * 3600 * 1000     # 24 h, in ms
 SAMPLE_MAX_LINE = 22000                 # 24h at 4s ≈ 21.6k; hard backstop above that
 TRIM_EVERY      = 30                     # ~5 min at 10 s
 EVENT_TRIM_EVERY = 360                   # ~1 h
+CLIENT_SEND_TIMEOUT = float(os.environ.get("MUDIMODEM_SEND_TIMEOUT", "5"))
 
 
 def now_ms():
@@ -72,15 +73,23 @@ class Broadcaster:
                 c, _ = self._srv.accept()
             except OSError:
                 return                          # listener closed on shutdown
+            # No timeout here would let a stalled client block a future
+            # publish()'s sendall() forever, freezing the whole poll loop.
+            c.settimeout(CLIENT_SEND_TIMEOUT)
+            with self._lock:
+                last = self._last
+            # Replay BEFORE adding to _clients: otherwise a concurrent
+            # publish() could sendall() to this same fd while we're still
+            # sending the replay here — two threads writing one socket.
+            if last is not None and not self._send(c, last):
+                continue                        # replay failed; client dropped
             with self._lock:
                 self._clients.append(c)
-                last = self._last
-            if last is not None:
-                self._send(c, last)
 
     def _send(self, c, data):
         try:
             c.sendall(data)
+            return True
         except OSError:
             with self._lock:
                 if c in self._clients:
@@ -89,6 +98,7 @@ class Broadcaster:
                 c.close()
             except OSError:
                 pass
+            return False
 
     def publish(self, line):
         data = (line + "\n").encode("utf-8")

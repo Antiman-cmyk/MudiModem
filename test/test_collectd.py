@@ -70,6 +70,32 @@ class TestBroadcaster(unittest.TestCase):
         finally:
             bc.close()
 
+    def test_publish_drops_a_stalled_client_without_blocking(self):
+        # Regression: a connected client that never recv()s must not be able
+        # to freeze publish() (and therefore the whole poll loop) forever.
+        saved_timeout = collectd.CLIENT_SEND_TIMEOUT
+        collectd.CLIENT_SEND_TIMEOUT = 0.2             # force a fast, deterministic timeout
+        bc = collectd.Broadcaster(self._sock())
+        bc.start()
+        c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            c.connect(bc.path)
+            time.sleep(0.05)                            # let accept register the client
+            # c never calls recv() — its kernel receive buffer fills and stays
+            # full, so a large-enough sendall() from the server blocks.
+            payload = json.dumps({"pad": "x" * (8 * 1024 * 1024)})  # 8MB >> default AF_UNIX buffers
+
+            start = time.time()
+            bc.publish(payload)
+            elapsed = time.time() - start
+
+            self.assertLess(elapsed, 2.0)                # must not hang the poll loop
+            self.assertNotIn(c, bc._clients)              # stalled client dropped
+        finally:
+            collectd.CLIENT_SEND_TIMEOUT = saved_timeout
+            c.close()
+            bc.close()
+
 
 class TestWriteLatest(unittest.TestCase):
     def test_writes_valid_json_atomically(self):
