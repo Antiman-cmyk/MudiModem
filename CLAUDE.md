@@ -166,7 +166,7 @@ return { get_config = function(args) ... end, set_config = function(args) ... en
 | `/www/views/gl-sdk4-ui-mudimodem-console.common.js.gz` | the AT-console tab chunk (lazy-loaded) |
 | **`/usr/share/gl-validator.d/mudimodem.lua`** | **arg validator — REQUIRED for the AT console (§3), not optional** |
 | `/usr/bin/mudi.py` | vendored MudiUI front-LCD renderer (§12, 2026-07-24 merge); **default off** |
-| `/usr/bin/mudi-watch.py` | LCD watchdog (restarts `mudi.py` on crash/fb loss); **default off** |
+| `/usr/bin/mudi-watch.py` | long-press panel-toggle watcher (swaps MudiUI ↔ gl_screen); **default off** |
 | `/etc/init.d/mudi` | procd service for the LCD renderer; **default off** |
 | `/etc/init.d/mudi-watch` | procd service for the LCD watchdog; **default off** |
 | `/etc/config/mudi` | UCI config for the LCD renderer (enabled, brightness, screen_timeout, default_page) |
