@@ -84,6 +84,37 @@ fi
 # Do NOT start a limit on install (default disabled; start would no-op anyway).
 echo "  battery charge limit stack installed"
 
+echo "installing LCD front-panel renderer (MudiUI):"
+cp_install src/lcd/mudi.py         /usr/bin/mudi.py         0755
+cp_install src/lcd/mudi-watch.py   /usr/bin/mudi-watch.py   0755
+cp_install src/lcd/mudi.init       /etc/init.d/mudi         0755
+cp_install src/lcd/mudi-watch.init /etc/init.d/mudi-watch   0755
+# default settings only if absent — never clobber user LCD config on upgrade
+if [ ! -f /etc/config/mudi ]; then
+  cp_install src/lcd/mudi.config   /etc/config/mudi         0644
+fi
+# renderer python deps: install only what's missing; pillow --nodeps avoids the
+# libfreetype clash with gl-sdk4-screen-large. Offline-tolerant.
+LCD_DEPS="python3-light python3-numpy python3-urllib python3-logging python3-ctypes python3-cffi python3-evdev"
+lcd_missing=""
+for p in $LCD_DEPS; do
+  opkg list-installed 2>/dev/null | grep -q "^$p " || lcd_missing="$lcd_missing $p"
+done
+opkg list-installed 2>/dev/null | grep -q "^python3-pillow " || lcd_missing="$lcd_missing python3-pillow"
+if [ -n "$lcd_missing" ]; then
+  opkg update 2>/dev/null || true
+  for p in $lcd_missing; do
+    if [ "$p" = python3-pillow ]; then
+      opkg install --nodeps python3-pillow || true
+    else
+      opkg install "$p" || true
+    fi
+  done
+fi
+# DEFAULT OFF: the renderer seizes /dev/fb0 from gl_screen. It is enabled only
+# from the admin "LCD Display" tab — do NOT enable or start it here.
+echo "  LCD renderer installed (disabled by default — enable from the LCD Display tab)"
+
 # Survive a firmware upgrade (our files live outside /etc/config). Idempotent.
 echo "registering files in /etc/sysupgrade.conf:"
 f=/etc/sysupgrade.conf; touch "$f"
@@ -107,6 +138,10 @@ for p in \
   /etc/hotplug.d/i2c/20-glbattlimit \
   /etc/init.d/glbattlimit \
   /etc/mudimodem/battlimit.json \
+  /usr/bin/mudi.py \
+  /usr/bin/mudi-watch.py \
+  /etc/init.d/mudi \
+  /etc/init.d/mudi-watch \
 ; do grep -qxF "$p" "$f" || echo "$p" >> "$f"; done
 echo "  done"
 

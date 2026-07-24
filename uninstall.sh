@@ -32,6 +32,10 @@ FILES="
 /etc/hotplug.d/i2c/20-glbattlimit
 /etc/init.d/glbattlimit
 /etc/mudimodem/battlimit.json
+/usr/bin/mudi.py
+/usr/bin/mudi-watch.py
+/etc/init.d/mudi
+/etc/init.d/mudi-watch
 "
 
 # Release charge limit before removing the binary (restores factory charge path).
@@ -49,6 +53,19 @@ if [ -x /etc/init.d/mudimodem-collectd ]; then
   /etc/init.d/mudimodem-collectd disable 2>/dev/null || true
   echo "collector stopped + disabled"
 fi
+
+# Stop + disable the LCD renderer and hand the front panel back to gl_screen
+# BEFORE removing its files. Leave the LCD user config (uci "mudi") in place.
+if [ -x /etc/init.d/mudi ]; then
+  /etc/init.d/mudi stop    2>/dev/null || true
+  /etc/init.d/mudi disable 2>/dev/null || true
+fi
+if [ -x /etc/init.d/mudi-watch ]; then
+  /etc/init.d/mudi-watch stop    2>/dev/null || true
+  /etc/init.d/mudi-watch disable 2>/dev/null || true
+fi
+/etc/init.d/gl_screen start 2>/dev/null || true
+echo "LCD renderer stopped; front panel returned to gl_screen"
 
 echo "removing files:"
 for p in $FILES; do [ -e "$p" ] && rm -f "$p" && echo "  $p"; done
