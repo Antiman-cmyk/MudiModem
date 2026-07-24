@@ -690,5 +690,54 @@ class TestIdleBlankSurvivesClockStep(unittest.TestCase):
             time.time = real
 
 
+class TestCellularSampleMapping(unittest.TestCase):
+    """CellularSource maps a collectd sample dict onto its bus keys — the exact
+    values the widgets used to get from cellular.network info + AT+QSPN."""
+
+    def collect(self, sample):
+        src = mudi.CellularSource()
+        seen = {}
+        # Register callbacks directly (do NOT subscribe(), which would start the
+        # socket thread); we drive _emit_sample() by hand.
+        for k in src.provides:
+            src._subs[k] = [(lambda kk: (lambda v: seen.__setitem__(kk, v)))(k)]
+        src._emit_sample(sample)
+        return seen
+
+    SAMPLE = {
+        "id": "187461035", "band": 71, "mode": "NR5G-SA FDD",
+        "rsrp": -101, "rsrq": -14, "sinr": 4, "rsrp_level": 3,
+        "dl_bandwidth": "15MHz", "tx_channel": 127490,
+        "carrier": "T-Mobile", "slot": 1,
+    }
+
+    def test_maps_signal_and_cell_fields(self):
+        s = self.collect(self.SAMPLE)
+        self.assertEqual(s["signal.rsrp"], -101)
+        self.assertEqual(s["signal.rsrq"], "-14 dB")
+        self.assertEqual(s["signal.sinr"], "4 dB")
+        self.assertEqual(s["signal.level"], 3)
+        self.assertEqual(s["cell.id"], "187461035")
+        self.assertEqual(s["cell.band"], "n71")
+        self.assertEqual(s["cell.freq"], "%d MHz" % round(127490 * 5 / 1000.0))
+        self.assertEqual(s["cell.bw"], "15 MHz")
+        self.assertEqual(s["net.mode"], "NR5G-SA")
+        self.assertEqual(s["sim.carrier"], "T-Mobile")
+        self.assertEqual(s["sim.slot"], "1")
+
+    def test_null_metrics_do_not_crash_and_show_dashes(self):
+        s = self.collect({"slot": 1, "id": None, "band": None, "mode": None,
+                          "rsrp": None, "rsrq": None, "sinr": None,
+                          "rsrp_level": None, "dl_bandwidth": None,
+                          "tx_channel": None, "carrier": ""})
+        self.assertEqual(s["cell.band"], "—")
+        self.assertEqual(s["cell.freq"], "—")
+        self.assertEqual(s["cell.bw"], "—")
+        self.assertEqual(s["net.mode"], "—")
+        self.assertEqual(s["signal.level"], 0)
+        self.assertNotIn("sim.carrier", s)          # empty carrier is not emitted
+        self.assertNotIn("signal.rsrp", s)          # null rsrp is not emitted
+
+
 if __name__ == "__main__":
     unittest.main()

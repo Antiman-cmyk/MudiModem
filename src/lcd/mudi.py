@@ -18,7 +18,7 @@ The key=... bindings below are exactly what the future JSON layer will declare.
 Run on the Mudi:  python3 mudi.py [seconds]   (no arg = until STOCK UI tapped)
 Preview a frame:  python3 mudi.py --mock [signal|wifi|system|eth|settings] [hero|arc]
 """
-import sys, os, time, json, subprocess, threading, signal, re, textwrap
+import sys, os, time, json, subprocess, threading, signal, re, socket, textwrap
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
@@ -160,38 +160,69 @@ class CellularSource(DataSource):
                 "cell.id","cell.band","cell.freq","cell.bw","net.mode",
                 "sim.carrier","sim.slot")
     cadence = 4.0; name = "cellular"
+    SOCK = os.environ.get("MUDIMODEM_SOCK", "/tmp/mudimodem/collectd.sock")
 
-    def __init__(self, bus=BUS):
-        super().__init__(); self.bus = bus; self._n = 0; self._slot = "1"
+    def __init__(self, sock=None):
+        super().__init__()
+        if sock: self.SOCK = sock
 
-    def poll(self):
-        if self._n % 8 == 0:
-            try: self._poll_slow()                      # isolated: never blocks cell data
-            except Exception as e: self._emit("sim.err", str(e)[:40])
-        self._n += 1
-        r = _ubus("cellular.network", "info", {"bus": self.bus, "slot": int(self._slot)})
-        ci = r["networks"][0]["cell_info"]
-        arfcn = int(ci.get("tx_channel", 0) or 0)
-        self._emit("signal.rsrp", int(ci["rsrp"]))
-        self._emit("signal.rsrq", "%s dB" % ci["rsrq"])
-        self._emit("signal.sinr", "%s dB" % ci["sinr"])
-        self._emit("signal.level", int(ci.get("rsrp_level", 0)))
-        self._emit("cell.id", ci.get("id", "—"))
+    def _run(self):
+        # Subscriber-gated socket reader (replaces the timer-poll). collectd is
+        # the single modem reader now; we consume its push over a Unix socket and
+        # do zero ubus/AT work. Reconnects if collectd restarts. _stop is set the
+        # moment the last subscriber leaves (DataSource.unsubscribe), so a 1s recv
+        # timeout keeps teardown snappy.
+        while not self._stop.is_set():
+            try:
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                s.settimeout(1.0)
+                s.connect(self.SOCK)
+            except OSError:
+                if self._stop.wait(2.0): return          # collectd not up; retry
+                continue
+            buf = b""
+            try:
+                while not self._stop.is_set():
+                    try:
+                        chunk = s.recv(4096)
+                    except socket.timeout:
+                        continue                          # re-check _stop
+                    if not chunk:
+                        break                             # collectd closed us
+                    buf += chunk
+                    while b"\n" in buf:
+                        line, buf = buf.split(b"\n", 1)
+                        self._on_line(line)
+            except OSError:
+                pass
+            finally:
+                try: s.close()
+                except OSError: pass
+            if self._stop.wait(1.0): return               # backoff before retry
+
+    def _on_line(self, raw):
+        try:
+            d = json.loads(raw.decode("utf-8", "replace"))
+        except ValueError:
+            return
+        if isinstance(d, dict):
+            self._emit_sample(d)
+
+    def _emit_sample(self, ci):
+        arfcn = int(ci.get("tx_channel") or 0)
+        if ci.get("rsrp") is not None: self._emit("signal.rsrp", int(ci["rsrp"]))
+        if ci.get("rsrq") is not None: self._emit("signal.rsrq", "%s dB" % ci["rsrq"])
+        if ci.get("sinr") is not None: self._emit("signal.sinr", "%s dB" % ci["sinr"])
+        self._emit("signal.level", int(ci.get("rsrp_level") or 0))
+        self._emit("cell.id", ci.get("id") or "—")
         self._emit("cell.band", "n%s" % ci["band"] if ci.get("band") else "—")
-        self._emit("cell.freq", "%d MHz" % round(arfcn*5/1000.0) if arfcn else "—")
-        self._emit("cell.bw", ci.get("dl_bandwidth", "—").replace("MHz", " MHz"))
-        self._emit("net.mode", ci.get("mode", "—").split()[0])
-
-    def _poll_slow(self):
-        m = _ubus("cellular.modem", "status", {"bus": self.bus})
-        slot = m.get("current_sim_slot")
-        if slot is None and "modems" in m: slot = m["modems"][0].get("current_sim_slot")
-        if slot: self._slot = str(slot)
-        self._emit("sim.slot", self._slot)
-        r = _ubus("modem.CPU.AT", "get_result_AT",
-                  {"cmd": "AT+QSPN", "sub_id": int(self._slot), "timeout": 3})
-        mm = re.search(r'\+QSPN:\s*"([^"]*)"', r.get("data", ""))
-        if mm and mm.group(1): self._emit("sim.carrier", mm.group(1))
+        self._emit("cell.freq", "%d MHz" % round(arfcn * 5 / 1000.0) if arfcn else "—")
+        bw = ci.get("dl_bandwidth")
+        self._emit("cell.bw", bw.replace("MHz", " MHz") if bw else "—")
+        mode = ci.get("mode")
+        self._emit("net.mode", mode.split()[0] if mode else "—")
+        if ci.get("carrier"): self._emit("sim.carrier", ci["carrier"])
+        if ci.get("slot") is not None: self._emit("sim.slot", str(ci["slot"]))
 
 
 class WifiSource(DataSource):
