@@ -25,5 +25,62 @@ class TestConstants(unittest.TestCase):
         self.assertGreaterEqual(collectd.SAMPLE_MAX_LINE, 21600)
 
 
+class TestBroadcaster(unittest.TestCase):
+    def _sock(self):
+        d = tempfile.mkdtemp()
+        return os.path.join(d, "collectd.sock")
+
+    def test_publish_reaches_a_connected_client(self):
+        bc = collectd.Broadcaster(self._sock())
+        bc.start()
+        try:
+            c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            c.settimeout(2.0)
+            c.connect(bc.path)
+            time.sleep(0.05)                       # let accept register the client
+            bc.publish(json.dumps({"rsrp": -101}))
+            line = c.recv(4096).decode().strip()
+            self.assertEqual(json.loads(line)["rsrp"], -101)
+        finally:
+            bc.close()
+
+    def test_new_client_gets_the_last_line_on_connect(self):
+        bc = collectd.Broadcaster(self._sock())
+        bc.start()
+        try:
+            bc.publish(json.dumps({"band": 71}))   # published BEFORE anyone connects
+            c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            c.settimeout(2.0)
+            c.connect(bc.path)
+            line = c.recv(4096).decode().strip()
+            self.assertEqual(json.loads(line)["band"], 71)
+        finally:
+            bc.close()
+
+    def test_publish_survives_a_dead_client(self):
+        bc = collectd.Broadcaster(self._sock())
+        bc.start()
+        try:
+            c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            c.connect(bc.path)
+            time.sleep(0.05)
+            c.close()                              # client goes away
+            bc.publish(json.dumps({"rsrp": -90}))  # must not raise
+            self.assertTrue(True)
+        finally:
+            bc.close()
+
+
+class TestWriteLatest(unittest.TestCase):
+    def test_writes_valid_json_atomically(self):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "latest.json")
+        collectd.write_latest(p, {"rsrp": -101, "band": 71})
+        with open(p) as f:
+            obj = json.load(f)
+        self.assertEqual(obj["band"], 71)
+        self.assertFalse(os.path.exists(p + ".tmp"))
+
+
 if __name__ == "__main__":
     unittest.main()

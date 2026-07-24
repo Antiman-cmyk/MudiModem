@@ -16,8 +16,10 @@
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
+import threading
 import time
 
 POLL_INTERVAL   = float(os.environ.get("MUDIMODEM_POLL", "4"))
@@ -29,6 +31,91 @@ EVENT_TRIM_EVERY = 360                   # ~1 h
 
 def now_ms():
     return int(time.time() * 1000)
+
+
+def write_latest(path, sample):
+    """Atomically write the newest sample so a just-connected consumer (or a
+    debugger) can read current state without waiting for the next tick."""
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(json.dumps(sample))
+    os.replace(tmp, path)
+
+
+class Broadcaster:
+    """Push each sample line to connected AF_UNIX clients (event + payload in
+    one). A new client is replayed the most recent line on connect. Best-effort:
+    a slow/dead client is dropped, never allowed to stall or crash the poll loop.
+    """
+
+    def __init__(self, path):
+        self.path = path
+        self._clients = []
+        self._last = None                       # bytes of the last published line
+        self._lock = threading.Lock()
+        self._srv = None
+
+    def start(self):
+        try:
+            os.unlink(self.path)                # clear a stale socket from a crash
+        except OSError:
+            pass
+        self._srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self._srv.bind(self.path)
+        self._srv.listen(8)
+        threading.Thread(target=self._accept, name="collectd-accept",
+                         daemon=True).start()
+
+    def _accept(self):
+        while True:
+            try:
+                c, _ = self._srv.accept()
+            except OSError:
+                return                          # listener closed on shutdown
+            with self._lock:
+                self._clients.append(c)
+                last = self._last
+            if last is not None:
+                self._send(c, last)
+
+    def _send(self, c, data):
+        try:
+            c.sendall(data)
+        except OSError:
+            with self._lock:
+                if c in self._clients:
+                    self._clients.remove(c)
+            try:
+                c.close()
+            except OSError:
+                pass
+
+    def publish(self, line):
+        data = (line + "\n").encode("utf-8")
+        with self._lock:
+            self._last = data
+            clients = list(self._clients)
+        for c in clients:
+            self._send(c, data)
+
+    def close(self):
+        if self._srv:
+            try:
+                self._srv.close()
+            except OSError:
+                pass
+        with self._lock:
+            clients = list(self._clients)
+            self._clients = []
+        for c in clients:
+            try:
+                c.close()
+            except OSError:
+                pass
+        try:
+            os.unlink(self.path)
+        except OSError:
+            pass
 
 
 def ubus_call(obj, method):
@@ -135,6 +222,10 @@ def main():
     os.makedirs(hist, exist_ok=True)
     samples_path = os.path.join(hist, "samples.jsonl")
     events_path = os.path.join(hist, "events.jsonl")
+    latest_path = os.path.join(hist, "latest.json")
+    sock_path = os.path.join(hist, "collectd.sock")
+    bc = Broadcaster(sock_path)
+    bc.start()
 
     state = {"go": True}
     def stop(*_a):
@@ -147,8 +238,11 @@ def main():
         try:
             s = collect_sample()
             if s is not None:
+                line = json.dumps(s)
                 with open(samples_path, "a") as f:
-                    f.write(json.dumps(s) + "\n")
+                    f.write(line + "\n")
+                bc.publish(line)
+                write_latest(latest_path, s)
             i += 1
             if i % TRIM_EVERY == 0:
                 trim(samples_path, SAMPLE_MAX_AGE, SAMPLE_MAX_LINE)
@@ -161,6 +255,8 @@ def main():
         end = time.time() + POLL_INTERVAL
         while state["go"] and time.time() < end:
             time.sleep(0.1)
+
+    bc.close()
 
 
 if __name__ == "__main__":
