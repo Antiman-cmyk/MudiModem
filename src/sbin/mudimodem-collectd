@@ -20,9 +20,9 @@ import subprocess
 import sys
 import time
 
-POLL_INTERVAL   = float(os.environ.get("MUDIMODEM_POLL", "10"))
+POLL_INTERVAL   = float(os.environ.get("MUDIMODEM_POLL", "4"))
 SAMPLE_MAX_AGE  = 24 * 3600 * 1000     # 24 h, in ms
-SAMPLE_MAX_LINE = 10000                 # hard backstop
+SAMPLE_MAX_LINE = 22000                 # 24h at 4s ≈ 21.6k; hard backstop above that
 TRIM_EVERY      = 30                     # ~5 min at 10 s
 EVENT_TRIM_EVERY = 360                   # ~1 h
 
