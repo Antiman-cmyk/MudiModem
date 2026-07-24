@@ -1272,4 +1272,109 @@ function M.set_battlimit(args)
   return snapshot_battlimit()
 end
 
+-- ---- LCD front-panel (MudiUI) --------------------------------------------
+-- Toggles the mudi/mudi-watch procd services and mirrors config into uci
+-- 'mudi' (section 'main') — the same store mudi.py's Settings reads. No ubus.
+-- Written via the uci CLI (backend has no uci binding); config knobs also
+-- SIGHUP the running renderer so brightness/timeout apply without a restart.
+
+local LCD_TIMEOUTS = { [0]=true, [30]=true, [60]=true, [300]=true,
+                       [600]=true, [1200]=true, [3600]=true }
+
+local function lcd_available()
+  -- The Mudi front panel is a 240x320 framebuffer; headless GL boxes lack it.
+  local f = io.open("/sys/class/graphics/fb0/virtual_size", "r")
+  if not f then return false end
+  local g = f:read("*l") or ""
+  f:close()
+  return g == "240,320"
+end
+
+local function uci_get(key)                     -- key like "mudi.main.brightness"
+  local f = io.popen("uci -q get " .. key .. " 2>/dev/null")
+  if not f then return nil end
+  local v = f:read("*l")
+  f:close()
+  return v
+end
+
+local function shell_ok(cmd)
+  local r = os.execute(cmd)
+  return r == 0 or r == true                    -- Lua 5.1 int vs 5.2+ boolean
+end
+
+local function lcd_running()
+  return shell_ok("pgrep -f /usr/bin/mudi.py >/dev/null 2>&1")
+end
+
+local function lcd_enabled()
+  -- procd 'enabled' == an rc.d start symlink exists for the mudi service. The
+  -- glob ends in 'mudi', so it never matches S98mudi-watch.
+  return shell_ok("ls /etc/rc.d/S*mudi >/dev/null 2>&1")
+end
+
+local function snapshot_lcd()
+  local out = { available = false, enabled = false, running = false,
+                brightness = 90, screen_timeout = 600, default_page = 0,
+                error = nil }
+  if not lcd_available() then
+    out.error = "no front panel on this device"
+    return out
+  end
+  out.available = true
+  out.enabled = lcd_enabled()
+  out.running = lcd_running()
+  out.brightness = tonumber(uci_get("mudi.main.brightness")) or 90
+  out.screen_timeout = tonumber(uci_get("mudi.main.screen_timeout")) or 600
+  out.default_page = tonumber(uci_get("mudi.main.default_page")) or 0
+  return out
+end
+
+local function uci_set_main(key, val)
+  -- ensure the section exists, set the option, commit. val is a validated
+  -- integer, so string-building it is shell-safe.
+  os.execute("uci -q get mudi.main >/dev/null 2>&1 || uci set mudi.main=settings")
+  os.execute("uci set mudi.main." .. key .. "='" .. tostring(val) .. "'; uci commit mudi")
+end
+
+function M.get_lcd(args)
+  return snapshot_lcd()
+end
+
+function M.set_lcd(args)
+  args = args or {}
+  if not lcd_available() then
+    return snapshot_lcd()
+  end
+
+  local b = tonumber(args.brightness)
+  if b and b == math.floor(b) and b >= 20 and b <= 120 then
+    uci_set_main("brightness", b)
+  end
+  local st = tonumber(args.screen_timeout)
+  if st and LCD_TIMEOUTS[st] then
+    uci_set_main("screen_timeout", st)
+  end
+  local dp = tonumber(args.default_page)
+  if dp and dp == math.floor(dp) and dp >= 0 and dp <= 3 then
+    uci_set_main("default_page", dp)
+  end
+
+  -- Nudge a running renderer to re-read uci (brightness/timeout live).
+  os.execute("pkill -HUP -f /usr/bin/mudi.py >/dev/null 2>&1")
+
+  if type(args.enabled) == "boolean" then
+    uci_set_main("start_on_boot", args.enabled and 1 or 0)
+    if args.enabled then
+      os.execute("/etc/init.d/mudi enable 2>/dev/null; /etc/init.d/mudi-watch enable 2>/dev/null")
+      os.execute("/etc/init.d/mudi-watch start 2>/dev/null; /etc/init.d/mudi start 2>/dev/null")
+    else
+      os.execute("/etc/init.d/mudi stop 2>/dev/null; /etc/init.d/mudi-watch stop 2>/dev/null")
+      os.execute("/etc/init.d/mudi disable 2>/dev/null; /etc/init.d/mudi-watch disable 2>/dev/null")
+    end
+  end
+
+  return snapshot_lcd()
+end
+
 return M
