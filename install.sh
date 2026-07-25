@@ -37,14 +37,26 @@ echo "installing view chunks + menu + library:"
 gz_install src/views/mudimodem.js          /www/views/gl-sdk4-ui-mudimodem.common.js.gz
 gz_install src/views/mudimodem-tracking.js /www/views/gl-sdk4-ui-mudimodem-tracking.common.js.gz
 gz_install src/views/mudimodem-console.js  /www/views/gl-sdk4-ui-mudimodem-console.common.js.gz
+gz_install src/views/mudimodem-speedtest.js /www/views/gl-sdk4-ui-mudimodem-speedtest.common.js.gz
 gz_install src/at-library.snapshot.json    /www/mudimodem/at-library.json.gz
 cp_install src/menu/mudimodem.json          /usr/share/oui/menu.d/mudimodem.json          0644
 cp_install src/menu/mudimodem-tracking.json /usr/share/oui/menu.d/mudimodem-tracking.json 0644
+cp_install src/menu/mudimodem-speedtest.json /usr/share/oui/menu.d/mudimodem-speedtest.json 0644
 cp_install version.json                     /etc/mudimodem/version.json                   0644
 
 echo "installing AT channel + library tool:"
 cp_install tools/mudimodem-at.py /usr/lib/mudimodem/mudimodem-at.py 0644
 cp_install tools/mudimodem-lib   /usr/lib/mudimodem/mudimodem-lib   0755
+
+echo "installing speedtest runner + scheduler:"
+cp_install tools/mudimodem-speedtest.py      /usr/lib/mudimodem/mudimodem-speedtest.py 0755
+cp_install src/sbin/mudimodem-speedtestd     /usr/sbin/mudimodem-speedtestd           0755
+cp_install src/etc/init.d/mudimodem-speedtestd /etc/init.d/mudimodem-speedtestd       0755
+# Scheduler is off-by-default in its config; enable the service so a user who
+# turns scheduling on later doesn't need a separate enable step (matches deploy).
+/etc/init.d/mudimodem-speedtestd enable  2>/dev/null || true
+/etc/init.d/mudimodem-speedtestd restart 2>/dev/null || true
+echo "  speedtest installed + scheduler (re)started"
 
 echo "installing watchdog + validator + backend:"
 # Watchdog + validator BEFORE the backend: set_bands needs the watchdog present,
@@ -127,11 +139,16 @@ for p in \
   /www/views/gl-sdk4-ui-mudimodem.common.js.gz \
   /www/views/gl-sdk4-ui-mudimodem-tracking.common.js.gz \
   /www/views/gl-sdk4-ui-mudimodem-console.common.js.gz \
+  /www/views/gl-sdk4-ui-mudimodem-speedtest.common.js.gz \
   /www/mudimodem/at-library.json.gz \
   /usr/share/oui/menu.d/mudimodem.json \
   /usr/share/oui/menu.d/mudimodem-tracking.json \
+  /usr/share/oui/menu.d/mudimodem-speedtest.json \
   /usr/lib/mudimodem/mudimodem-at.py \
   /usr/lib/mudimodem/mudimodem-lib \
+  /usr/lib/mudimodem/mudimodem-speedtest.py \
+  /usr/sbin/mudimodem-speedtestd \
+  /etc/init.d/mudimodem-speedtestd \
   /usr/sbin/mudimodem-revert \
   /usr/sbin/mudimodem-selfupdate \
   /usr/share/gl-validator.d/mudimodem.lua \

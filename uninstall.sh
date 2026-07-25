@@ -14,20 +14,29 @@ case "$MODEL" in
   *) echo "REFUSING: this is not a GL-E5800 (got: '${MODEL:-unknown}')" >&2; exit 1 ;;
 esac
 
+# Must stay in lockstep with install.sh's sysupgrade list (minus /etc/config/mudi,
+# which is user config and intentionally kept).
 FILES="
 /www/views/gl-sdk4-ui-mudimodem.common.js.gz
 /www/views/gl-sdk4-ui-mudimodem-tracking.common.js.gz
 /www/views/gl-sdk4-ui-mudimodem-console.common.js.gz
+/www/views/gl-sdk4-ui-mudimodem-speedtest.common.js.gz
 /www/mudimodem/at-library.json.gz
 /usr/share/oui/menu.d/mudimodem.json
 /usr/share/oui/menu.d/mudimodem-tracking.json
+/usr/share/oui/menu.d/mudimodem-speedtest.json
 /usr/lib/mudimodem/mudimodem-at.py
 /usr/lib/mudimodem/mudimodem-lib
+/usr/lib/mudimodem/mudimodem-speedtest.py
+/usr/sbin/mudimodem-speedtestd
+/etc/init.d/mudimodem-speedtestd
 /usr/sbin/mudimodem-revert
+/usr/sbin/mudimodem-selfupdate
 /usr/share/gl-validator.d/mudimodem.lua
 /usr/lib/oui-httpd/rpc/mudimodem
 /usr/sbin/mudimodem-collectd
 /etc/init.d/mudimodem-collectd
+/etc/mudimodem/version.json
 /usr/bin/glbattlimit
 /etc/hotplug.d/i2c/20-glbattlimit
 /etc/init.d/glbattlimit
@@ -47,11 +56,16 @@ if [ -x /etc/init.d/glbattlimit ]; then
   /etc/init.d/glbattlimit disable 2>/dev/null || true
 fi
 
-# Stop + disable the collector service before removing its files.
+# Stop + disable services before removing their files.
 if [ -x /etc/init.d/mudimodem-collectd ]; then
   /etc/init.d/mudimodem-collectd stop    2>/dev/null || true
   /etc/init.d/mudimodem-collectd disable 2>/dev/null || true
   echo "collector stopped + disabled"
+fi
+if [ -x /etc/init.d/mudimodem-speedtestd ]; then
+  /etc/init.d/mudimodem-speedtestd stop    2>/dev/null || true
+  /etc/init.d/mudimodem-speedtestd disable 2>/dev/null || true
+  echo "speedtest scheduler stopped + disabled"
 fi
 
 # Stop + disable the LCD renderer and hand the front panel back to gl_screen
@@ -70,15 +84,25 @@ echo "LCD renderer stopped; front panel returned to gl_screen"
 echo "removing files:"
 for p in $FILES; do [ -e "$p" ] && rm -f "$p" && echo "  $p"; done
 
-# Our own dirs + runtime state (pending-revert marker). Only remove if empty/ours.
+# Our own dirs + runtime state (pending-revert marker, version, battlimit,
+# speedtest history). Only remove if empty/ours.
 rm -rf /usr/lib/mudimodem /www/mudimodem /etc/mudimodem 2>/dev/null || true
 
 # De-register from sysupgrade.conf (drop exactly our lines, keep everything else).
+# Per-line loop is portable across busybox/GNU grep (multi-line -F is not).
 f=/etc/sysupgrade.conf
 if [ -f "$f" ]; then
   tmp=$(mktemp)
-  grep -vxF "$(printf '%s\n' $FILES)" "$f" > "$tmp" 2>/dev/null || cp "$f" "$tmp"
-  cat "$tmp" > "$f"; rm -f "$tmp"
+  : > "$tmp"
+  while IFS= read -r line || [ -n "$line" ]; do
+    keep=1
+    for p in $FILES; do
+      if [ "$line" = "$p" ]; then keep=0; break; fi
+    done
+    [ "$keep" -eq 1 ] && printf '%s\n' "$line" >> "$tmp"
+  done < "$f"
+  cat "$tmp" > "$f"
+  rm -f "$tmp"
   echo "de-registered from sysupgrade.conf"
 fi
 
