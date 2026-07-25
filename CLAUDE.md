@@ -661,6 +661,18 @@ MudiModem/
   live-reload** so the renderer picks up config changes without a restart. Spec:
   `docs/superpowers/specs/2026-07-24-merge-mudiui-lcd-tab-design.md`; plan:
   `docs/superpowers/plans/2026-07-24-merge-mudiui-lcd-tab.md`.
+- ✅ **LCD single-page + cell-unlock fix + Reset-to-default (2026-07-24)** — front panel now mounts
+  **only the cellular status page** via `lcd_pages(app)` in `src/lcd/mudi.py` (Wifi/System/Eth/Settings
+  page classes stay defined, just not mounted — keeps their tests green). `deploy.sh` grew an LCD
+  block (files only, **default-off**, fb0-gated). **Cell-unlock 5G-only stranding FIXED:**
+  `clear_cell_lock` now issues `mode_pref=AUTO` + `nr5g_disable_mode=0` + `save_ctrl=0,0` after GL's
+  unlock. Root cause: a GL cell lock is *two* changes — `QNWLOCK` + a `mode_pref=NR5G` side-effect —
+  and the three unlock paths were asymmetric (only `revert_now`/watchdog restored mode; the Unlock
+  button's `clear_cell_lock` didn't). Restores to **AUTO**, not the exact pre-lock mode (the
+  manual-unlock path has no PREV snapshot — `PENDING` is deleted on Keep). verify.sh **6c** greps for
+  it statically — ⚠️ **never call `clear_cell_lock` in a test, it unlocks the real modem.** **Bands tab
+  "Reset to default"** button stages AUTO + all permitted bands (reuses `setMode`/`selectAll`) → normal
+  Apply. Spec: `docs/superpowers/specs/2026-07-24-unlock-mode-restore-reset-default-design.md`.
 - 🔭 Later: `install.sh`/`uninstall.sh` (device-guarded + idempotent, mirroring MudiUI's); register
   the watchdog `boot-check` in a boot hook; `/etc/sysupgrade.conf`; ipk.
 
