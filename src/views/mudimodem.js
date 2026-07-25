@@ -111,7 +111,11 @@ module.exports = {
       updateConfirm: false,   // "Update now" armed, awaiting a second click
       updateConfirmTimer: null,
       updating: false,        // self_update in flight / polling
+      updateDone: false,      // an update SUCCEEDED in this page's lifetime — the
+                              // offer is spent until reload (the running chunk is
+                              // still the old one, so re-offering it is a lie)
       updateMsg: "",          // final status line after an update attempt
+      verRefreshTimer: null,  // re-read of the installed version after an update
       updatePollTimer: null,
       pollStopped: false,     // set true on teardown; makes an in-flight poll continuation a no-op
       pollAttempts: 0,        // bounds the poll loop — give up after POLL_MAX
@@ -329,6 +333,7 @@ module.exports = {
     if (this.resetTimer) clearTimeout(this.resetTimer);
     if (this.updateConfirmTimer) clearTimeout(this.updateConfirmTimer);
     if (this.updatePollTimer) clearTimeout(this.updatePollTimer);
+    if (this.verRefreshTimer) clearTimeout(this.verRefreshTimer);
     this.pollStopped = true;
   },
 
@@ -693,6 +698,33 @@ module.exports = {
         .then(function (r) { self.appVer = r || null; })
         .catch(function () { /* fail-silent: keep whatever we had, show installed only */ });
     },
+    // After a successful self-update the box's /etc/mudimodem/version.json holds
+    // the NEW version, but this card is still showing the one we just replaced.
+    // Re-read it so the screen states what is actually installed.
+    //
+    // The install restarts nginx, so the first read can fail outright or race
+    // the file swap and return the old number — retry a few times until it
+    // matches the version we installed (or we run out of tries; a stale number
+    // beats a spinner that never settles).
+    refreshVersionAfterUpdate(target, tries) {
+      var self = this;
+      if (this.pollStopped) return;
+      this.checkAppVersion().then(function () {
+        if (self.pollStopped) return;
+        var inst = (self.appVer && self.appVer.installed) || "";
+        if (tries > 1 && target && inst !== target) {
+          if (self.verRefreshTimer) clearTimeout(self.verRefreshTimer);
+          self.verRefreshTimer = setTimeout(function () {
+            self.refreshVersionAfterUpdate(target, tries - 1);
+          }, 2500);
+        }
+      });
+    },
+    reloadPage() {
+      if (typeof window !== "undefined" && window.location && window.location.reload) {
+        window.location.reload();
+      }
+    },
     fetchBattLimit() {
       var self = this;
       if (typeof window === "undefined" || !window.$rpcRequest) return Promise.resolve();
@@ -781,7 +813,7 @@ module.exports = {
     },
     armUpdate() {
       var self = this;
-      if (this.updateConfirm) return;         // already armed
+      if (this.updateConfirm || this.updating || this.updateDone) return;
       this.updateConfirm = true;
       if (this.updateConfirmTimer) clearTimeout(this.updateConfirmTimer);
       this.updateConfirmTimer = setTimeout(function () { self.updateConfirm = false; }, 5000);
@@ -790,8 +822,13 @@ module.exports = {
       var self = this;
       this.updateConfirm = false;
       if (this.updateConfirmTimer) { clearTimeout(this.updateConfirmTimer); this.updateConfirmTimer = null; }
-      if (this.updating || typeof window === "undefined" || !window.$rpcRequest) return Promise.resolve();
-      this.updating = true; this.updateMsg = "Updating…";
+      if (this.updating || this.updateDone) return Promise.resolve();
+      if (typeof window === "undefined" || !window.$rpcRequest) return Promise.resolve();
+      // The offer disappears from here on; the target version moves into the
+      // status line so it stays visible without an actionable link beside it.
+      var target = (this.appVer && this.appVer.latest) || "";
+      this.updating = true;
+      this.updateMsg = "Updating" + (target ? " to v" + target : "") + "…";
       this.pollStopped = false; this.pollAttempts = 0;   // fresh run — a prior update may have stopped/capped it
       return window.$rpcRequest("call", ["sid", "mudimodem", "self_update", {}], { timeout: 12000 })
         .then(function () { self.pollUpdate(); })
@@ -819,7 +856,10 @@ module.exports = {
               self.updating = false;
               if (s.result.ok) {
                 var v = (self.appVer && self.appVer.latest) || "";
-                self.updateMsg = "Updated" + (v ? " to v" + v : "") + " — reload the page to load the new version.";
+                self.updateDone = true;   // spent: this page can't offer it again
+                self.updateMsg = "Updated" + (v ? " to v" + v : "") +
+                  ". The page is still running the old interface —";
+                self.refreshVersionAfterUpdate(v, 4);
               } else {
                 self.updateMsg = "Update failed: " + (s.result.error || "unknown") +
                   " — see /var/log/mudimodem-update.log";
@@ -865,7 +905,11 @@ module.exports = {
       var installed = av.installed || "unknown";
       var verNodes = [h("span", {}, "MudiModem "
         + (installed === "unknown" ? "(version unknown)" : "v" + installed))];
-      if (av.checked && av.update_available && av.latest) {
+      // The offer shows only while it is actionable: not mid-update (the click
+      // would do nothing, and the status line already says what's happening),
+      // and not after a successful one (this page is still running the OLD
+      // chunk, so its "available" flag is stale until reload).
+      if (av.checked && av.update_available && av.latest && !this.updating && !this.updateDone) {
         verNodes.push(h("span", { staticClass: "mm-upd" }, [
           " (v" + av.latest + " available — ",
           this.updateConfirm
@@ -882,7 +926,15 @@ module.exports = {
 
       var cardKids = [h("div", { staticClass: "mm-card-h" }, "MudiModem"), verLine];
       if (this.updateMsg) {
-        cardKids.push(h("div", { staticClass: "mm-note" }, this.updateMsg));
+        // On success the version line above already shows the newly installed
+        // version; what's left is swapping THIS page for the new chunk, so the
+        // note carries the reload as an action rather than an instruction.
+        cardKids.push(h("div", { staticClass: "mm-note" }, this.updateDone
+          ? [this.updateMsg + " ",
+             h("a", { staticClass: "mm-link", attrs: { href: "#" },
+               on: { click: function (e) { if (e.preventDefault) e.preventDefault(); self.reloadPage(); } } },
+               "reload now")]
+          : this.updateMsg));
       }
       var app = h("div", { staticClass: "mm-card" }, cardKids);
 

@@ -696,6 +696,17 @@ MudiModem/
   browser-computed cutoff; a sample with `rsrp: null` is dropped from the plot but still advances the
   `since` cursor. The old websocket `trace` is kept as the **fallback** when the collector has no
   history, and the eyebrow says which source is live ("RSRP · last 15 min" vs "RSRP live").
+- ✅ **Self-update UX: the offer is spent, and the version re-reads (2026-07-25).** The
+  "(vX available — Update now)" clause was gated only on `appVer.update_available`, so it stayed
+  clickable *during* the update and *after* it finished. Now: hidden while `updating` (the target
+  version moves into the status line, "Updating to vX…"); hidden permanently once an update succeeds
+  (**`updateDone`**) — necessary because the browser is still running the **OLD chunk**, whose
+  `update_available` is stale, and the Config tab re-checks on every open, which would resurrect the
+  offer. A **failed** update restores the offer so it can be retried. On success,
+  `refreshVersionAfterUpdate()` re-calls `app_version` (retrying up to 4× / 2.5s while the box still
+  reports the old number — the install restarts nginx, so the first read can race the file swap) so
+  the card shows what is **actually installed**; the note then separates box-updated from
+  page-still-old with a clickable **"reload now"**.
 - 🔭 Later: `install.sh`/`uninstall.sh` (device-guarded + idempotent, mirroring MudiUI's); register
   the watchdog `boot-check` in a boot hook; `/etc/sysupgrade.conf`; ipk.
 

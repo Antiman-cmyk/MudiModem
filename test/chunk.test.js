@@ -1712,6 +1712,116 @@ test('config tab: Update now arms a confirm step before calling self_update', ()
   assert.match(txt, /confirm/i, 'shows the confirm affordance');
 });
 
+test('config tab: the update offer disappears while the update runs', async () => {
+  const calls = stubRpc([{ ok: true }]);          // self_update accepted, poll pending
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.tab = 'config';
+    vm.appVer = { installed: '1.0.0', latest: '1.0.2', update_available: true, checked: true };
+    assert.match(textOf(c.render.call(vm, h)), /Update now/, 'offered before starting');
+    await vm.confirmUpdate();
+    const txt = textOf(c.render.call(vm, h));
+    assert.strictEqual(vm.updating, true, 'update in flight');
+    assert.doesNotMatch(txt, /Update now/, 'no clickable offer mid-update');
+    assert.doesNotMatch(txt, /available/, 'and no "available" clause either');
+    assert.match(txt, /Updating to v1\.0\.2/, 'the target version moves into the status line');
+    vm.pollStopped = true;                        // stop the scheduled poll
+    if (vm.updatePollTimer) clearTimeout(vm.updatePollTimer);
+  } finally { unstubRpc(); }
+});
+
+test('config tab: the update offer stays gone after a successful update', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const calls = stubRpc([{ ok: true }, { result: { ok: true } }]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.tab = 'config';
+    vm.appVer = { installed: '1.0.0', latest: '1.0.2', update_available: true, checked: true };
+    await vm.confirmUpdate();
+    t.mock.timers.tick(3000);
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    assert.strictEqual(vm.updating, false, 'run finished');
+    assert.strictEqual(vm.updateDone, true, 'the offer is marked spent');
+    const txt = textOf(c.render.call(vm, h));
+    assert.doesNotMatch(txt, /Update now/, 'no offer after success');
+    assert.match(txt, /reload now/, 'offers the reload as an action instead');
+    // A tab re-open re-checks the version; a stale update_available must not
+    // resurrect the offer — this page is still running the OLD chunk.
+    vm.appVer = { installed: '1.0.0', latest: '1.0.2', update_available: true, checked: true };
+    assert.doesNotMatch(textOf(c.render.call(vm, h)), /Update now/, 'a stale re-check cannot revive it');
+    vm.armUpdate();
+    assert.strictEqual(vm.updateConfirm, false, 'and the action itself is inert');
+  } finally { unstubRpc(); }
+});
+
+test('config tab: a successful update re-reads the installed version', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const calls = stubRpc([
+    { ok: true },                                                    // self_update
+    { result: { ok: true } },                                        // update_status
+    { installed: '1.0.2', latest: '1.0.2', update_available: false, checked: true }   // app_version
+  ]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.tab = 'config';
+    vm.appVer = { installed: '1.0.0', latest: '1.0.2', update_available: true, checked: true };
+    await vm.confirmUpdate();
+    t.mock.timers.tick(3000);
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+    assert.strictEqual(calls[2].params[2], 'app_version', 'version is re-read after the update');
+    assert.strictEqual(vm.appVer.installed, '1.0.2', 'card now holds the new version');
+    const txt = textOf(c.render.call(vm, h));
+    assert.match(txt, /MudiModem v1\.0\.2/, 'the screen shows the version that is now installed');
+    assert.match(txt, /Updated to v1\.0\.2/, 'and says what just happened');
+    assert.doesNotMatch(txt, /available/, 'with no lingering update clause');
+  } finally { unstubRpc(); }
+});
+
+test('config tab: the version re-read retries while the box still reports the old one', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const calls = stubRpc([
+    { ok: true },
+    { result: { ok: true } },
+    { installed: '1.0.0', latest: '1.0.2', update_available: true, checked: true },  // nginx mid-restart: stale
+    { installed: '1.0.2', latest: '1.0.2', update_available: false, checked: true }  // settled
+  ]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.tab = 'config';
+    vm.appVer = { installed: '1.0.0', latest: '1.0.2', update_available: true, checked: true };
+    await vm.confirmUpdate();
+    t.mock.timers.tick(3000);
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+    assert.strictEqual(vm.appVer.installed, '1.0.0', 'first read was still stale');
+    t.mock.timers.tick(2500);
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+    assert.strictEqual(vm.appVer.installed, '1.0.2', 'the retry picked up the new version');
+    assert.strictEqual(calls.length, 4, 'and it stops retrying once it matches');
+  } finally { unstubRpc(); }
+});
+
+test('config tab: a FAILED update puts the offer back so it can be retried', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const calls = stubRpc([{ ok: true }, { result: { ok: false, error: 'download failed' } }]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.tab = 'config';
+    vm.appVer = { installed: '1.0.0', latest: '1.0.2', update_available: true, checked: true };
+    await vm.confirmUpdate();
+    t.mock.timers.tick(3000);
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    assert.strictEqual(vm.updateDone, false, 'a failure does not spend the offer');
+    const txt = textOf(c.render.call(vm, h));
+    assert.match(txt, /Update now/, 'retry is available');
+    assert.match(txt, /download failed/, 'alongside the reason it failed');
+  } finally { unstubRpc(); }
+});
+
 // --- Config tab fix wave: pollUpdate teardown, poll cap, device_info retry --
 
 test('pollUpdate: a request already in flight when the component tears down does not reschedule', async (t) => {
