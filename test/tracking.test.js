@@ -342,13 +342,14 @@ test('a single out-of-order sample cannot streak across the plot', () => {
     'a lone misordered sample must be sorted back into place before drawing');
 });
 
-// Capture the get_history `since` argument of each /rpc post.
+// Capture the get_history arguments of each /rpc post.
 function stubAxios() {
   const calls = [], resolvers = [];
   global.window = {
     $getCookie: () => 'sid',
     $axios: { post: (url, body) => {
-      calls.push({ since: body.params[3].since, method: body.params[2] });
+      calls.push({ since: body.params[3].since, window_ms: body.params[3].window_ms,
+        method: body.params[2] });
       return new Promise((res) => resolvers.push(res));
     } }
   };
@@ -356,18 +357,44 @@ function stubAxios() {
     settle: (i, result) => resolvers[i]({ data: { result } }) };
 }
 
-test('initial fetch requests only the visible window, not the whole history', () => {
+test('initial fetch requests the visible window RELATIVE to the box clock', () => {
   const c = loadChunk();
   const vm = makeVm(c, { samples: [], winW: 60, width: 1900, serverNow: 0 });
   const ax = stubAxios();
   try {
-    const t0 = Date.now();
     vm.fetchHistory();                      // the mount-time load
     assert.strictEqual(ax.calls.length, 1);
-    const want = t0 - 60 * 60000;           // now - winW
-    assert.ok(Math.abs(ax.calls[0].since - want) < 5000,
-      `since must be ~now-winW (${want}), not 0 — got ${ax.calls[0].since}`);
+    assert.strictEqual(ax.calls[0].window_ms, 60 * 60000,
+      'the window is sent as a duration for the box to resolve');
+    assert.strictEqual(ax.calls[0].since, undefined,
+      'no browser-derived absolute timestamp may be sent — it would mis-size the window by the clock skew');
   } finally { delete global.window; }
+});
+
+// The reason the window is a duration and not `Date.now() - winW`: the Mudi is a
+// travel router and the two clocks can disagree. A browser 10 minutes slow used
+// to ask for 25 minutes of history (slow, wrong axis); 10 minutes fast got a
+// nearly empty graph. (Timezone was never the mechanism — Date.now() and Lua's
+// os.time() are both UTC epoch, unaffected by TZ. Absolute skew was.)
+test('a badly skewed browser clock cannot change what is requested', () => {
+  const c = loadChunk();
+  const realNow = Date.now;
+  const ask = (skewMs) => {
+    const vm = makeVm(c, { samples: [], winW: 15, width: 1900, serverNow: 0 });
+    const ax = stubAxios();
+    try {
+      Date.now = () => realNow() + skewMs;
+      vm.fetchHistory();
+      return ax.calls[0];
+    } finally { Date.now = realNow; delete global.window; }
+  };
+  const slow = ask(-45 * 60000);            // browser 45 minutes behind the box
+  const fast = ask(+45 * 60000);            // browser 45 minutes ahead
+  assert.deepStrictEqual(
+    { since: slow.since, window_ms: slow.window_ms },
+    { since: fast.since, window_ms: fast.window_ms },
+    'the request must be identical regardless of the local clock');
+  assert.strictEqual(slow.window_ms, 15 * 60000, 'and it is still the 15m window');
 });
 
 test('selecting a LARGER range backfills the wider window; SMALLER/equal does not', async () => {
@@ -381,11 +408,11 @@ test('selecting a LARGER range backfills the wider window; SMALLER/equal does no
     await flush();
     // Go to 24h → must backfill the wider window.
     const before = ax.calls.length;
-    const t0 = Date.now();
     vm.setRange(1440);
     assert.strictEqual(ax.calls.length, before + 1, 'a wider range fetches more history');
-    assert.ok(Math.abs(ax.calls[before].since - (t0 - 1440 * 60000)) < 5000,
-      'backfill requests since = now - 24h');
+    assert.strictEqual(ax.calls[before].window_ms, 1440 * 60000,
+      'backfill requests the 24h window as a duration');
+    assert.strictEqual(ax.calls[before].since, undefined, 'and no browser timestamp');
     ax.settle(before, { samples: [], events: [], now: Date.now() });
     await flush();
     // Back down to 1h → already loaded, no fetch.
@@ -402,6 +429,21 @@ test('the 10s poll fetches incrementally from lastT and merges', () => {
   try {
     vm.fetchHistory({ since: vm.lastT, merge: true });
     assert.strictEqual(ax.calls[0].since, 111111, 'poll uses lastT, not the window');
+    assert.strictEqual(ax.calls[0].window_ms, undefined, 'lastT is box-stamped; no window needed');
+  } finally { delete global.window; }
+});
+
+// lastT is 0 until the first sample lands (collector just started, or the window
+// happens to be empty). since=0 would make the box decode the ENTIRE retained
+// 24h file — every 10 seconds, forever. Fall back to the window instead.
+test('the poll never asks since=0 before the first sample arrives', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { samples: [], winW: 15, width: 1900, serverNow: 0, lastT: 0, loading: false });
+  const ax = stubAxios();
+  try {
+    vm.fetchHistory({ since: vm.lastT, merge: true });
+    assert.strictEqual(ax.calls[0].since, undefined, 'must not request the whole file');
+    assert.strictEqual(ax.calls[0].window_ms, 15 * 60000, 'falls back to the visible window');
   } finally { delete global.window; }
 });
 
@@ -419,6 +461,6 @@ test('an overlapping fetch is skipped, and a range request made during one runs 
     ax.settle(0, { samples: [], events: [], now: Date.now() });
     await new Promise((r) => setImmediate(r));
     assert.strictEqual(ax.calls.length, 2, 'the deferred backfill runs once the first settles');
-    assert.ok(ax.calls[1].since < Date.now() - 1400 * 60000, 'and it is the 24h window');
+    assert.strictEqual(ax.calls[1].window_ms, 1440 * 60000, 'and it is the 24h window');
   } finally { delete global.window; }
 });

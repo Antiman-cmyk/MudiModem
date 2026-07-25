@@ -54,10 +54,11 @@ module.exports = (function () {
         styleId: "mmt-css", cursor: null, poll: null,
         samples: [], events: [], lastT: 0, serverNow: 0, serverNowAt: 0,
         loading: true, err: "", fetching: false,
-        // how far back we've fetched (epoch ms); null = nothing yet. A larger
-        // range only refetches when it reaches earlier than this. pendingSince
-        // holds a range request that arrived while a fetch was in flight.
-        loadedFrom: null, pendingSince: null };
+        // how far back we've fetched (epoch ms, BOX clock); null = nothing yet.
+        // A larger range only refetches when it reaches earlier than this.
+        // pendingWindow holds a range request (in minutes) that arrived while a
+        // fetch was in flight.
+        loadedFrom: null, pendingWindow: null };
     },
 
     computed: {
@@ -113,12 +114,21 @@ module.exports = (function () {
           .then(function (r) { return (r && r.data && r.data.result) || null; })
           .catch(function () { return null; });
       },
-      // opts = { since, merge }. Default (no opts) = the initial/visible-window
-      // load: fetch only `now - winW`, replacing. A poll passes { since: lastT,
+      // opts = { window, since, merge }. Default (no opts) = the initial load:
+      // fetch the visible window, replacing. A poll passes { since: lastT,
       // merge: true } to append just the new tail. Backfill (a wider range)
-      // passes { since: olderCutoff } to replace with the wider window.
+      // passes { window: minutes } to replace with the wider window.
       // Fetching only the shown window keeps first paint small: the full 24h is
       // ~1.4 MB uncompressed, the 1h default ~85 KB.
+      //
+      // ⚠️ A window is sent to the box as a DURATION (window_ms), never as a
+      // browser-computed `Date.now() - winW`. The two clocks can disagree — this
+      // is a travel router — and an absolute cutoff mis-sizes the window by
+      // exactly that skew: 10 minutes slow asked for 25 minutes of history, 10
+      // minutes fast drew a nearly empty graph. (Not a timezone problem: both
+      // Date.now() and the box's os.time() are UTC epoch. Absolute skew.) The
+      // poll's `since` is exempt — lastT is a timestamp the BOX stamped on a
+      // sample, so it needs no clock agreement at either end.
       fetchHistory: function (opts) {
         opts = opts || {};
         var self = this;
@@ -127,14 +137,20 @@ module.exports = (function () {
         // before it settles and (with a stale lastT) re-fetch + concat overlapping
         // data. A range request that lands mid-flight is remembered, not dropped.
         if (self.fetching) {
-          if (opts.since != null && !opts.merge)
-            self.pendingSince = (self.pendingSince == null) ? opts.since : Math.min(self.pendingSince, opts.since);
+          if (opts.window != null && !opts.merge)
+            self.pendingWindow = (self.pendingWindow == null) ? opts.window : Math.max(self.pendingWindow, opts.window);
           return;
         }
         self.fetching = true;
         var merge = !!opts.merge;
-        var since = (opts.since != null) ? opts.since : (self.nowMs() - self.winW * 60000);
-        this.rpcSilent("get_history", { since: Math.floor(since) })
+        // An incremental poll rides on lastT; everything else asks for a window.
+        // lastT is 0 until the first sample lands (collector just started, or an
+        // empty window) — since=0 would make the box decode the whole retained
+        // 24h file on every 10s tick, so fall back to the window there too.
+        var incremental = (opts.since != null && opts.since > 0);
+        var winMs = (opts.window || self.winW) * 60000;
+        var params = incremental ? { since: Math.floor(opts.since) } : { window_ms: winMs };
+        this.rpcSilent("get_history", params)
           .then(function (res) {
             self.fetching = false;
             if (res) {
@@ -149,7 +165,10 @@ module.exports = (function () {
               self.samples = self.samples.filter(function (s) { return s.t >= cut; });
               self.events = self.events.filter(function (e) { return e.t >= cut; });
               if (self.samples.length) self.lastT = self.samples[self.samples.length - 1].t;
-              self.loadedFrom = (self.loadedFrom == null) ? since : Math.min(self.loadedFrom, since);
+              // How far back we now hold, in BOX time — derived from the reply's
+              // own clock, so setRange's backfill test compares like with like.
+              var reached = incremental ? opts.since : (self.serverNow - winMs);
+              self.loadedFrom = (self.loadedFrom == null) ? reached : Math.min(self.loadedFrom, reached);
               self.err = ""; self.tick++;
             }
             self.loading = false;
@@ -162,9 +181,9 @@ module.exports = (function () {
           });
       },
       drainPending: function () {
-        if (this.pendingSince == null) return;
-        var s = this.pendingSince; this.pendingSince = null;
-        this.fetchHistory({ since: s });
+        if (this.pendingWindow == null) return;
+        var w = this.pendingWindow; this.pendingWindow = null;
+        this.fetchHistory({ window: w });
       },
       // pure: derive net (handover/failover) events from consecutive samples,
       // suppressing any within RECENT_USER_MS of a known user/watchdog event so a
@@ -300,8 +319,10 @@ module.exports = (function () {
         this.winW = w; this.pinnedM = null; this.cursor = null;
         // Backfill only when the new window reaches earlier than we've loaded; a
         // narrower range just re-filters the samples already in memory.
+        // nowMs() is skew-corrected to the box after the first reply, and
+        // loadedFrom is box-derived too, so this compares like with like.
         var cutoff = this.nowMs() - w * 60000;
-        if (this.loadedFrom == null || cutoff < this.loadedFrom - 1000) this.fetchHistory({ since: cutoff });
+        if (this.loadedFrom == null || cutoff < this.loadedFrom - 1000) this.fetchHistory({ window: w });
       },
       parseHash: function () {
         if (typeof window === "undefined" || !window.location) return;

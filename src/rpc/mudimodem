@@ -586,35 +586,80 @@ function M.set_bands(args)
 end
 
 -- READ: the recorded history (samples + user/dog events) for the Tracking page.
--- args = { since = <epoch ms> } — return only records newer than `since`, else
--- all (retained 24h). Files absent (collector not started) => empty arrays.
+-- Two ways to ask, and the difference matters:
+--   { window_ms = <ms> }  — a RELATIVE window, resolved against the BOX clock.
+--                           What the page sends for its initial load and for a
+--                           range backfill.
+--   { since = <epoch ms> }— records strictly newer than this instant. What the
+--                           10s poll sends, carrying the newest sample's OWN
+--                           timestamp — a value the box itself stamped.
+-- Neither form lets the browser's clock decide how much history comes back.
+-- ⚠️ An absolute `since` computed browser-side (now - 15min) was the earlier
+-- design and it silently mis-sized the window by however far the two clocks had
+-- drifted: a laptop 10 minutes slow asked for 25 minutes of data, one 10 minutes
+-- fast got a nearly empty graph. Timezone was never involved — Date.now() and
+-- os.time() are both UTC epoch — but absolute skew on a travel router is real.
+-- Neither given => everything retained (24h). Files absent (collector not
+-- started) => empty arrays.
 function M.get_history(args)
+  local now   = os.time() * 1000
   local since = args and tonumber(args.since) or nil
-  -- Read BACKWARD from the newest line and stop decoding once we pass `since`.
-  -- The files are append-ordered by time (the collector appends per tick; trim()
+  local win   = args and tonumber(args.window_ms) or nil
+  -- Callers send one or the other; if both arrive, honour the narrower.
+  if win and win > 0 then
+    local rel = now - win
+    since = (since == nil) and rel or math.max(since, rel)
+  end
+  -- Read the file's TAIL BACKWARD in chunks and stop at the window edge. The
+  -- files are append-ordered by time (the collector appends per tick; trim()
   -- rewrites in order), so everything before the first out-of-window record is
-  -- older still. This decodes only the requested tail, not the whole 24h file —
-  -- the 10s poll (since=lastT) and the windowed page load then cost O(window),
-  -- not O(file). Reading the raw lines is cheap; the cjson.decode was the cost.
+  -- older still — once we pass `since` there is nothing left worth looking at.
+  --
+  -- ⚠️ Stopping the DECODE early is not enough: an earlier version still slurped
+  -- every line into a Lua table first ("reading the raw lines is cheap"). It
+  -- isn't. Measured on the box over 14.6k lines / 3.8 MB that loop cost ~7.4 s of
+  -- CPU, and it was FLAT — a 15-minute window (224 samples) cost exactly what the
+  -- full 24 h (14,647) did, on the page load AND on every 10s poll. The bytes are
+  -- cheap (read("*a") of 3.8 MB = 0.09 s) and 226 cjson.decodes are 0.005 s; the
+  -- cost is materialising 14.6k interned strings in one growing table. So never
+  -- touch bytes older than the window: seek to the end, walk back a chunk at a
+  -- time, splicing the partial line at each chunk's head onto the next (earlier)
+  -- read. Cost is now O(window) — a 15 m load and each poll are ~10 ms.
+  local CHUNK = 65536
   local function read_lines(path)
-    local lines = {}
     local fh = io.open(path, "r")
     if not fh then return {} end
-    for line in fh:lines() do if #line > 1 then lines[#lines + 1] = line end end
-    fh:close()
-    local rev = {}                                     -- collected newest-first
-    for i = #lines, 1, -1 do
-      local ok, obj = pcall(cjson.decode, lines[i])    -- cjson.decode can't yield; pcall is safe here
-      if ok and type(obj) == "table" and obj.t then
-        if since and obj.t <= since then break end      -- reached the window edge: stop
-        rev[#rev + 1] = obj
-      end                                               -- malformed line: skip, keep scanning
+    local pos   = fh:seek("end")
+    local carry = ""                                   -- head fragment: a line cut by the chunk edge
+    local rev   = {}                                   -- collected newest-first
+    local done  = false
+    while pos > 0 and not done do
+      local from = pos - CHUNK
+      if from < 0 then from = 0 end
+      fh:seek("set", from)
+      local buf = (fh:read(pos - from) or "") .. carry
+      pos = from
+      if pos > 0 then                                  -- buf's first line is (probably) incomplete:
+        local nl = buf:find("\n", 1, true)             -- hold it back for the next, earlier read
+        if nl then carry, buf = buf:sub(1, nl - 1), buf:sub(nl + 1)
+        else carry, buf = buf, "" end                  -- no newline in the chunk: it's all one fragment
+      else carry = "" end                              -- reached the file start: nothing left to splice
+      local lines = {}
+      for line in buf:gmatch("[^\n]+") do lines[#lines + 1] = line end
+      for i = #lines, 1, -1 do
+        local ok, obj = pcall(cjson.decode, lines[i])  -- cjson.decode can't yield; pcall is safe here
+        if ok and type(obj) == "table" and obj.t then
+          if since and obj.t <= since then done = true; break end  -- window edge: stop reading
+          rev[#rev + 1] = obj
+        end                                            -- malformed line: skip, keep scanning
+      end
     end
+    fh:close()
     local out = {}                                     -- flip back to oldest-first (the contract)
     for i = #rev, 1, -1 do out[#out + 1] = rev[i] end
     return out
   end
-  return { samples = arr(read_lines(SAMPLES)), events = arr(read_lines(EVENTS)), now = os.time() * 1000 }
+  return { samples = arr(read_lines(SAMPLES)), events = arr(read_lines(EVENTS)), now = now }
 end
 
 -- Commit a pending change durably (Path B). Two things happen here:
