@@ -117,6 +117,29 @@ if [ -f src/sbin/mudimodem-collectd ]; then
   echo "collector deployed + service (re)started"
 fi
 
+# LCD front-panel renderer (vendored MudiUI). Files only — DEFAULT OFF: the
+# renderer seizes /dev/fb0 from gl_screen, so it's enabled solely from the admin
+# "LCD Display" tab (set_lcd), never here. Gate on the 240x320 panel being present.
+if [ -f src/lcd/mudi.py ]; then
+  lcd_geom=$(ssh -o BatchMode=yes "root@$HOST" 'cat /sys/class/graphics/fb0/virtual_size 2>/dev/null' || echo "?")
+  if [ "$lcd_geom" = "240,320" ]; then
+    ssh -o BatchMode=yes "root@$HOST" 'cat > /usr/bin/mudi.py && chmod 0755 /usr/bin/mudi.py' \
+      < src/lcd/mudi.py
+    ssh -o BatchMode=yes "root@$HOST" 'cat > /usr/bin/mudi-watch.py && chmod 0755 /usr/bin/mudi-watch.py' \
+      < src/lcd/mudi-watch.py
+    ssh -o BatchMode=yes "root@$HOST" 'cat > /etc/init.d/mudi && chmod 0755 /etc/init.d/mudi' \
+      < src/lcd/mudi.init
+    ssh -o BatchMode=yes "root@$HOST" 'cat > /etc/init.d/mudi-watch && chmod 0755 /etc/init.d/mudi-watch' \
+      < src/lcd/mudi-watch.init
+    # default settings only if absent — never clobber user LCD config
+    ssh -o BatchMode=yes "root@$HOST" '[ -f /etc/config/mudi ] || cat > /etc/config/mudi' \
+      < src/lcd/mudi.config
+    echo "LCD renderer deployed (disabled by default — enable from the LCD Display tab)"
+  else
+    echo "no 240x320 front panel on $HOST — skipping LCD renderer files"
+  fi
+fi
+
 # Battery charge limit: glbattlimit + hotplug + init + default policy JSON.
 # Off first if a previous watcher is active — replacing the binary mid-run is racy.
 if [ -f src/sbin/glbattlimit ]; then
@@ -147,6 +170,10 @@ ssh -o BatchMode=yes "root@$HOST" 'f=/etc/sysupgrade.conf; touch "$f"; for p in 
   /usr/sbin/mudimodem-selfupdate \
   /usr/sbin/mudimodem-collectd \
   /etc/init.d/mudimodem-collectd \
+  /usr/bin/mudi.py \
+  /usr/bin/mudi-watch.py \
+  /etc/init.d/mudi \
+  /etc/init.d/mudi-watch \
   /www/views/gl-sdk4-ui-mudimodem-console.common.js.gz \
   /www/mudimodem/at-library.json.gz \
   /usr/lib/mudimodem/mudimodem-at.py \
