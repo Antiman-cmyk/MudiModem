@@ -1006,7 +1006,7 @@ module.exports = {
           ])
         ]));
         kids.push(row("Status", lc.running ? "Running" : "Stopped"));
-        kids.push(h("div", { staticClass: "mm-note" },
+        kids.push(h("div", { staticClass: "mm-note", style: { fontWeight: "700", color: "#000" } },
           "Enabling takes over the front panel from GL's stock screen. Long-press the panel (~1.6s) to toggle back."));
         if (this.lcdErr) kids.push(h("div", { staticClass: "mm-note" }, this.lcdErr));
       }
