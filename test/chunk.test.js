@@ -1821,6 +1821,30 @@ const LCD_ON = { available: true, enabled: true, running: true,
 const LCD_NA = { available: false, enabled: false, running: false,
   brightness: 90, screen_timeout: 600, default_page: 0, error: "no front panel on this device" };
 
+test('bands tab: Reset to default stages AUTO + all permitted bands, enables Apply', () => {
+  const c = loadChunk();
+  const vm = bandsVm(c, { meta: { mode: 'NR5G', plmn_matched: true } });   // start at 5G-only
+  vm.selMode = 'NR5G';
+  vm.resetDefault();
+  assert.strictEqual(vm.selMode, 'AUTO', 'mode reset to AUTO');
+  assert.deepStrictEqual(vm.sel.sa.slice().sort(), [41, 71], 'all permitted SA selected');
+  assert.deepStrictEqual(vm.sel.nsa.slice().sort(), [41, 71], 'all permitted NSA selected');
+  assert.deepStrictEqual(vm.sel.LTE.slice().sort(), [12, 66], 'all permitted LTE selected');
+  assert.strictEqual(vm.changedAny(), true, 'staged change enables Apply');
+});
+
+test('bands tab: Reset to default button renders and is a no-op while pending', () => {
+  const c = loadChunk();
+  const vm = bandsVm(c);
+  const btns = walk(c.render.call(vm, h))
+    .filter((n) => n.tag === 'button').map(textOf);
+  assert.ok(btns.includes('Reset to default'), 'Reset to default button renders');
+  vm.pending = { kind: 'bands', remaining: 30, window: 60, applied: {} };
+  const before = JSON.stringify(vm.sel);
+  vm.resetDefault();
+  assert.strictEqual(JSON.stringify(vm.sel), before, 'resetDefault is a no-op while pending');
+});
+
 test('LCD Display tab appears in the tab bar', () => {
   const c = loadChunk();
   const vm = makeVm(c, LIVE);

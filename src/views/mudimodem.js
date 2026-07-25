@@ -1462,6 +1462,16 @@ module.exports = {
       var perm = this.bands.policy[group] || [], cur = this.sel[group] || [];
       this.sel[group] = perm.filter(function (b) { return cur.indexOf(b) === -1; });
     },
+    resetDefault() {
+      // Stage the modem's sane default: AUTO mode + every permitted band in each
+      // group. Writes nothing — lights up Apply so the user reviews then applies
+      // through the normal confirm-or-revert path. No-op while a revert pends.
+      if (this.pending || !this.bands) return;
+      this.setMode("AUTO");
+      this.selectAll("sa");
+      this.selectAll("nsa");
+      this.selectAll("LTE");
+    },
     changed(group) {
       if (!this.bands || !this.sel[group]) return false;
       var cur = this.seedFor(group).sort(function (a, b) { return a - b; });
@@ -1921,11 +1931,18 @@ module.exports = {
         } else status = "No changes";
         footer.push(h("div", { staticClass: "mm-foot" }, [
           h("span", { staticClass: "mm-hint" }, [status]),
-          h("button", {
-            staticClass: "mm-btn primary",
-            attrs: { disabled: !changed || this.applying || empty },
-            on: { click: function () { self.applyBands(); } }
-          }, this.applying ? "Applying..." : "Apply")
+          h("span", { staticStyle: { display: "flex", gap: "6px" } }, [
+            h("button", {
+              staticClass: "mm-btn",
+              attrs: { disabled: this.applying },
+              on: { click: function () { self.resetDefault(); } }
+            }, "Reset to default"),
+            h("button", {
+              staticClass: "mm-btn primary",
+              attrs: { disabled: !changed || this.applying || empty },
+              on: { click: function () { self.applyBands(); } }
+            }, this.applying ? "Applying..." : "Apply")
+          ])
         ]));
       }
       var legend = [h("div", { staticClass: "mm-legend" }, [
