@@ -769,5 +769,12 @@ class TestSighupReload(unittest.TestCase):
         self.assertEqual(applied, [])                          # but not applied
 
 
+class TestLcdPages(unittest.TestCase):
+    def test_only_cellular_status_page_is_mounted(self):
+        pages = mudi.lcd_pages(mudi.MockApp())
+        self.assertEqual(len(pages), 1, "front panel should mount exactly one page")
+        self.assertIsInstance(pages[0], mudi.SignalPage, "the sole page is the cellular status page")
+
+
 if __name__ == "__main__":
     unittest.main()

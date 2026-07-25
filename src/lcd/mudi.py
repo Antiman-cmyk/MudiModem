@@ -1204,6 +1204,13 @@ def _mock(which, style="hero", outdir="/tmp"):
     out = "%s/mudi_%s_%s.png" % (outdir, which, style); img.save(out); print("wrote", out)
     return page
 
+def lcd_pages(app):
+    # For now the front panel shows ONLY the cellular status page. The other page
+    # classes (WifiPage/SystemPage/EthernetPage/SettingsPage) stay defined but are
+    # not mounted — brightness/timeout/default-page live in the admin LCD tab, and
+    # a long-press still toggles back to gl_screen (mudi-watch).
+    return [SignalPage(app)]
+
 def main():
     if "--mock" in sys.argv:
         which = next((w for w in ("wifi", "system", "eth", "settings") if w in sys.argv), "signal")
@@ -1212,10 +1219,7 @@ def main():
     dur = next((float(a) for a in sys.argv[1:] if a.replace(".", "").isdigit()), None)
     app = App([CellularSource(), WifiSource(), SystemSource(), EthernetSource()])
     app.service = "--service" in sys.argv
-    try: start = int(app.settings.get("default_page"))
-    except Exception: start = 0
-    app.run([SignalPage(app), WifiPage(app), SystemPage(app), EthernetPage(app), SettingsPage(app)],
-            start=start, duration=dur)
+    app.run(lcd_pages(app), start=0, duration=dur)
 
 if __name__ == "__main__":
     main()
