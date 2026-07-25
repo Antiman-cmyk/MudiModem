@@ -477,16 +477,25 @@ end
 
 -- Unlock (risk-reducing — no revert window). Also the stale-store reconciler.
 function M.clear_cell_lock(args)
-  local _, _, _, slot = resolve_active()
+  local sub_id, _, _, slot = resolve_active()
   local gl = glc("modem", "get_cell_tower", { bus = "cpu" })
   local tower = (gl and gl["slot" .. tostring(slot)]) or {}
   local payload = { bus = "cpu", slot = tonumber(slot) or 1, lock = false }
   for k, v in pairs(tower) do if payload[k] == nil then payload[k] = v end end
   local res, err = glc("modem", "set_cell_tower", payload)
   if not res then return { error = "GL unlock failed: " .. tostring(err) } end
+  -- GL clears QNWLOCK but leaves the lock's mode side-effect in place, so a 5G
+  -- unlock would strand the modem on 5G-only (a 4G lock forces LTE:NR5G +
+  -- nr5g_disable_mode=1). Restore the sane default. AUTO — not the exact pre-lock
+  -- mode — because the manual-unlock path has no PREV snapshot: PENDING is
+  -- deleted on Keep, and Unlock is disabled while a revert pends. Mirrors panic.
+  -- Bare at() only — never pcall a cosocket (CLAUDE.md §8).
+  at('AT+QNWPREFCFG="mode_pref",AUTO', sub_id)
+  at('AT+QNWPREFCFG="nr5g_disable_mode",0', sub_id)
+  at('AT+QNWLOCK="save_ctrl",0,0', sub_id)
   os.remove(STALE)
-  append_event("user", "Cell lock cleared", "")
-  return { ok = true }
+  append_event("user", "Cell lock cleared", "unlocked + mode restored to AUTO")
+  return { ok = true, mode = "AUTO" }
 end
 
 -- WRITE: set band allowlists and/or the network mode, protected by

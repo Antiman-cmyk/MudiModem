@@ -98,6 +98,14 @@ if [ -f src/sbin/mudimodem-revert ]; then
     || fail "deployed watchdog lacks cell revert"
 fi
 
+echo "6c. clear_cell_lock restores mode to AUTO (static — never call it on the live link)"
+ssh -o BatchMode=yes "root@$HOST" '
+  f=/usr/lib/oui-httpd/rpc/mudimodem
+  grep -q "function M.clear_cell_lock" "$f" || exit 1
+  grep -q "mode_pref\",AUTO" "$f" || exit 1
+  grep -q "nr5g_disable_mode\",0" "$f" || exit 1' \
+  || fail "clear_cell_lock does not restore mode_pref=AUTO / nr5g_disable_mode=0"
+
 # 7. History collector: service running + get_history parses telemetry.
 if [ -f src/sbin/mudimodem-collectd ]; then
   echo "7. history collector running + get_history"
