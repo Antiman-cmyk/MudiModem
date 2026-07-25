@@ -66,6 +66,31 @@ function stubRpc(replies) {
 }
 function unstubRpc() { delete global.window; }
 
+// The strip's history poll goes through $axios directly (not $rpcRequest), so
+// GL's global error banner can't fire on a background poll. Stub that path:
+// each queued reply is delivered as the JSON-RPC `result`; an Error rejects.
+function stubAxios(replies) {
+  const calls = [];
+  global.window = {
+    $getCookie() { return 'tok'; },
+    $axios: {
+      post(url, body, opts) {
+        calls.push({ url, body, opts, params: body.params[3], method: body.params[2] });
+        const r = replies.shift();
+        return (r instanceof Error) ? Promise.reject(r) : Promise.resolve({ data: { result: r } });
+      }
+    }
+  };
+  return calls;
+}
+// A collector reply: samples spaced `stepMs` apart ending `endT`, rsrp from vals.
+function histReply(endT, stepMs, vals, now) {
+  const samples = vals.map((v, i) => ({
+    t: endT - (vals.length - 1 - i) * stepMs, rsrp: v, slot: '1', mode: 'NR5G-SA'
+  }));
+  return { samples, events: [], now: now == null ? endT : now };
+}
+
 // A realistic websocket snapshot, shaped exactly like the device pushes it
 // (captured 2026-07-17; slot 1 = active T-Mobile n71).
 const LIVE = {
@@ -235,6 +260,162 @@ test('strip is inert: no Tracking link, no click handler on the trace', () => {
   assert.ok(!(trace.data.on && trace.data.on.click), 'trace has no click handler');
   assert.ok(!(trace.data.attrs && trace.data.attrs.title), 'trace has no Open Tracking title');
   assert.doesNotMatch(textOf(trace), /↗/, 'no "Tracking ↗" affordance in the strip');
+});
+
+// ---- Strip trace is fed by the collector daemon (get_history) ----
+
+test('strip history: first fetch asks for a window, the next rides on since', async () => {
+  const calls = stubAxios([histReply(1000000, 4000, [-95, -94, -93]),
+                           histReply(1012000, 4000, [-92, -91])]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.fetchStripHistory();
+    assert.strictEqual(calls[0].method, 'get_history', 'goes to get_history');
+    assert.strictEqual(calls[0].params.window_ms, vm.STRIP_MIN * 60000, 'window as a DURATION');
+    assert.ok(!('since' in calls[0].params), 'no browser-computed absolute cutoff');
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(vm.hist.length, 3, 'samples land in hist');
+    assert.strictEqual(vm.histLastT, 1000000, 'cursor is the newest sample');
+    vm.fetchStripHistory();
+    assert.strictEqual(calls[1].params.since, 1000000, 'poll is incremental from the cursor');
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(vm.hist.length, 5, 'the new tail is appended, not replaced');
+    assert.deepStrictEqual(vm.hist.map((p) => p.v), [-95, -94, -93, -92, -91], 'in order');
+  } finally { unstubRpc(); }
+});
+
+test('strip history: samples with no RSRP are dropped but still advance the cursor', async () => {
+  const reply = histReply(500000, 4000, [-95, -94]);
+  reply.samples.push({ t: 508000, rsrp: null }, { t: 512000, rsrp: null });
+  const calls = stubAxios([reply]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.fetchStripHistory();
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(vm.hist.length, 2, 'out-of-service samples are not plotted');
+    assert.strictEqual(vm.histLastT, 512000, 'cursor still moved past them (no refetch loop)');
+  } finally { unstubRpc(); }
+});
+
+test('strip history: the window is trimmed on the BOX clock, not the browser', async () => {
+  // Box clock is deliberately ~1h behind the browser: an absolute browser cutoff
+  // would discard everything. STRIP_MIN of box-time history must survive.
+  const boxNow = Date.now() - 3600000;
+  const calls = stubAxios([histReply(boxNow, 60000, [-95, -94, -93, -92, -91])]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.fetchStripHistory();
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(vm.hist.length, 5, 'all 5 minutes of box-time history kept');
+    assert.ok(Math.abs(vm.stripEnd() - boxNow) < 5000, 'stripEnd tracks the box clock');
+    assert.ok(vm.stripFromDaemon(), 'and the strip draws from the daemon');
+  } finally { unstubRpc(); }
+});
+
+test('strip trace: daemon points are plotted on a real-time x-axis', async () => {
+  const boxNow = 2000000;
+  const calls = stubAxios([histReply(boxNow, 60000, [-120, -80])]);   // 1 min apart, floor + ceil
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.fetchStripHistory();
+    await new Promise((r) => setImmediate(r));
+    const d = vm.tracePath();
+    const pts = d.split(/(?=[ML])/).map((s) => s.slice(1).split(',').map(Number));
+    assert.strictEqual(pts.length, 2, 'two points');
+    assert.strictEqual(pts[0][1], 40, 'floor RSRP sits on the bottom of the 40px box');
+    assert.strictEqual(pts[1][1], 0, 'ceiling RSRP on the top');
+    // 15-minute window, 320px wide: a sample 1 minute old is 1/15 of the way back.
+    assert.ok(pts[1][0] > pts[0][0], 'newer sample is to the right');
+    assert.ok(pts[1][0] > 300, 'the newest sample sits at the right edge');
+    assert.ok(Math.abs((pts[1][0] - pts[0][0]) - 320 / 15) < 2, 'spacing is time-proportional');
+  } finally { unstubRpc(); }
+});
+
+test('strip trace: a hole in the history breaks the line instead of bridging it', async () => {
+  const boxNow = 3000000;
+  const reply = histReply(boxNow, 4000, [-95, -94]);
+  // an older pair, separated from the pair above by a 5-minute outage
+  reply.samples.unshift({ t: boxNow - 300000, rsrp: -90 }, { t: boxNow - 296000, rsrp: -91 });
+  const calls = stubAxios([reply]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.fetchStripHistory();
+    await new Promise((r) => setImmediate(r));
+    const d = vm.tracePath();
+    assert.strictEqual((d.match(/M/g) || []).length, 2, 'the gap starts a new subpath');
+    assert.strictEqual((d.match(/L/g) || []).length, 2, 'each side of the gap is still a line');
+  } finally { unstubRpc(); }
+});
+
+test('strip trace: falls back to the websocket trace when the daemon has nothing', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, LIVE);
+  vm.trace = [-100, -95, -90];
+  assert.strictEqual(vm.stripFromDaemon(), false, 'no daemon history');
+  const d = vm.tracePath();
+  assert.ok(d.startsWith('M'), 'still draws');
+  assert.strictEqual((d.match(/[ML]/g) || []).length, 3, 'all three websocket points');
+  const eyebrow = walk(c.render.call(vm, h))
+    .find((n) => n.data.staticClass === 'mm-eyebrow');
+  assert.strictEqual(textOf(eyebrow), 'RSRP live', 'labelled as the live fallback');
+});
+
+test('strip trace: the eyebrow names the daemon window once history is in', async () => {
+  const calls = stubAxios([histReply(4000000, 4000, [-95, -94, -93])]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.fetchStripHistory();
+    await new Promise((r) => setImmediate(r));
+    const eyebrow = walk(c.render.call(vm, h))
+      .find((n) => n.data.staticClass === 'mm-eyebrow');
+    assert.strictEqual(textOf(eyebrow), 'RSRP · last 15 min', 'window is named');
+    assert.match(eyebrow.data.attrs.title, /collector/, 'tooltip credits the collector');
+  } finally { unstubRpc(); }
+});
+
+test('strip history: a failed poll keeps the points already held', async () => {
+  const calls = stubAxios([histReply(5000000, 4000, [-95, -94]), new Error('boom')]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.fetchStripHistory();
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(vm.hist.length, 2, 'first load ok');
+    vm.fetchStripHistory();
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(vm.hist.length, 2, 'the failed poll changed nothing');
+    assert.strictEqual(vm.histFetching, false, 'and released the in-flight latch');
+  } finally { unstubRpc(); }
+});
+
+test('strip history: only one fetch is in flight at a time', () => {
+  const calls = stubAxios([histReply(6000000, 4000, [-95]), histReply(6004000, 4000, [-94])]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.fetchStripHistory();
+    vm.fetchStripHistory();            // poll fires while the load is still out
+    assert.strictEqual(calls.length, 1, 'the second call is dropped, not queued');
+  } finally { unstubRpc(); }
+});
+
+test('strip history: startStripPoll arms a repeating poll, stop clears it', () => {
+  const calls = stubAxios([histReply(7000000, 4000, [-95])]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.startStripPoll();
+    assert.strictEqual(calls.length, 1, 'fetches immediately');
+    assert.ok(vm.histTimer, 'and arms the interval');
+    vm.stopStripPoll();
+    assert.strictEqual(vm.histTimer, null, 'teardown clears it');
+  } finally { unstubRpc(); }
 });
 
 // ---- Banner mode-lock + tower-lock badges ----
@@ -1821,16 +2002,62 @@ const LCD_ON = { available: true, enabled: true, running: true,
 const LCD_NA = { available: false, enabled: false, running: false,
   brightness: 90, screen_timeout: 600, default_page: 0, error: "no front panel on this device" };
 
-test('bands tab: Reset to default stages AUTO + all permitted bands, enables Apply', () => {
-  const c = loadChunk();
-  const vm = bandsVm(c, { meta: { mode: 'NR5G', plmn_matched: true } });   // start at 5G-only
-  vm.selMode = 'NR5G';
-  vm.resetDefault();
-  assert.strictEqual(vm.selMode, 'AUTO', 'mode reset to AUTO');
-  assert.deepStrictEqual(vm.sel.sa.slice().sort(), [41, 71], 'all permitted SA selected');
-  assert.deepStrictEqual(vm.sel.nsa.slice().sort(), [41, 71], 'all permitted NSA selected');
-  assert.deepStrictEqual(vm.sel.LTE.slice().sort(), [12, 66], 'all permitted LTE selected');
-  assert.strictEqual(vm.changedAny(), true, 'staged change enables Apply');
+test('bands tab: Reset to default stages AUTO + all permitted bands and sends them', async () => {
+  const calls = stubRpc([{ window: 60, applied: {} }]);
+  try {
+    const c = loadChunk();
+    const vm = bandsVm(c, { meta: { mode: 'NR5G', plmn_matched: true } });   // start at 5G-only
+    vm.selMode = 'NR5G';
+    vm.resetDefault();
+    assert.strictEqual(vm.selMode, 'AUTO', 'mode reset to AUTO');
+    assert.deepStrictEqual(vm.sel.sa.slice().sort(), [41, 71], 'all permitted SA selected');
+    assert.deepStrictEqual(vm.sel.nsa.slice().sort(), [41, 71], 'all permitted NSA selected');
+    assert.deepStrictEqual(vm.sel.LTE.slice().sort(), [12, 66], 'all permitted LTE selected');
+    assert.strictEqual(calls.length, 1, 'the reset is written, not just staged');
+    assert.strictEqual(calls[0].params[2], 'set_bands', 'via set_bands');
+    const p = calls[0].params[3];
+    assert.strictEqual(p.mode, 'AUTO', 'mode AUTO in the payload');
+    assert.deepStrictEqual(p.sa.slice().sort(), [41, 71], 'SA in the payload');
+    assert.deepStrictEqual(p.nsa.slice().sort(), [41, 71], 'NSA in the payload');
+    assert.deepStrictEqual(p.lte.slice().sort(), [12, 66], 'LTE in the payload');
+    await new Promise((r) => setImmediate(r));
+    assert.ok(vm.pending, 'confirm-or-revert countdown armed');
+    vm.clearCountdown();
+    clearTimeout(vm.resetTimer);
+  } finally { unstubRpc(); }
+});
+
+test('bands tab: Reset to default sends even when nothing differs', async () => {
+  const calls = stubRpc([{ window: 60, applied: {} }]);
+  try {
+    const c = loadChunk();
+    // config empty -> seeds to the full policy set, and mode is already AUTO,
+    // so changedAny() is false — the button must still reach the modem.
+    const vm = bandsVm(c, { config: { enable: true, mode: 0, sa: [], nsa: [], LTE: [] } });
+    assert.strictEqual(vm.changedAny(), false, 'precondition: nothing differs');
+    vm.resetDefault();
+    assert.strictEqual(calls.length, 1, 'forced send happened anyway');
+    assert.strictEqual(calls[0].params[3].mode, 'AUTO', 'mode still sent');
+    assert.ok(calls[0].params[3].sa.length, 'bands still sent');
+    await new Promise((r) => setImmediate(r));
+    vm.clearCountdown();
+    clearTimeout(vm.resetTimer);
+  } finally { unstubRpc(); }
+});
+
+test('bands tab: a forced reset skips a RAT whose policy is empty', () => {
+  const calls = stubRpc([{ window: 60, applied: {} }]);
+  try {
+    const c = loadChunk();
+    // AT&T-shaped SIM: no SA policy at all. Sending sa:[] would drop the RAT.
+    const vm = bandsVm(c, { policy: { sa: [], nsa: [41, 71], LTE: [12, 66] } });
+    vm.resetDefault();
+    const p = calls[0].params[3];
+    assert.ok(!('sa' in p), 'empty SA group omitted, never sent as an empty list');
+    assert.ok(p.nsa.length && p.lte.length, 'the non-empty groups still go');
+    vm.clearCountdown();
+    clearTimeout(vm.resetTimer);
+  } finally { unstubRpc(); }
 });
 
 test('bands tab: Reset to default button renders and is a no-op while pending', () => {
@@ -1843,6 +2070,56 @@ test('bands tab: Reset to default button renders and is a no-op while pending', 
   const before = JSON.stringify(vm.sel);
   vm.resetDefault();
   assert.strictEqual(JSON.stringify(vm.sel), before, 'resetDefault is a no-op while pending');
+  assert.match(vm.resetNote, /already pending/, 'and says why it did nothing');
+  clearTimeout(vm.resetTimer);
+});
+
+test('bands tab: Reset to default reports that it is sending', () => {
+  const calls = stubRpc([{ window: 60, applied: {} }]);
+  try {
+    const c = loadChunk();
+    const vm = bandsVm(c, { meta: { mode: 'NR5G', plmn_matched: true } });
+    vm.selMode = 'NR5G';
+    vm.resetDefault();
+    assert.match(vm.resetNote, /Sending the default/, 'note says the write is going out');
+    const notes = walk(c.render.call(vm, h))
+      .filter((n) => n.data.staticClass === 'mm-note').map(textOf);
+    assert.ok(notes.some((t) => /Sending the default/.test(t)), 'note renders in the bands footer');
+    vm.clearCountdown();
+    clearTimeout(vm.resetTimer);
+  } finally { unstubRpc(); }
+});
+
+test('bands tab: Reset to default says so when already at the default', () => {
+  const calls = stubRpc([{ window: 60, applied: {} }]);
+  try {
+    const c = loadChunk();
+    // config empty -> seeds to the full policy set, and mode is already AUTO
+    const vm = bandsVm(c, { config: { enable: true, mode: 0, sa: [], nsa: [], LTE: [] } });
+    vm.resetDefault();
+    assert.strictEqual(vm.changedAny(), false, 'genuinely nothing to change');
+    assert.match(vm.resetNote, /Already at the default/, 'the no-op case is explained');
+    assert.match(vm.resetNote, /re-sending/, 'and says it wrote anyway');
+    const notes = walk(c.render.call(vm, h))
+      .filter((n) => n.data.staticClass === 'mm-note').map(textOf);
+    assert.ok(notes.some((t) => /Already at the default/.test(t)), 'no-op note renders');
+    vm.clearCountdown();
+    clearTimeout(vm.resetTimer);
+  } finally { unstubRpc(); }
+});
+
+test('bands tab: any later band edit clears the reset note', () => {
+  const calls = stubRpc([{ window: 60, applied: {} }]);
+  try {
+    const c = loadChunk();
+    const vm = bandsVm(c, { config: { enable: true, mode: 0, sa: [], nsa: [], LTE: [] } });
+    vm.resetDefault();
+    assert.ok(vm.resetNote, 'note set');
+    vm.toggleBand('sa', 41);
+    assert.strictEqual(vm.resetNote, '', 'note cleared by a subsequent edit');
+    assert.strictEqual(vm.resetTimer, null, 'and its timer is cancelled');
+    vm.clearCountdown();
+  } finally { unstubRpc(); }
 });
 
 test('LCD Display tab appears in the tab bar', () => {

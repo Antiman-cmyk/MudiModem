@@ -673,6 +673,29 @@ MudiModem/
   it statically — ⚠️ **never call `clear_cell_lock` in a test, it unlocks the real modem.** **Bands tab
   "Reset to default"** button stages AUTO + all permitted bands (reuses `setMode`/`selectAll`) → normal
   Apply. Spec: `docs/superpowers/specs/2026-07-24-unlock-mode-restore-reset-default-design.md`.
+- ✅ **"Reset to default" now reports itself (2026-07-25).** It read as a dead button because on this
+  box it is a **genuine no-op**: `get_feature_config`'s band lists already equal `policy_band`
+  exactly, and the mode is already AUTO ⇒ `changedAny()` false ⇒ footer keeps saying "No changes".
+  (⚠️ `get_feature_config` returns **duplicate `network_mode`/`band` keys** — first copy = the
+  module-supported superset, second = the policy-intersected set. Last-wins JSON decoding means we
+  read the policy-intersected one; that's why config==policy.) Two changes: (a) **the button now
+  ALWAYS writes** — `resetDefault()` stages AUTO + all permitted bands then calls
+  **`applyBands(true)`**, a new `force` path that sends every non-empty group + the mode regardless
+  of `changedAny()`, still through the 60s confirm-or-revert. A forced send **skips a group whose
+  policy is empty** (writing `sa:[]` would drop the RAT — AT&T's SIM has no SA policy). (b) a
+  transient `resetNote` ("Sending the default…" / "Already at the default - re-sending… anyway"),
+  rendered as an `mm-note` under the Bands footer, cleared by any later edit/apply/refresh.
+- ✅ **Status-strip RSRP graph now reads the daemon (2026-07-25).** It used to draw only what the
+  websocket pushed since page load — empty on arrival, x-axis = sample index, lost on reload. It now
+  polls **`get_history`** (the `mudimodem-collectd` 4s samples, `{since}` incremental every 10s after
+  a `{window_ms}` first load), plots a **real-time x-axis over a 15-minute window**, and **breaks the
+  line across a >30s hole** instead of bridging an outage. Details that matter: the poll goes through
+  **`$axios` directly, not `$rpcRequest`** (the interceptor pops GL's global "Unknown error" banner on
+  any failed background poll — same reason the tracking chunk does it); the window is sent as a
+  **duration**, and trimming/x-axis use the **box clock** (`res.now` + elapsed), never a
+  browser-computed cutoff; a sample with `rsrp: null` is dropped from the plot but still advances the
+  `since` cursor. The old websocket `trace` is kept as the **fallback** when the collector has no
+  history, and the eyebrow says which source is live ("RSRP · last 15 min" vs "RSRP live").
 - 🔭 Later: `install.sh`/`uninstall.sh` (device-guarded + idempotent, mirroring MudiUI's); register
   the watchdog `boot-check` in a boot hook; `/etc/sysupgrade.conf`; ipk.
 

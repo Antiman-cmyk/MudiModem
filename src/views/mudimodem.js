@@ -30,8 +30,25 @@ module.exports = {
   data() {
     return {
       tab: "tracking",
-      trace: [],
+      trace: [],            // websocket-accumulated RSRP — now only the FALLBACK
       TRACE_MAX: 90,
+      // ---- status-strip trace: sourced from the collector daemon ----
+      // mudimodem-collectd already samples the modem every 4s and keeps 24h of
+      // history; the strip reads that instead of drawing itself from whatever
+      // the websocket happened to push since this page loaded. Consequences:
+      // the graph is populated on arrival, its x-axis is real time (so a gap
+      // looks like a gap), and it survives a page reload. `trace` above stays
+      // as the fallback for when the daemon has nothing yet (fresh install,
+      // collector stopped) — the strip must never regress to an empty box.
+      STRIP_MIN: 15,          // minutes of history the strip shows
+      STRIP_POLL_MS: 10000,   // incremental poll cadence (collector writes at 4s)
+      STRIP_GAP_MS: 30000,    // a hole wider than this breaks the line, not bridges it
+      hist: [],               // [{t, v}] oldest-first, BOX timestamps, rsrp only
+      histLastT: 0,           // newest t held — the incremental `since` cursor
+      histNow: 0,             // box clock as of the last reply
+      histNowAt: 0,           // browser clock at that same instant (skew correction)
+      histFetching: false,    // one strip fetch at a time
+      histTimer: null,        // strip poll interval handle
       styleId: "mudimodem-css",
       bands: null,          // get_bands result, once fetched
       bandsLoading: false,
@@ -42,6 +59,8 @@ module.exports = {
       cdTimer: null,        // countdown interval handle
       applying: false,      // Apply in flight
       applyError: "",
+      resetNote: "",        // transient feedback from "Reset to default"
+      resetTimer: null,     // handle clearing resetNote
       lockData: null,       // get_lock result, once fetched
       lockLoading: false,
       lockError: "",
@@ -299,13 +318,15 @@ module.exports = {
 
   created() { this.injectStyle(); },
   mounted() {
+    this.startStripPoll();   // strip history comes from the collector daemon
     if (this.tab === "tracking") this.loadTracking();
     // Load the band/lock model up front so the banner's mode + tower badges have
     // data whatever tab we land on (the tab watcher only fires on a change).
     if (!this.bands && !this.bandsLoading) this.fetchBands();
   },
   beforeDestroy() {
-    this.clearCountdown(); this.clearSwitchState();
+    this.clearCountdown(); this.clearSwitchState(); this.stopStripPoll();
+    if (this.resetTimer) clearTimeout(this.resetTimer);
     if (this.updateConfirmTimer) clearTimeout(this.updateConfirmTimer);
     if (this.updatePollTimer) clearTimeout(this.updatePollTimer);
     this.pollStopped = true;
@@ -412,6 +433,7 @@ module.exports = {
       }
       this.bandsLoading = true;
       this.bandsError = "";
+      this.clearResetNote();
       window.$rpcRequest("call", ["sid", "mudimodem", "get_bands", {}], { timeout: 15000 })
         .then(function (res) {
           self.bands = res;
@@ -1432,6 +1454,7 @@ module.exports = {
       // stranding selection is refused (the banner tells the user how to fix it).
       if (this.pending) return;
       if (this.modeStrands(m) && m !== this.appliedMode()) return;
+      this.clearResetNote();
       this.selMode = m;
     },
     modeChanged() { return this.bands && this.selMode !== ((this.bands.meta && this.bands.meta.mode) || "AUTO"); },
@@ -1446,31 +1469,59 @@ module.exports = {
     },
     toggleBand(group, b) {
       if (this.pending || !this.sel[group]) return;   // locked during a pending revert
+      this.clearResetNote();
       var i = this.sel[group].indexOf(b);
       if (i === -1) this.sel[group].push(b); else this.sel[group].splice(i, 1);
     },
     selectAll(group) {
       if (this.pending || !this.bands) return;
+      this.clearResetNote();
       this.sel[group] = (this.bands.policy[group] || []).slice();   // all permitted
     },
     selectNone(group) {
       if (this.pending) return;
+      this.clearResetNote();
       this.sel[group] = [];
     },
     invertSel(group) {
       if (this.pending || !this.bands) return;
+      this.clearResetNote();
       var perm = this.bands.policy[group] || [], cur = this.sel[group] || [];
       this.sel[group] = perm.filter(function (b) { return cur.indexOf(b) === -1; });
     },
     resetDefault() {
-      // Stage the modem's sane default: AUTO mode + every permitted band in each
-      // group. Writes nothing — lights up Apply so the user reviews then applies
-      // through the normal confirm-or-revert path. No-op while a revert pends.
-      if (this.pending || !this.bands) return;
+      // Restore the modem's sane default: AUTO mode + every permitted band in
+      // each group — and ALWAYS write it, even when the grid already matches.
+      // The config often already equals the policy set, so a "stage only" button
+      // would sit there doing visibly nothing; pressing it must reach the modem.
+      // The write goes through the normal confirm-or-revert path (60s countdown).
+      if (this.applying) return;
+      if (this.pending) return this.flashReset("A change is already pending - Keep or Revert it first.");
+      if (!this.bands) return this.flashReset("Bands haven't loaded yet - hit refresh.");
+      this.applyError = "";
       this.setMode("AUTO");
       this.selectAll("sa");
       this.selectAll("nsa");
       this.selectAll("LTE");
+      var differs = this.changedAny();
+      this.applyBands(true);            // clears the note, so flash AFTER it
+      this.flashReset(differs
+        ? "Sending the default to the modem: Auto mode + every carrier-permitted band."
+        : "Already at the default - re-sending Auto mode + every carrier-permitted band to the modem anyway.");
+    },
+    // Transient one-line feedback under the Bands footer. Any later edit clears
+    // it, so the note never describes a state the user has since moved off.
+    flashReset(msg) {
+      var self = this;
+      this.clearResetNote();
+      this.resetNote = msg;
+      this.resetTimer = setTimeout(function () {
+        self.resetNote = ""; self.resetTimer = null;
+      }, 8000);
+    },
+    clearResetNote() {
+      if (this.resetTimer) { clearTimeout(this.resetTimer); this.resetTimer = null; }
+      this.resetNote = "";
     },
     changed(group) {
       if (!this.bands || !this.sel[group]) return false;
@@ -1490,17 +1541,28 @@ module.exports = {
              (this.changed("LTE") && this.sel.LTE.length === 0);
     },
 
-    applyBands() {
+    // force=true sends every group + the mode even when nothing differs from the
+    // current config — that's the "Reset to default" contract: press it and the
+    // modem is written, so the result is never ambiguous. Still confirm-or-revert.
+    applyBands(force) {
       var self = this;
-      if (this.applying || !this.changedAny() || this.emptyChange()) return;
+      if (this.applying || this.pending) return;
+      if (!force && (!this.changedAny() || this.emptyChange())) return;
       if (typeof window === "undefined" || !window.$rpcRequest) return;
       var payload = {};
-      if (this.changed("sa")) payload.sa = this.sel.sa.slice();
-      if (this.changed("nsa")) payload.nsa = this.sel.nsa.slice();
-      if (this.changed("LTE")) payload.lte = this.sel.LTE.slice();
-      if (this.modeChanged()) payload.mode = this.selMode;
+      var include = function (group, key) {
+        var sel = self.sel[group] || [];
+        // A forced send still skips an empty group — writing an empty allowlist
+        // would drop that RAT entirely (e.g. a SIM whose SA policy is empty).
+        if (force ? sel.length > 0 : self.changed(group)) payload[key] = sel.slice();
+      };
+      include("sa", "sa");
+      include("nsa", "nsa");
+      include("LTE", "lte");
+      if (force || this.modeChanged()) payload.mode = this.selMode;
       this.applying = true;
       this.applyError = "";
+      this.clearResetNote();
       window.$rpcRequest("call", ["sid", "mudimodem", "set_bands", payload], { timeout: 20000 })
         .then(function (res) {
           if (!res || res.error) { self.applyError = (res && res.error) || "apply failed"; return; }
@@ -1565,7 +1627,116 @@ module.exports = {
       if (has(d.policy[group], b)) return "permitted";
       return "blocked";
     },
+    // ---- strip trace, fed by mudimodem-collectd via get_history ----
+
+    // Post to /rpc via $axios DIRECTLY, not $rpcRequest. $rpcRequest's axios
+    // interceptor pops GL's global "Unknown error" banner on any 500 or
+    // JSON-RPC error BEFORE our .catch can run — unacceptable for a silent
+    // background poll on a flaky cellular link. Same reasoning (and shape) as
+    // the tracking chunk's rpcSilent: a bad poll just retries next tick.
+    stripRpc(params) {
+      if (typeof window === "undefined" || !window.$axios) return Promise.resolve(null);
+      var sid = (window.$getCookie && window.$getCookie("Admin-Token")) || "";
+      return window.$axios.post("/rpc", {
+        jsonrpc: "2.0", id: 1, method: "call",
+        params: [sid, "mudimodem", "get_history", params || {}]
+      }, { timeout: 15000 })
+        .then(function (r) { return (r && r.data && r.data.result) || null; })
+        .catch(function () { return null; });
+    },
+    // First call asks for the whole window; every later one rides on histLastT
+    // and fetches only the new tail (get_history's `since` is exclusive, so the
+    // merge can't duplicate the boundary sample).
+    //
+    // ⚠️ The window is sent as a DURATION (window_ms), never as a browser-computed
+    // absolute cutoff: box and browser clocks disagree on a travel router, and an
+    // absolute cutoff mis-sizes the window by exactly that skew. `since` is exempt
+    // — it's a timestamp the BOX stamped, so it needs no clock agreement.
+    fetchStripHistory() {
+      var self = this;
+      if (this.histFetching || this.pollStopped) return;
+      if (typeof window === "undefined" || !window.$axios) return;
+      var span = this.STRIP_MIN * 60000;
+      var params = this.histLastT > 0 ? { since: this.histLastT } : { window_ms: span };
+      this.histFetching = true;
+      this.stripRpc(params).then(function (res) {
+        self.histFetching = false;
+        if (self.pollStopped || !res) return;         // teardown, or a failed poll: keep what we have
+        var fresh = [];
+        var ns = res.samples || [];
+        for (var i = 0; i < ns.length; i++) {
+          var v = parseFloat(ns[i] && ns[i].rsrp);
+          // Drop samples with no reading (out of service): a hole in the data is
+          // drawn as a hole, not interpolated across.
+          if (!isNaN(v) && ns[i].t) fresh.push({ t: ns[i].t, v: v });
+        }
+        self.histNow = res.now || Date.now();
+        self.histNowAt = Date.now();
+        var merged = (params.since ? self.hist.concat(fresh) : fresh);
+        var cut = self.histNow - span;
+        self.hist = merged.filter(function (p) { return p.t >= cut; });
+        // Cursor advances off the RAW reply, not the filtered points — a tail of
+        // rsrp-less samples must still move it, or every poll refetches them.
+        if (ns.length) {
+          var newest = ns[ns.length - 1].t;
+          if (newest > self.histLastT) self.histLastT = newest;
+        }
+      });
+    },
+    startStripPoll() {
+      var self = this;
+      if (this.histTimer || typeof window === "undefined") return;
+      this.fetchStripHistory();
+      this.histTimer = setInterval(function () { self.fetchStripHistory(); }, this.STRIP_POLL_MS);
+    },
+    stopStripPoll() {
+      if (this.histTimer) { clearInterval(this.histTimer); this.histTimer = null; }
+    },
+    // "Now" on the BOX's clock: the last reply's os.time() advanced by however
+    // long ago it landed. Used for both ends of the x-axis so the window is
+    // sized in box time, matching the timestamps being plotted.
+    stripEnd() {
+      if (!this.histNow) return Date.now();
+      return this.histNow + (Date.now() - this.histNowAt);
+    },
+    // Daemon points inside the visible window, or null when there aren't enough
+    // to draw — which is what makes the strip fall back to the websocket trace.
+    stripPoints() {
+      if (!this.hist.length) return null;
+      var end = this.stripEnd(), start = end - this.STRIP_MIN * 60000;
+      var out = [];
+      for (var i = 0; i < this.hist.length; i++) {
+        if (this.hist[i].t >= start) out.push(this.hist[i]);
+      }
+      return out.length >= 2 ? out : null;
+    },
+    stripFromDaemon() { return !!this.stripPoints(); },
     tracePath() {
+      var pts = this.stripPoints();
+      return pts ? this.tracePathTimed(pts) : this.tracePathIndexed();
+    },
+    // Daemon path: x is real time across [now-window, now], so an outage or a
+    // stopped collector leaves a visible hole instead of a straight line drawn
+    // across it.
+    tracePathTimed(pts) {
+      var FLOOR = -120, CEIL = -80, W = 320, H = 40;
+      var span = this.STRIP_MIN * 60000, end = this.stripEnd(), start = end - span;
+      var d = "", prev = null;
+      for (var i = 0; i < pts.length; i++) {
+        var t = pts[i].t;
+        var x = ((t - start) / span) * W;
+        if (x < 0) x = 0; else if (x > W) x = W;
+        var cl = Math.max(FLOOR, Math.min(CEIL, pts[i].v));
+        var y = H - ((cl - FLOOR) / (CEIL - FLOOR)) * H;
+        d += ((prev === null || t - prev > this.STRIP_GAP_MS) ? "M" : "L") +
+             x.toFixed(1) + "," + y.toFixed(1);
+        prev = t;
+      }
+      return d;
+    },
+    // Fallback path: evenly spaced websocket samples, right-aligned. Unchanged
+    // from before the daemon fed the strip.
+    tracePathIndexed() {
       var pts = this.trace, n = pts.length;
       if (n < 2) return "";
       var FLOOR = -120, CEIL = -80, W = 320, H = 40;
@@ -1944,6 +2115,7 @@ module.exports = {
             }, this.applying ? "Applying..." : "Apply")
           ])
         ]));
+        if (this.resetNote) footer.push(h("div", { staticClass: "mm-note" }, this.resetNote));
       }
       var legend = [h("div", { staticClass: "mm-legend" }, [
         h("span", [h("i", { staticStyle: { background: "var(--success)" } }), "allowed"]),
@@ -2209,7 +2381,11 @@ module.exports = {
       stripKids = [
         h("div", { staticClass: "mm-trace" }, [
           h("div", { staticStyle: { display: "flex", justifyContent: "space-between", alignItems: "center" } }, [
-            h("span", { staticClass: "mm-eyebrow" }, "RSRP live"),
+            h("span", { staticClass: "mm-eyebrow", attrs: {
+              title: this.stripFromDaemon()
+                ? "Sampled every 4s by the MudiModem collector, last " + this.STRIP_MIN + " minutes"
+                : "Live websocket readings since this page opened (collector history unavailable)"
+            } }, this.stripFromDaemon() ? "RSRP · last " + this.STRIP_MIN + " min" : "RSRP live"),
             this.renderLockBadges(h)
           ]),
           h("div", { staticClass: "mm-plot" }, [
