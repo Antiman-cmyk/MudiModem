@@ -1007,7 +1007,7 @@ module.exports = {
         ]));
         kids.push(row("Status", lc.running ? "Running" : "Stopped"));
         kids.push(h("div", { staticClass: "mm-note", style: { fontWeight: "700", color: "#000" } },
-          "Enabling takes over the front panel from GL's stock screen. Long-press the panel (~1.6s) to toggle back."));
+          "Enabling takes over the front panel from GL's stock screen. Long-press the panel (~1.6s) to toggle back and forth. GL screen needs to be loaded from scratch, will take a couple of seconds to appear."));
         if (this.lcdErr) kids.push(h("div", { staticClass: "mm-note" }, this.lcdErr));
       }
       return h("div", {}, [h("div", { staticClass: "mm-card" }, kids)]);
