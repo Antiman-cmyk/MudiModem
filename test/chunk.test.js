@@ -55,11 +55,27 @@ function makeVm(component, statusMap) {
 // queue of results (or rejects when an Error is queued). Returns the record.
 function stubRpc(replies) {
   const calls = [];
+  const take = () => replies.shift();
   global.window = {
     $rpcRequest(method, params, opts) {
       calls.push({ method, params, opts });
-      const r = replies.shift();
+      const r = take();
       return (r instanceof Error) ? Promise.reject(r) : Promise.resolve(r);
+    },
+    // Some calls take the SILENT transport ($axios direct, so GL's interceptor
+    // can't pop a global banner) — notably the update poll, which is guaranteed
+    // to hit nginx mid-restart. Both transports draw from the same reply queue
+    // and record in the same shape, so a test doesn't care which one the code
+    // picked; a queued Error becomes a rejected request either way.
+    $getCookie: () => 'tok',
+    $axios: {
+      post(url, body, opts) {
+        calls.push({ method: body.method, params: body.params, opts });
+        const r = take();
+        return (r instanceof Error)
+          ? Promise.reject(r)
+          : Promise.resolve({ data: { result: r } });
+      }
     }
   };
   return calls;
@@ -1756,6 +1772,43 @@ test('config tab: the update offer stays gone after a successful update', async 
   } finally { unstubRpc(); }
 });
 
+// The bug: the install restarts nginx ~6s into a ~9s update, so a poll landing
+// in that window always fails — and $rpcRequest's interceptor raises GL's global
+// timeout banner before our .catch can suppress it. The update succeeded, the
+// next poll saw ok, and the user still got a timeout message. The poll must go
+// through the SILENT transport, and a dead socket must be a no-op retry.
+test('pollUpdate: polls silently and survives nginx restarting mid-update', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let viaRpcRequest = 0;
+  const calls = stubRpc([
+    { ok: true },                     // self_update
+    new Error('Network Error'),       // poll 1: nginx is down mid-install
+    { result: { ok: true } }          // poll 2: install finished
+  ]);
+  const realRpc = global.window.$rpcRequest;
+  global.window.$rpcRequest = function (...a) { viaRpcRequest++; return realRpc(...a); };
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.tab = 'config';
+    vm.appVer = { installed: '1.0.0', latest: '1.0.2', update_available: true, checked: true };
+    await vm.confirmUpdate();
+    const rpcAfterStart = viaRpcRequest;
+
+    t.mock.timers.tick(3000);                                  // poll 1 -> fails
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+    assert.strictEqual(vm.updating, true, 'a failed poll does not end the run');
+    assert.strictEqual(vm.updateMsg, 'Updating to v1.0.2…', 'and shows no error to the user');
+
+    t.mock.timers.tick(3000);                                  // poll 2 -> ok
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+    assert.strictEqual(vm.updateDone, true, 'the retry sees the finished update');
+    assert.match(vm.updateMsg, /Updated to v1\.0\.2/, 'and reports success');
+    assert.strictEqual(viaRpcRequest, rpcAfterStart,
+      'no poll went through $rpcRequest — that is what pops GL global banner');
+  } finally { unstubRpc(); }
+});
+
 test('config tab: a successful update re-reads the installed version', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const calls = stubRpc([
@@ -1797,8 +1850,9 @@ test('config tab: the version re-read retries while the box still reports the ol
     t.mock.timers.tick(3000);
     for (let i = 0; i < 6; i++) await Promise.resolve();
     assert.strictEqual(vm.appVer.installed, '1.0.0', 'first read was still stale');
+    for (let i = 0; i < 6; i++) await Promise.resolve();   // let the retry timer be armed
     t.mock.timers.tick(2500);
-    for (let i = 0; i < 6; i++) await Promise.resolve();
+    for (let i = 0; i < 10; i++) await Promise.resolve();
     assert.strictEqual(vm.appVer.installed, '1.0.2', 'the retry picked up the new version');
     assert.strictEqual(calls.length, 4, 'and it stops retrying once it matches');
   } finally { unstubRpc(); }

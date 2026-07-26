@@ -707,6 +707,18 @@ MudiModem/
   reports the old number — the install restarts nginx, so the first read can race the file swap) so
   the card shows what is **actually installed**; the note then separates box-updated from
   page-still-old with a clickable **"reload now"**.
+- ⚠️ **The self-update's "UI timeout" was GL's banner, not our timeout (root-caused 2026-07-25).**
+  Measured on the box: the whole update takes **~9 s** (`t+3 lock, t+6 lock, t+9 result ok`) and
+  `install.sh` **restarts nginx ~6 s in** — so a 3s poll ALWAYS lands on a dead socket. That poll went
+  through `$rpcRequest`, whose interceptor raises GL's global timeout banner **before our `.catch`
+  runs**; the next poll then saw `ok`. Update fine, banner spurious. Our own "taking longer than
+  expected" needs 40 failed polls (~2 min) and was never in play. Fix: `stripRpc` generalized to
+  **`rpcSilent(method, params, timeout)`** (direct `$axios`, resolves `null` on failure, no
+  interceptor); **`update_status` and `app_version` now use it** — `app_version` because its retry
+  reads *while nginx is restarting* and it is fail-silent by contract. **`self_update` deliberately
+  stays on `$rpcRequest`** (user-initiated, completes before the restart, so a banner is real).
+  📌 **Rule: any background/retrying call belongs on `rpcSilent`; only user-initiated one-shots
+  belong on `$rpcRequest`.** (Not download speed — 8 files fetched in 2 s over cellular.)
 - 🔭 Later: `install.sh`/`uninstall.sh` (device-guarded + idempotent, mirroring MudiUI's); register
   the watchdog `boot-check` in a boot hook; `/etc/sysupgrade.conf`; ipk.
 

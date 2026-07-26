@@ -691,12 +691,16 @@ module.exports = {
         })
         .catch(function () { /* fail-silent: next tab-open retries via the !deviceInfo watcher */ });
     },
+    // Fail-silent by contract: a failed version check shows the installed version
+    // alone, never an error. That contract needs the SILENT transport — through
+    // $rpcRequest the interceptor pops GL's global banner before our .catch runs,
+    // which is exactly the noise this method promises not to make. It matters
+    // most in refreshVersionAfterUpdate, which reads while nginx may still be
+    // restarting. A failed read keeps whatever we already had.
     checkAppVersion() {
       var self = this;
-      if (typeof window === "undefined" || !window.$rpcRequest) return Promise.resolve();
-      return window.$rpcRequest("call", ["sid", "mudimodem", "app_version", {}], { timeout: 12000 })
-        .then(function (r) { self.appVer = r || null; })
-        .catch(function () { /* fail-silent: keep whatever we had, show installed only */ });
+      return this.rpcSilent("app_version", {}, 12000)
+        .then(function (r) { if (r) self.appVer = r; });
     },
     // After a successful self-update the box's /etc/mudimodem/version.json holds
     // the NEW version, but this card is still showing the one we just replaced.
@@ -849,7 +853,13 @@ module.exports = {
       this.updatePollTimer = setTimeout(function () {
         if (self.pollStopped) return;   // torn down while this timer was pending
         self.pollAttempts++;
-        window.$rpcRequest("call", ["sid", "mudimodem", "update_status", {}], { timeout: 8000 })
+        // ⚠️ SILENT transport, not $rpcRequest. The install restarts nginx about
+        // 6s into a ~9s update, so a poll landing in that window is guaranteed to
+        // fail — and $rpcRequest's interceptor raises GL's global timeout banner
+        // before our .catch can suppress it. That banner was the whole bug: the
+        // update succeeded, the retry a few seconds later saw ok, and the user
+        // still got a scary timeout. Failure now returns null and just retries.
+        self.rpcSilent("update_status", {}, 8000)
           .then(function (s) {
             if (self.pollStopped) return;   // torn down while the request was in flight
             if (s && s.result) {
@@ -1682,20 +1692,23 @@ module.exports = {
     // ---- strip trace, fed by mudimodem-collectd via get_history ----
 
     // Post to /rpc via $axios DIRECTLY, not $rpcRequest. $rpcRequest's axios
-    // interceptor pops GL's global "Unknown error" banner on any 500 or
-    // JSON-RPC error BEFORE our .catch can run — unacceptable for a silent
-    // background poll on a flaky cellular link. Same reasoning (and shape) as
-    // the tracking chunk's rpcSilent: a bad poll just retries next tick.
-    stripRpc(params) {
+    // interceptor pops GL's global error/timeout banner on any failure BEFORE
+    // our .catch can run — unacceptable for a background poll, which on this box
+    // is GUARANTEED to hit a dead socket at some point (the self-update restarts
+    // nginx; a cellular link drops requests on its own). Same reasoning and shape
+    // as the tracking chunk's rpcSilent. Resolves null on any failure: the caller
+    // treats that as "no answer yet" and tries again.
+    rpcSilent(method, params, timeoutMs) {
       if (typeof window === "undefined" || !window.$axios) return Promise.resolve(null);
       var sid = (window.$getCookie && window.$getCookie("Admin-Token")) || "";
       return window.$axios.post("/rpc", {
         jsonrpc: "2.0", id: 1, method: "call",
-        params: [sid, "mudimodem", "get_history", params || {}]
-      }, { timeout: 15000 })
+        params: [sid, "mudimodem", method, params || {}]
+      }, { timeout: timeoutMs || 15000 })
         .then(function (r) { return (r && r.data && r.data.result) || null; })
         .catch(function () { return null; });
     },
+    stripRpc(params) { return this.rpcSilent("get_history", params, 15000); },
     // First call asks for the whole window; every later one rides on histLastT
     // and fetches only the new tail (get_history's `since` is exclusive, so the
     // merge can't duplicate the boundary sample).
