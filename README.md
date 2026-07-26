@@ -2,6 +2,10 @@
 
 I have the Mudi 7 which is an amazing device.  I felt that it has good modem controls, but they were spread around.  I also felt it could have better signal and event tracking.   I spent a couple of weeks vibe coding a new modem control panel that brings all things modem into one section of the built in UI.
 
+MudiModem uses GL's built in modem commands to accomplish what it does so should not conflict with settings made through the native UI.
+
+I also included another screen I created which will put a live graph display on the modem's LCD screen.
+
 
 ---
 
@@ -42,9 +46,7 @@ Pin the modem to a specific cell so it won't hand over. The tab shows your curre
 **scan for nearby lockable cells**, listed with your **serving carrier's cells first** and **5G above
 LTE**, each with a one-click Lock. Same confirm-or-revert safety as Bands.
 
-⚠️ A kept cell lock lives in the modem's own memory and survives reboot, reflash, *and* factory reset —
-the panel documents the ssh recovery path right on the page. (A scan takes the modem offline for up to
-~10 minutes.)
+⚠️ A kept cell lock lives in the modem's own memory and survives reboot, reflash, *and* factory reset 
 
 ### ⌨️ AT console
 
