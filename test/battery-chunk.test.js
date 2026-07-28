@@ -961,3 +961,172 @@ test('renderLimitCard status: Active when the limiter is actually holding charge
   assert.match(txt, /Active ·/, 'Active status');
   assert.match(txt, /71 % IC Reported Charge/, 'active_gauge shown in the status line');
 });
+
+// ---------------------------------------------------------------------------
+// Runtime / charge-time estimate (spec:
+// docs/superpowers/specs/2026-07-28-battery-runtime-estimate-design.md).
+//
+// SoC-slope based, because the box exposes NO charge_full/energy_* node - the
+// pack capacity in mAh does not exist anywhere on the device, so the obvious
+// "remaining mAh / current mA" is impossible without inventing a figure.
+// ---------------------------------------------------------------------------
+
+// Build a decorated window the way winSamples() would: `capGui` present, `m`
+// unused by the estimator, ascending by t. GUI = (gauge*13867 - 189300)/10000.
+function estSeries(opts) {
+  const o = Object.assign({ n: 60, stepMs: 20000, gaugeFrom: 71, gaugeTo: 65,
+    online: 0, cur: -500, lim: 0, lim_gauge: null, status: 'Discharging' }, opts || {});
+  const now = o.now || Date.now();
+  const out = [];
+  for (let i = 0; i < o.n; i++) {
+    const f = o.n === 1 ? 0 : i / (o.n - 1);
+    // integer gauge, as the hardware reports it (1 % quantisation is the point)
+    const gauge = Math.round(o.gaugeFrom + (o.gaugeTo - o.gaugeFrom) * f);
+    out.push({
+      t: now - (o.n - 1 - i) * o.stepMs,
+      cap: gauge, capGui: Math.round((gauge * 13867 - 189300) / 1000) / 10,
+      volt: 4000, cur: o.cur, temp: 31, online: o.online,
+      status: o.status, lim: o.lim, lim_gauge: o.lim_gauge
+    });
+  }
+  return out;
+}
+
+test('estimate: a falling series yields a runtime to GUI 0', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { bl: { gui_m: 13867, gui_b: 189300 } });
+  // 71 -> 65 gauge over 60 min == GUI 79.5 -> 71.2, i.e. 8.3 % per hour.
+  const ss = estSeries({ n: 180, stepMs: 20000, gaugeFrom: 71, gaugeTo: 65 });
+  const r = vm.runEstimate(ss, null);
+  assert.equal(r.kind, 'down');
+  assert.equal(r.targetPct, 0, 'extrapolates to GUI 0');
+  assert.ok(r.minutes > 0, 'produces a runtime');
+  // 71.2 % remaining at 8.3 %/h is about 8.5 h; allow a wide band, the point is
+  // that it is hours and not minutes or days.
+  assert.ok(r.minutes > 300 && r.minutes < 900, 'plausible runtime, got ' + r.minutes);
+});
+
+test('estimate: extrapolates to GUI 0, NOT to IC 0', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  // Ends at gauge 20 == GUI 8.4. Extrapolating the IC value to 0 would claim
+  // ~2.4x more runtime than the user's own "empty" allows.
+  const ss = estSeries({ n: 180, stepMs: 20000, gaugeFrom: 26, gaugeTo: 20 });
+  const r = vm.runEstimate(ss, null);
+  assert.equal(r.kind, 'down');
+  // GUI left is 8.4 at 8.3 %/h -> ~1 h. An IC-0 extrapolation would give ~2.4 h.
+  assert.ok(r.minutes < 100, 'must not promise runtime below GUI 0, got ' + r.minutes);
+});
+
+test('estimate: charging targets the limit, not 100', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  const ss = estSeries({ n: 180, gaugeFrom: 50, gaugeTo: 56, online: 1, cur: 900,
+    lim: 1, lim_gauge: 71, status: 'Charging' });
+  const r = vm.runEstimate(ss, { enabled: true, limit_gui: 80 });
+  assert.equal(r.kind, 'up');
+  assert.equal(r.targetPct, 80, 'target is the configured limit');
+  assert.ok(r.minutes > 0);
+});
+
+test('estimate: charging with no limit targets 100', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  const ss = estSeries({ n: 180, gaugeFrom: 50, gaugeTo: 56, online: 1, cur: 900,
+    lim: 0, lim_gauge: null, status: 'Charging' });
+  const r = vm.runEstimate(ss, { enabled: false, limit_gui: 80 });
+  assert.equal(r.kind, 'up');
+  assert.equal(r.targetPct, 100);
+});
+
+test('estimate: a limiter hold reports holding with NO countdown', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  // Plugged, 0 mA, limiter running and at its target -> chargeState "blocked".
+  const ss = estSeries({ n: 180, gaugeFrom: 71, gaugeTo: 71, online: 1, cur: 0,
+    lim: 1, lim_gauge: 71, status: 'Full' });
+  const r = vm.runEstimate(ss, { enabled: true, limit_gui: 80 });
+  assert.equal(r.kind, 'hold');
+  assert.equal(r.minutes, null,
+    'the limiter resumes charging at a lower threshold, so a countdown here is a prediction the device will falsify');
+});
+
+test('estimate: a genuinely full battery reports full', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  const ss = estSeries({ n: 180, gaugeFrom: 86, gaugeTo: 86, online: 1, cur: 0,
+    lim: 0, lim_gauge: null, status: 'Full' });
+  const r = vm.runEstimate(ss, { enabled: false });
+  assert.equal(r.kind, 'full');
+  assert.equal(r.minutes, null);
+});
+
+test('estimate: too little data yields no number rather than a guess', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  // 4 minutes of history - under the 8 min span floor.
+  const short = vm.runEstimate(estSeries({ n: 12, stepMs: 20000, gaugeFrom: 71, gaugeTo: 70 }), null);
+  assert.equal(short.minutes, null, 'span below the floor -> no number');
+  // Long enough, but only 1 % of movement - inside the quantisation error band.
+  const flat = vm.runEstimate(estSeries({ n: 180, stepMs: 20000, gaugeFrom: 71, gaugeTo: 70 }), null);
+  assert.equal(flat.minutes, null, 'delta below the floor -> no number');
+  // And a dead-flat series must not divide by a zero slope.
+  const still = vm.runEstimate(estSeries({ n: 180, gaugeFrom: 71, gaugeTo: 71 }), null);
+  assert.equal(still.minutes, null);
+  assert.ok(Number.isFinite(still.spanMin), 'still reports its span');
+});
+
+test('estimate: a direction change mid-window resets the basis', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  const now = Date.now();
+  // 60 min of charging, then 20 min of discharging. The runtime must be based
+  // on the discharge only - averaging the two regimes is meaningless.
+  const up = estSeries({ n: 180, gaugeFrom: 50, gaugeTo: 62, online: 1, cur: 900,
+    lim: 0, status: 'Charging', now: now - 20 * 60000 });
+  const down = estSeries({ n: 60, gaugeFrom: 62, gaugeTo: 58, online: 0, cur: -600,
+    status: 'Discharging', now: now });
+  const r = vm.runEstimate(up.concat(down), null);
+  assert.equal(r.kind, 'down', 'direction comes from the newest samples');
+  assert.ok(r.spanMin <= 21, 'basis is the discharge segment only, got ' + r.spanMin + ' min');
+});
+
+test('estimate: fmtEstimate never shows false precision', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  assert.match(vm.fmtEstimate(35), /^~35 m$/, 'minutes under an hour');
+  assert.match(vm.fmtEstimate(260), /^~4 h 20 m$/, 'hours and minutes');
+  assert.match(vm.fmtEstimate(3000), /^> 2 d$/, 'beyond 48 h is not given a precise figure');
+  assert.match(vm.fmtEstimate(37), /^~35 m$/, 'rounds to 5 min under 2 h');
+});
+
+test('estimate: renderEstimate shows the figure and its provenance', () => {
+  const c = loadChunk();
+  const ss = estSeries({ n: 180, stepMs: 20000, gaugeFrom: 71, gaugeTo: 65 });
+  const vm = makeVm(c, { samples: ss, bl: null });
+  const txt = textOf(vm.renderEstimate(h, ss));
+  assert.match(txt, /remaining/, 'names what the figure means');
+  assert.match(txt, /from the last \d+ min/, 'states its own provenance');
+});
+
+test('estimate: renderEstimate says Estimating rather than inventing a number', () => {
+  const c = loadChunk();
+  const ss = estSeries({ n: 12, stepMs: 20000, gaugeFrom: 71, gaugeTo: 70 });
+  const vm = makeVm(c, { samples: ss, bl: null });
+  const txt = textOf(vm.renderEstimate(h, ss));
+  assert.match(txt, /Estimating/, 'no fabricated figure below the evidence threshold');
+  assert.doesNotMatch(txt, /remaining/);
+});
+
+test('estimate: runEstimate takes the window as an argument (no requadratic)', () => {
+  // The chart was quadratic because a per-point helper recomputed winSamples().
+  // The estimator must never repeat that: it receives the window.
+  const c = loadChunk();
+  const ss = estSeries({ n: 180 });
+  let calls = 0;
+  const vm = makeVm(c, { samples: ss });
+  const real = vm.winSamples;
+  vm.winSamples = function () { calls++; return real.call(vm); };
+  vm.runEstimate(ss, null);
+  assert.equal(calls, 0, 'runEstimate must not recompute the sample window');
+});

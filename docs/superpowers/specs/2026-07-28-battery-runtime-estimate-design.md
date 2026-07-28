@@ -131,8 +131,11 @@ resumes charging at a lower threshold — so a "4 h remaining" there is a predic
 device is designed to falsify.
 
 **Formatting.** `~` prefix always. `4 h 20 m` above an hour, `35 m` below. Anything beyond
-48 h renders `> 2 d` rather than a large precise-looking number. Minutes round to 5 below
-2 h and to 15 above, since false precision on an extrapolation is its own kind of lie.
+48 h renders `> 2 d` rather than a large precise-looking number. Minutes round to the
+nearest **5** throughout, since false precision on an extrapolation is its own kind of lie.
+(An earlier draft of this spec proposed a coarser 15-minute tier above 2 h; dropped — one
+rule is easier to reason about, and 5 minutes is already coarse enough that nobody reads
+the figure as exact.)
 
 **Provenance line**, quiet, beneath the figure: `from the last 38 min`. It lets a wild
 number be judged instead of merely believed.

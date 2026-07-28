@@ -52,6 +52,10 @@ module.exports = (function () {
   // the box will accept. Anything below it is a value the backend would take
   // and then refuse — so the control simply cannot express it.
   var LIMIT_MIN = 50, LIMIT_MAX = 100;
+  // Runtime estimate: fit over at most an hour of the current segment, and
+  // refuse to produce a figure below these floors (see runEstimate).
+  var EST_WINDOW_MS = 60 * 60000, EST_MIN_SPAN_MIN = 8, EST_MIN_DELTA_PCT = 2;
+  var EST_MAX_MIN = 48 * 60;
   var STATE_COLOR = {
     charging:    "var(--success)",
     // A genuinely full battery on mains is a healthy, unremarkable state —
@@ -463,6 +467,94 @@ module.exports = (function () {
         return s.cap >= s.lim_gauge;
       },
       // What the charger is doing, per sample.
+      // ---- runtime / charge-time estimate -------------------------------
+      // Spec: docs/superpowers/specs/2026-07-28-battery-runtime-estimate-design.md
+      //
+      // ⚠️ SoC-slope based, and it has to be: the box exposes NO charge_full /
+      // charge_now / energy_* node, so the pack's capacity in mAh does not
+      // exist anywhere on the device. "remaining mAh / current mA" is not
+      // available without inventing a nameplate figure.
+      // Spot current is useless anyway — measured live it swings −449…−985 mA.
+
+      // Which way the battery is going, collapsed from chargeState().
+      estDirection: function (s) {
+        var st = this.chargeState(s);
+        if (st === "discharging" || st === "draining") return "down";
+        if (st === "charging") return "up";
+        if (st === "blocked") return "hold";
+        if (st === "full") return "full";
+        return "none";
+      },
+
+      // Pure. `ss` is the ALREADY-COMPUTED sample window (see the C1 regression
+      // in the 2026-07-27 final review — a helper that recomputes the window
+      // internally is what made the chart quadratic). Returns:
+      //   { kind, minutes, targetPct, spanMin, deltaPct }
+      // `minutes` is null whenever we cannot honestly produce a figure.
+      runEstimate: function (ss, bl) {
+        var none = { kind: "none", minutes: null, targetPct: null, spanMin: 0, deltaPct: 0 };
+        if (!ss || !ss.length) return none;
+        var last = ss[ss.length - 1];
+        var dir = this.estDirection(last);
+        if (dir === "hold" || dir === "full" || dir === "none")
+          return { kind: dir, minutes: null, targetPct: null, spanMin: 0, deltaPct: 0 };
+
+        // The segment: walk back while the direction holds, and no further than
+        // EST_WINDOW_MS. A plug/unplug mid-window must reset the basis rather
+        // than average two different physical regimes together.
+        var seg = [], edge = last.t - EST_WINDOW_MS;
+        for (var i = ss.length - 1; i >= 0; i--) {
+          if (ss[i].t < edge) break;
+          if (this.estDirection(ss[i]) !== dir) break;
+          if (ss[i].capGui == null) break;
+          seg.push(ss[i]);
+        }
+        seg.reverse();
+        var spanMin = seg.length > 1 ? (seg[seg.length - 1].t - seg[0].t) / 60000 : 0;
+        var deltaPct = seg.length > 1 ? (seg[seg.length - 1].capGui - seg[0].capGui) : 0;
+        var out = { kind: dir, minutes: null, targetPct: null,
+          spanMin: spanMin, deltaPct: deltaPct };
+        // Target is in the GUI scale, like everything else the user sees.
+        out.targetPct = (dir === "down") ? 0
+          : ((bl && bl.enabled && typeof bl.limit_gui === "number") ? bl.limit_gui : 100);
+
+        // Evidence floors. Below either one the honest output is "no number":
+        // cap moves in integer 1 % steps, so a 1 % delta carries a ±100 % error
+        // band and a short span has not seen a full step land.
+        if (spanMin < EST_MIN_SPAN_MIN) return out;
+        if (Math.abs(deltaPct) < EST_MIN_DELTA_PCT) return out;
+
+        // Least squares on capGui vs t — every point, not just the endpoints,
+        // which sit at arbitrary positions inside a quantisation step.
+        var n = seg.length, sx = 0, sy = 0, sxx = 0, sxy = 0;
+        for (var j = 0; j < n; j++) {
+          var x = seg[j].t - seg[0].t, y = seg[j].capGui;
+          sx += x; sy += y; sxx += x * x; sxy += x * y;
+        }
+        var denom = n * sxx - sx * sx;
+        if (!denom) return out;
+        var slope = (n * sxy - sx * sy) / denom;           // GUI % per ms
+        if (!slope) return out;
+        if (dir === "down" && slope >= 0) return out;      // sign must match the state
+        if (dir === "up" && slope <= 0) return out;
+
+        var mins = ((out.targetPct - last.capGui) / slope) / 60000;
+        if (!(mins > 0) || !isFinite(mins)) return out;
+        out.minutes = mins;
+        return out;
+      },
+
+      // Approximations get approximate formatting — false precision on an
+      // extrapolation is its own kind of lie.
+      fmtEstimate: function (mins) {
+        if (mins == null || !isFinite(mins)) return "—";
+        if (mins > EST_MAX_MIN) return "> 2 d";
+        var m = Math.round(mins / 5) * 5;
+        if (m < 60) return "~" + m + " m";
+        var hh = Math.floor(m / 60), mm = m % 60;
+        return mm ? "~" + hh + " h " + mm + " m" : "~" + hh + " h";
+      },
+
       chargeState: function (s) {
         if (!s.online) return "discharging";
         if (s.cur == null) return "unknown";           // no reading != a reading
@@ -563,7 +655,12 @@ module.exports = (function () {
           ".mmb-v input[type=range]{width:180px;vertical-align:middle;accent-color:var(--primary)}",
           ".mmb-err{font-size:12px;color:var(--error);margin-top:6px}",
           // Attribution: deliberately the quietest text on the card.
-          ".mmb-credit{font-size:11px;color:var(--text-hint);margin-top:10px}"
+          ".mmb-credit{font-size:11px;color:var(--text-hint);margin-top:10px}",
+          // Headline estimate: the largest thing on the card, with its own
+          // provenance kept deliberately quiet beside it.
+          ".mmb-est{display:flex;align-items:baseline;gap:10px;margin-bottom:10px;flex-wrap:wrap}",
+          ".mmb-est b{font-size:22px;font-weight:600;color:var(--text-primary);line-height:1.2}",
+          ".mmb-prov{font-size:11px;color:var(--text-hint)}"
         ].join("");
         var el = document.createElement("style");
         el.id = this.styleId; el.textContent = css;
@@ -573,6 +670,36 @@ module.exports = (function () {
       // ---- render helpers ----
       // `ss` is the window computed once by render(); the fallback keeps this
       // callable on its own (tests).
+      // The headline figure, above the tiles. Formatting only — every decision
+      // about whether a number is defensible lives in runEstimate.
+      renderEstimate: function (h, ss) {
+        ss = ss || this.winSamples();
+        var r = this.runEstimate(ss, this.bl);
+        var bl = this.bl || {};
+        var head;
+        if (r.minutes != null && r.kind === "down") {
+          head = this.fmtEstimate(r.minutes) + " remaining";
+        } else if (r.minutes != null && r.kind === "up") {
+          head = this.fmtEstimate(r.minutes) + " to " + r.targetPct + " %";
+        } else if (r.kind === "hold") {
+          // No countdown here on purpose: the battery IS draining, but the
+          // limiter resumes charging at a lower threshold, so a time-to-empty
+          // would be a prediction the device is designed to falsify.
+          head = "Holding at "
+            + (typeof bl.limit_gui === "number" ? bl.limit_gui + " %" : "the limit");
+        } else if (r.kind === "full") {
+          head = "Full";
+        } else {
+          head = "Estimating…";
+        }
+        var kids = [h("b", head)];
+        if (r.spanMin >= 1) {
+          kids.push(h("span", { staticClass: "mmb-prov" },
+            "from the last " + Math.round(r.spanMin) + " min"));
+        }
+        return h("div", { staticClass: "mmb-est" }, kids);
+      },
+
       renderStatusRow: function (h, ss) {
         ss = ss || this.winSamples();
         var s = ss.length ? ss[ss.length - 1] : null;
@@ -599,6 +726,7 @@ module.exports = (function () {
         push("Limit", bl.available === false ? "n/a"
           : (bl.enabled ? bl.limit_gui + " % GL UI" : "Off"));
         return h("div", { staticClass: "mmb-card" }, [
+          this.renderEstimate(h, ss),
           h("div", { staticClass: "mmb-row" }, stats)
         ]);
       },
