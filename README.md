@@ -7,8 +7,10 @@ The Mudi 7 is a great cell modem/router but I found one thing a bit lacking, whi
 
 ## Features
 
-MudiModem has five tabs. Every screen anchors to a persistent **live signal strip** across the top
-(RSRP, updating in real time) so you can always see what a change did to the connection.
+MudiModem is a tabbed page. Every screen anchors to a persistent **live signal strip** across the top
+(RSRP, updating in real time) so you can always see what a change did to the connection. The tabs
+documented below are Tracking, Bands, Cell lock, AT console, SIM, Speedtest, Battery and LCD Display;
+there is also a Config tab (version / self-update).
 
 ### 📈 Tracking
 
@@ -64,6 +66,78 @@ Both SIM slots, side by side. This box is DSDS — both SIMs register, but only 
 tab makes the split the stock UI hides plainly visible: the **selected** slot and the **data-carrying**
 slot can differ. Each card shows identity (hidden by default), APN with quick-pick suggestions, auth, IP
 type, and roaming state, with an editable dial profile, a one-click slot switch, and a failover summary.
+
+### 🚀 Speedtest
+
+![Speedtest tab](docs/screenshots/06-speedtest.jpg)
+
+The Mudi has no built-in speed test. This one runs download, upload and latency against Cloudflare's
+public endpoints over the box's own uplink — no server to run, nothing to install. Hit **Run speed
+test** and the phase text walks you through it (*Testing download… → upload… → latency…*); results
+land in a **Latest result** panel with the three headline numbers, then in a history graph below —
+download and upload sharing one Mbps axis, latency in a thin lane underneath. Hover any point for the
+full detail.
+
+The thing that makes it more than a speed test: **every stored result carries a snapshot of what the
+radio was doing at that moment** — carrier, SIM slot, band, cell ID, RSRP, SINR and RSRQ. So a dip in
+throughput isn't just a slow number, it's a slow number you can attribute to a band change, a
+handover, or a weak cell.
+
+Pick which uplink to test — **Cellular** or **Wired WAN** — and the dropdown marks one *(not
+connected)* rather than letting you start a test doomed to fail. The history graph has its own
+interface filter, because wired and cellular differ by enough that plotting them together would flatten
+the cellular trend into a line along the bottom.
+
+Optional **automatic background tests** on a 30 m – 24 h interval build the history while you're not
+looking; **off by default**, because each test spends about 22 MiB of your data plan. Results are
+capped at the last 500 and stored in `/etc/mudimodem`, so unlike the RF history they **survive a
+reboot**.
+
+### 🔋 Battery
+
+![Battery tab](docs/screenshots/07-battery.jpg)
+
+The Mudi runs on a battery, and the stock UI shows you a single percentage. This tab records the
+battery every 20 seconds and plots the last **24 hours** as **four stacked lanes on one time axis** —
+charge %, current (mA), voltage (V) and temperature (°C). They are deliberately *not* normalized onto
+a shared scale: each lane keeps its real units, because the number that matters most is when current
+hits exactly **zero**, and normalizing would turn zero into "low". Pick a window of 15 m / 1 h / 6 h /
+24 h, and hover anywhere to read every lane at that instant. Shading behind the chart marks what the
+battery was actually doing — *Charging*, *On battery*, *Full*, *Charge blocked (limit)*, *Draining on
+power* — and ticks mark each plug and unplug.
+
+Above the chart, a headline estimate — **"3 h 20 m remaining"** or **"1 h 5 m to 80 %"** — fitted from
+the recent trend, with the span it was fitted over shown beside it so you can judge it. It refuses to
+print a number it can't defend, and while the charge limiter is holding the pack it says **"Holding at
+80 %"** rather than inventing a time-to-empty the device is designed to falsify.
+
+The tab also carries the **charge limit** control: cap charging at a target percentage to spare the
+cell from sitting at 100 % on permanent mains power. Set the target with a slider and the card reports
+whether the limit is *Off*, *Armed* (will apply when the charger connects), or *Active*.
+
+⚠️ Two charge scales exist on this box and they disagree by about 9 points, so every figure is labelled
+with which one it is: **GL UI Reported Charge** (what GL's admin and the front panel show) and **IC
+Reported Charge** (the raw fuel-gauge reading, which is what the limiter actually enforces against).
+
+The charge-limit stack is based on **[ChiliApple](https://github.com/ChiliApple)'s battery control
+scripts**; this tab exists because of their issue #1.
+
+### 🖥️ LCD Display
+
+![LCD Display tab](docs/screenshots/08-lcd.jpg)
+
+MudiModem can also take over the Mudi's **front LCD** with its own cellular status screen — the
+[MudiUI](https://github.com/kevinherzig/MudiUI) renderer, folded into this project. It is **off by
+default** and changes nothing until you tick the box.
+
+From this tab: enable or disable the panel, set **brightness**, set the **screen timeout** (30 s
+through 60 m, or never), and choose the **default page**. Status shows whether the renderer is
+currently running.
+
+Enabling it takes the panel over from GL's stock screen — **long-press the panel (~1.6 s) to toggle
+back and forth** at any time (GL's screen is reloaded from scratch, so give it a couple of seconds to
+reappear). The renderer reads its cellular data from the same collector that feeds the Tracking and
+Battery charts rather than polling the modem itself, so the front panel costs the modem nothing extra.
 
 ---
 
@@ -121,6 +195,7 @@ own project at [`kevinherzig/mudi7-at-library`](https://github.com/kevinherzig/m
 ## Status
 
 Working today: live tracking, band read/write with auto-revert, cell scan + lock, the AT console and
-library, and the SIM/APN tab. Still in progress: making band writes durable across a modem-manager
+library, the SIM/APN tab, the speed test with scheduling, the battery history chart + charge limit, and
+the front-LCD panel. Still in progress: making band writes durable across a modem-manager
 restart, finishing the cell-lock write path, and a one-shot install/uninstall script. See `CLAUDE.md` §12
 for the live status.
