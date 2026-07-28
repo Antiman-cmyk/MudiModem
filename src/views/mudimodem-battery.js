@@ -56,6 +56,9 @@ module.exports = (function () {
   // refuse to produce a figure below these floors (see runEstimate).
   var EST_WINDOW_MS = 60 * 60000, EST_MIN_SPAN_MIN = 8, EST_MIN_DELTA_PCT = 2;
   var EST_MAX_MIN = 48 * 60;
+  // Averaging window for the smoothed current tile. 60 s == ~3 samples at the
+  // collector's 20 s cadence.
+  var AVG_WINDOW_MS = 60000;
   var STATE_COLOR = {
     charging:    "var(--success)",
     // A genuinely full battery on mains is a healthy, unremarkable state —
@@ -467,6 +470,31 @@ module.exports = (function () {
         return s.cap >= s.lim_gauge;
       },
       // What the charger is doing, per sample.
+      // Mean current over the trailing `windowMs`. `ss` is the already-computed
+      // window (same no-requadratic discipline as runEstimate).
+      //
+      // Why this exists: the instantaneous reading is close to unreadable. Over
+      // 40 min of real history it spanned 758 mA (stdev 139); at 20 s sampling a
+      // 60 s mean is only ~3 samples, but it brings stdev to ~100.
+      //
+      // ⚠️ The window is anchored on the NEWEST SAMPLE'S timestamp, not
+      // Date.now(). If the collector stalls, this then reports the mean of the
+      // last 60 s of data that actually exists, instead of averaging an empty
+      // window because wall-clock time moved on without it.
+      avgCurrent: function (ss, windowMs) {
+        if (!ss || !ss.length) return null;
+        var edge = ss[ss.length - 1].t - windowMs;
+        var sum = 0, n = 0;
+        for (var i = ss.length - 1; i >= 0; i--) {
+          if (ss[i].t < edge) break;
+          // A missing reading is skipped, never counted as a zero — zero is a
+          // meaningful current on this box (it means charging is blocked).
+          if (ss[i].cur == null) continue;
+          sum += ss[i].cur; n++;
+        }
+        return n ? Math.round(sum / n) : null;
+      },
+
       // ---- runtime / charge-time estimate -------------------------------
       // Spec: docs/superpowers/specs/2026-07-28-battery-runtime-estimate-design.md
       //
@@ -720,6 +748,7 @@ module.exports = (function () {
         push("GL UI Reported Charge", s ? fmt(s.capGui, 1, " %") : "—");
         push("IC Reported Charge", s ? fmt(s.cap, 0, " %") : "—");
         push("Current", s ? fmt(s.cur, 0, " mA") : "—");
+        push("Current 60 s avg", fmt(this.avgCurrent(ss, AVG_WINDOW_MS), 0, " mA"));
         push("Voltage", s ? fmt(s.voltV, 2, " V") : "—");
         push("Temp", s ? fmt(s.temp, 1, " °C") : "—");
         push("State", s ? STATE_LABEL[this.chargeState(s)] : "—");

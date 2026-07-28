@@ -1130,3 +1130,82 @@ test('estimate: runEstimate takes the window as an argument (no requadratic)', (
   vm.runEstimate(ss, null);
   assert.equal(calls, 0, 'runEstimate must not recompute the sample window');
 });
+
+// ---------------------------------------------------------------------------
+// 60 s average current. The instantaneous reading is nearly unreadable — over
+// 40 min of real history it spanned 758 mA (stdev 139). A 60 s mean is only
+// ~3 samples at the collector's 20 s cadence, but it cuts stdev to ~100.
+// ---------------------------------------------------------------------------
+
+test('avgCurrent averages only the trailing window', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  const now = Date.now();
+  const ss = [
+    { t: now - 200000, cur: -100 },   // 200 s old: outside a 60 s window
+    { t: now - 120000, cur: -100 },   // 120 s old: outside
+    { t: now - 40000,  cur: -600 },   // inside
+    { t: now - 20000,  cur: -400 },   // inside
+    { t: now,          cur: -500 }    // inside
+  ];
+  assert.equal(vm.avgCurrent(ss, 60000), -500, 'mean of the three in-window samples');
+});
+
+test('avgCurrent anchors on the newest SAMPLE, not the browser clock', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  // The collector stalled an hour ago. The tile should average the last 60 s of
+  // data that exists, not average an empty window because wall-clock moved on.
+  const old = Date.now() - 3600000;
+  const ss = [
+    { t: old - 120000, cur: -100 },
+    { t: old - 40000,  cur: -600 },
+    { t: old,          cur: -400 }
+  ];
+  assert.equal(vm.avgCurrent(ss, 60000), -500, 'window is relative to the last sample');
+});
+
+test('avgCurrent ignores null readings and preserves sign', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  const now = Date.now();
+  const ss = [
+    { t: now - 40000, cur: null },
+    { t: now - 20000, cur: -800 },
+    { t: now,         cur: -400 }
+  ];
+  assert.equal(vm.avgCurrent(ss, 60000), -600, 'a null reading is skipped, not counted as 0');
+  const charging = [{ t: now - 20000, cur: 900 }, { t: now, cur: 1100 }];
+  assert.equal(vm.avgCurrent(charging, 60000), 1000, 'positive (charging) sign preserved');
+});
+
+test('avgCurrent returns null when nothing usable is in the window', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  assert.equal(vm.avgCurrent([], 60000), null, 'empty window');
+  const now = Date.now();
+  assert.equal(vm.avgCurrent([{ t: now, cur: null }], 60000), null, 'all readings null');
+});
+
+test('the status row carries a 60 s average tile beside the instantaneous one', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const ss = seed(now, 6, 20000, (i) => ({ cur: i < 3 ? -100 : -900 }));
+  ss.forEach((s) => { s.capGui = 78.1; s.voltV = 4.01; });
+  const vm = makeVm(c, { samples: ss, serverNow: now, serverNowAt: now, bl: {} });
+  const txt = textOf(vm.renderStatusRow(h, ss));
+  assert.match(txt, /Current 60 s avg/, 'the averaged tile is labelled as an average');
+  assert.match(txt, /Current(?!\s*60)/, 'the instantaneous tile is still there');
+});
+
+test('avgCurrent takes the window as an argument (no requadratic)', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const ss = [{ t: now, cur: -500 }];
+  let calls = 0;
+  const vm = makeVm(c, { samples: ss });
+  const real = vm.winSamples;
+  vm.winSamples = function () { calls++; return real.call(vm); };
+  vm.avgCurrent(ss, 60000);
+  assert.equal(calls, 0, 'avgCurrent must not recompute the sample window');
+});
