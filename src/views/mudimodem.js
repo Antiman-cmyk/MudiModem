@@ -86,6 +86,10 @@ module.exports = {
       speedtestComp: null,
       speedtestLoading: false,
       speedtestErr: "",
+      // Battery tab: same lazy-chunk pattern as Tracking/AT console/Speedtest.
+      batteryComp: null,
+      batteryLoading: false,
+      batteryErr: "",
       // ---- SIM tab (Phase 4) — all writes browser-direct to GL's own undotted
       // RPC (modem.*); zero mudimodem-backend involvement. Keys 1/2 are the two
       // physical slots, predeclared so plain assignment stays reactive.
@@ -120,11 +124,6 @@ module.exports = {
       pollStopped: false,     // set true on teardown; makes an in-flight poll continuation a no-op
       pollAttempts: 0,        // bounds the poll loop — give up after POLL_MAX
       POLL_MAX: 40,           // ~2 minutes at the 3s poll interval
-      // Battery charge limit (get_battlimit / set_battlimit)
-      battLimit: null,        // full snapshot from get_battlimit
-      battLimitBusy: false,
-      battLimitErr: "",
-      battLimitDraft: 80,     // local number input while editing
       // LCD Display / MudiUI front panel (get_lcd / set_lcd)
       lcd: null,
       lcdBusy: false,
@@ -307,7 +306,6 @@ module.exports = {
       if (t === "config") {
         if (!this.deviceInfo) this.fetchDeviceInfo();   // retries on every open until it succeeds
         this.checkAppVersion();   // re-check every open, per spec
-        this.fetchBattLimit();    // refresh charge-limit snapshot every open
       }
       if (t === "lcd") this.fetchLcd();
     },
@@ -426,6 +424,26 @@ module.exports = {
         .catch(function (e) {
           self.speedtestLoading = false;
           self.speedtestErr = (e && (e.message || e.type)) || "could not load the speed test";
+        });
+    },
+
+    // Open the in-page Battery tab, lazy-loading its chunk on first use.
+    openBattery() { this.tab = "battery"; this.loadBattery(); },
+    loadBattery() {
+      var self = this;
+      if (this.batteryComp || this.batteryLoading) return;
+      if (typeof window === "undefined" || !window.$axios) return;
+      this.batteryLoading = true; this.batteryErr = "";
+      window.$axios.get("/views/gl-sdk4-ui-mudimodem-battery.common.js?_t=" + Date.now())
+        .then(function (res) {
+          var module = { exports: {} };            // eslint-disable-line no-unused-vars
+          var comp = eval(res.data);               // chunk is `module.exports = {...}`
+          if (!comp || typeof comp.render !== "function") throw new Error("bad chunk");
+          self.batteryComp = comp; self.batteryLoading = false;
+        })
+        .catch(function (e) {
+          self.batteryLoading = false;
+          self.batteryErr = (e && (e.message || e.type)) || "could not load the battery view";
         });
     },
 
@@ -729,60 +747,6 @@ module.exports = {
         window.location.reload();
       }
     },
-    fetchBattLimit() {
-      var self = this;
-      if (typeof window === "undefined" || !window.$rpcRequest) return Promise.resolve();
-      return window.$rpcRequest("call", ["sid", "mudimodem", "get_battlimit", {}], { timeout: 8000 })
-        .then(function (r) {
-          self.battLimit = r || null;
-          if (r && typeof r.limit_gui === "number") self.battLimitDraft = r.limit_gui;
-          self.battLimitErr = (r && r.error) || "";
-        })
-        .catch(function (e) {
-          self.battLimitErr = (e && (e.message || e.type)) || "request failed";
-        });
-    },
-    applyBattLimit(patch) {
-      var self = this;
-      if (this.battLimitBusy || typeof window === "undefined" || !window.$rpcRequest) return;
-      var cur = this.battLimit || { enabled: false, limit_gui: 80 };
-      var enabled = (patch && typeof patch.enabled === "boolean") ? patch.enabled : !!cur.enabled;
-      var limit_gui = (patch && patch.limit_gui != null)
-        ? Number(patch.limit_gui)
-        : Number(this.battLimitDraft || cur.limit_gui);
-      if (!(limit_gui >= 20 && limit_gui <= 100)) {
-        this.battLimitErr = "Target must be 20–100 % GUI";
-        return;
-      }
-      // Same gui2gauge floor as glbattlimit / backend (gauge must be ≥ 50).
-      var GUI_M = 13867, GUI_B = 189300;
-      var gauge = Math.floor((limit_gui * 10000 + GUI_B + GUI_M / 2) / GUI_M);
-      if (gauge < 50 || gauge > 100) {
-        this.battLimitErr = "limit too low (min ~50% gauge / use higher GUI %)";
-        return;
-      }
-      this.battLimitBusy = true;
-      this.battLimitErr = "";
-      return window.$rpcRequest("call", ["sid", "mudimodem", "set_battlimit",
-        { enabled: enabled, limit_gui: limit_gui }], { timeout: 15000 })
-        .then(function (r) {
-          self.battLimitBusy = false;
-          // Only replace the snapshot when the response looks complete; an
-          // error payload without available/limit_gui must not wipe UI state.
-          if (r && (typeof r.available === "boolean" || typeof r.limit_gui === "number")) {
-            self.battLimit = r;
-            if (typeof r.limit_gui === "number") self.battLimitDraft = r.limit_gui;
-          }
-          if (r && r.error) self.battLimitErr = r.error;
-          else if (r && (typeof r.available === "boolean" || typeof r.limit_gui === "number")) {
-            self.battLimitErr = "";
-          }
-        })
-        .catch(function (e) {
-          self.battLimitBusy = false;
-          self.battLimitErr = (e && (e.message || e.type)) || "request failed";
-        });
-    },
     fetchLcd() {
       var self = this;
       if (typeof window === "undefined" || !window.$rpcRequest) return Promise.resolve();
@@ -948,77 +912,7 @@ module.exports = {
       }
       var app = h("div", { staticClass: "mm-card" }, cardKids);
 
-      // --- Battery charge limit card ---
-      var bl = this.battLimit;
-      var battKids = [h("div", { staticClass: "mm-card-h" }, "Battery charge limit")];
-      if (!bl) {
-        // First-load failure must not stick on “Loading…” — surface the error.
-        battKids.push(h("div", { staticClass: "mm-note" },
-          this.battLimitErr || "Loading…"));
-      } else if (bl.available === false) {
-        battKids.push(h("div", { staticClass: "mm-note" },
-          "Charge limit not available on this device."));
-        if (this.battLimitErr) {
-          battKids.push(h("div", { staticClass: "mm-note" }, this.battLimitErr));
-        }
-      } else {
-        battKids.push(h("div", { staticClass: "mm-kv" }, [
-          h("label", { staticClass: "mm-k" }, [
-            h("input", {
-              attrs: { type: "checkbox", disabled: !!self.battLimitBusy },
-              domProps: { checked: !!bl.enabled },
-              on: {
-                change: function (e) {
-                  self.applyBattLimit({ enabled: !!(e.target && e.target.checked) });
-                }
-              }
-            }),
-            " Limit charging"
-          ])
-        ]));
-        battKids.push(h("div", { staticClass: "mm-kv" }, [
-          h("span", { staticClass: "mm-k" }, "Target"),
-          h("span", { staticClass: "mm-v" }, [
-            h("input", {
-              attrs: {
-                type: "number", min: 20, max: 100, step: 1,
-                disabled: !bl.enabled || !!self.battLimitBusy
-              },
-              domProps: { value: self.battLimitDraft },
-              on: {
-                input: function (e) {
-                  self.battLimitDraft = Number(e.target && e.target.value);
-                },
-                change: function () { self.applyBattLimit({ limit_gui: self.battLimitDraft }); }
-              }
-            }),
-            " % GUI",
-            h("span", { staticClass: "mm-note" },
-              "  (≈ " + (bl.limit_gauge != null ? bl.limit_gauge : "—") + "% gauge)")
-          ])
-        ]));
-        var capBits = (bl.capacity_gauge != null ? bl.capacity_gauge + "% gauge" : "—")
-          + " / ~" + (bl.capacity_gui != null ? bl.capacity_gui + "% GUI" : "—");
-        var statusLine;
-        if (bl.active) {
-          statusLine = "Active · " + (bl.active_gauge != null ? bl.active_gauge + "% gauge" : "on")
-            + " · " + capBits;
-        } else if (bl.enabled && !bl.charger_online) {
-          statusLine = "Armed · will apply when charger connects · " + capBits;
-        } else if (bl.enabled && bl.charger_online) {
-          statusLine = "Enabled · not active · " + capBits;
-        } else {
-          statusLine = "Off · " + capBits;
-        }
-        battKids.push(row("Status", statusLine));
-        battKids.push(row("Charger", bl.charger_online ? "Plugged in" : "Unplugged"));
-        if (this.battLimitErr) {
-          battKids.push(h("div", { staticClass: "mm-note" }, this.battLimitErr));
-        }
-      }
-      var batt = h("div", { staticClass: "mm-card" }, battKids);
-
-      return h("div", {}, [device, app, batt]);
+      return h("div", {}, [device, app]);
     },
     renderLcd(h) {
       var self = this;
@@ -2502,13 +2396,14 @@ module.exports = {
     // its graph chunk is lazy-loaded into the panel on first open.
     var TABS = [["tracking", "Tracking"], ["sim", "SIM"], ["lock", "Cell lock"],
       ["bands", "Bands"], ["at", "AT console"], ["speedtest", "Speedtest"],
-      ["config", "Config"], ["lcd", "LCD Display"]];
+      ["battery", "Battery"], ["config", "Config"], ["lcd", "LCD Display"]];
     var tabs = h("div", { staticClass: "mm-tabs" }, TABS.map(function (t) {
       return h("button", {
         key: t[0], staticClass: "mm-tab" + (self.tab === t[0] ? " on" : ""),
         on: { click: function () {
           if (t[0] === "tracking") self.openTracking();
           else if (t[0] === "speedtest") self.openSpeedtest();
+          else if (t[0] === "battery") self.openBattery();
           else self.tab = t[0];
         } }
       }, t[1]);
@@ -2549,6 +2444,14 @@ module.exports = {
         panel = h("div", { staticClass: "mm-card" }, [h("div", { staticClass: "mm-soon" },
           this.speedtestErr ? "Couldn't load the speed test: " + this.speedtestErr
             : "Loading the speed test…")]);
+      }
+    } else if (this.tab === "battery") {
+      if (this.batteryComp) {
+        panel = h(this.batteryComp, { props: { embedded: true } });
+      } else {
+        panel = h("div", { staticClass: "mm-card" }, [h("div", { staticClass: "mm-soon" },
+          this.batteryErr ? "Couldn't load the battery view: " + this.batteryErr
+            : "Loading the battery view…")]);
       }
     } else if (this.tab === "lcd") {
       panel = this.renderLcd(h);

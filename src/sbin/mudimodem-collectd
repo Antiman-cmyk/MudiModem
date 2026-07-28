@@ -29,6 +29,23 @@ TRIM_EVERY      = 30                     # ~2 min at 4 s
 EVENT_TRIM_EVERY = 360                   # ~1 h
 CLIENT_SEND_TIMEOUT = float(os.environ.get("MUDIMODEM_SEND_TIMEOUT", "5"))
 
+# ---- battery (issue #1) ---------------------------------------------------
+# Sampled from sysfs only: no ubus, no AT, nothing that can contend with the
+# modem channel. Slower cadence than the modem because the values move slowly —
+# SoC is an integer % that changes every ~60-90 s while charging.
+BATT_INTERVAL   = float(os.environ.get("MUDIMODEM_BATT_INTERVAL", "20"))
+BATT_MAX_AGE    = 24 * 3600 * 1000      # 24 h, in ms
+BATT_MAX_LINE   = 5200                  # 24h at 20s = 4320; backstop above that
+BATT_SYSFS      = os.environ.get("MUDIMODEM_BATT_SYSFS", "/sys/class/power_supply")
+# glbattlimit's own runtime state. Both files are created by its watcher and
+# removed when it exits (including on unplug), so their presence — plus a
+# liveness check on the pid, exactly as `glbattlimit status` does — is the
+# authoritative "the limiter is running" signal. Recorded PER SAMPLE because it
+# is history: a settings change mid-window must not retroactively relabel the
+# samples that came before it.
+BATT_LIMIT_PIDF = os.environ.get("MUDIMODEM_BATTLIMIT_PIDF", "/tmp/glbattlimit.pid")
+BATT_LIMIT_LIMF = os.environ.get("MUDIMODEM_BATTLIMIT_LIMF", "/tmp/glbattlimit.limit")
+
 
 def now_ms():
     return int(time.time() * 1000)
@@ -190,6 +207,101 @@ def build_sample(modem, net, sims, t=None):
     }
 
 
+def _readfile(path):
+    """Read one small text file, stripped. None if absent or unreadable."""
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except (OSError, ValueError):
+        return None
+
+
+def _sysfs(root, rel):
+    """Read one sysfs node, stripped. None if it is absent or unreadable."""
+    return _readfile(os.path.join(root, rel))
+
+
+def read_limiter(pidf=None, limf=None):
+    """Is glbattlimit's watcher running, and at what gauge target?
+
+    Returns (running: int 0|1, target_gauge: int|None).
+
+    ⚠️ WHY THIS EXISTS. The charger reports `status=Full` + `charge_type=Trickle`
+    BOTH when the cell is genuinely full and when glbattlimit is holding charge
+    off — because the way it holds charge off is to write the buck's `vreg`
+    below the current cell voltage (glbattlimit `gate_on`), which is precisely
+    the condition a charger reports as "charge complete". So `status` CANNOT
+    tell the two apart, and neither can `current_now == 0`. The limiter's own
+    pid/limit files can, and they are the same signal `glbattlimit status`
+    prints (and the backend's get_battlimit parses), so the chart and the
+    charge-limit card cannot contradict each other.
+    """
+    pidf = BATT_LIMIT_PIDF if pidf is None else pidf
+    limf = BATT_LIMIT_LIMF if limf is None else limf
+    running = 0
+    raw = _readfile(pidf)
+    try:
+        pid = int(raw)
+    except (TypeError, ValueError):
+        pid = 0
+    if pid > 0:
+        try:
+            os.kill(pid, 0)          # signal 0 = liveness probe, like `kill -0`
+            running = 1
+        except PermissionError:
+            running = 1              # alive, just not ours to signal
+        except OSError:
+            running = 0              # stale pidfile: watcher was killed hard
+    target = _num(_readfile(limf))
+    return running, (None if target is None else int(target))
+
+
+def read_battery(root=None, t=None, pidf=None, limf=None):
+    """One battery sample from /sys/class/power_supply, or None if the fuel
+    gauge is unreadable (i.e. not this hardware) — in which case we write no
+    battery file at all rather than a file full of nulls.
+
+    ⚠️ UNITS ARE PER-NODE. There is no blanket rule here:
+      voltage_now  uV        -> mV
+      temp         deci-C    -> C
+      current_now  mA ALREADY, signed. DO NOT divide by 1000.
+                   +charging / -discharging / 0 = charging blocked.
+                   The Linux power_supply class normally uses uA, so mA looks
+                   wrong; glbattlimit line 166 documents it and the physics
+                   agree (-363 at 4.0 V = 1.45 W; as uA it would be 1.5 mW).
+    `cap` is stored as the RAW GAUGE %, never converted to GL's "GUI" scale:
+    that conversion is a provisional linear fit, and storing the raw reading
+    keeps retained history valid if the fit is ever corrected.
+
+    `lim` / `lim_gauge` carry glbattlimit's state at the moment of the sample
+    (see read_limiter) — the only thing that distinguishes "the limiter is
+    holding charge off" from "the battery is full", since the charger reports
+    Full/Trickle for both.
+    """
+    root = BATT_SYSFS if root is None else root
+    bat, chg = "cw221X-bat", "charger"
+    cap = _num(_sysfs(root, bat + "/capacity"))
+    if cap is None:
+        return None                              # no gauge => not this hardware
+    volt = _num(_sysfs(root, bat + "/voltage_now"))
+    temp = _num(_sysfs(root, bat + "/temp"))
+    lim, lim_gauge = read_limiter(pidf, limf)
+    return {
+        "t": now_ms() if t is None else t,
+        "cap": cap,
+        "volt": None if volt is None else int(volt // 1000),
+        "cur": _num(_sysfs(root, bat + "/current_now")),
+        "temp": None if temp is None else round(temp / 10.0, 1),
+        "online": int(_num(_sysfs(root, chg + "/online")) or 0),
+        "status": _sysfs(root, chg + "/status") or "",
+        "ctype": _sysfs(root, chg + "/charge_type") or "",
+        "cycles": _num(_sysfs(root, bat + "/cycle_count")),
+        "health": _sysfs(root, bat + "/health") or "",
+        "lim": lim,
+        "lim_gauge": lim_gauge,
+    }
+
+
 def collect_sample():
     modem = ubus_call("cellular.modem", "status")
     if not modem:
@@ -233,6 +345,7 @@ def main():
     samples_path = os.path.join(hist, "samples.jsonl")
     events_path = os.path.join(hist, "events.jsonl")
     latest_path = os.path.join(hist, "latest.json")
+    battery_path = os.path.join(hist, "battery.jsonl")
     sock_path = os.path.join(hist, "collectd.sock")
     bc = Broadcaster(sock_path)
     bc.start()
@@ -244,8 +357,19 @@ def main():
     signal.signal(signal.SIGINT, stop)
 
     i = 0
+    last_batt = 0.0
     while state["go"]:
         try:
+            # Battery FIRST, and gated on ELAPSED TIME rather than a tick count.
+            # A tick is not 4 s: ubus_call has an 8 s timeout and collect_sample
+            # makes three of them, so a bad tick can run ~24 s and `i % 5` would
+            # silently stretch the battery interval to minutes.
+            if time.time() - last_batt >= BATT_INTERVAL:
+                last_batt = time.time()
+                b = read_battery()
+                if b is not None:
+                    with open(battery_path, "a") as f:
+                        f.write(json.dumps(b) + "\n")
             s = collect_sample()
             if s is not None:
                 line = json.dumps(s)
@@ -256,6 +380,7 @@ def main():
             i += 1
             if i % TRIM_EVERY == 0:
                 trim(samples_path, SAMPLE_MAX_AGE, SAMPLE_MAX_LINE)
+                trim(battery_path, BATT_MAX_AGE, BATT_MAX_LINE)
             if i % EVENT_TRIM_EVERY == 0:
                 trim(events_path, SAMPLE_MAX_AGE, 1000)
         except Exception as e:                       # never die out of the loop

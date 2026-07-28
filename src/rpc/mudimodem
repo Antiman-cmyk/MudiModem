@@ -25,6 +25,7 @@ local STALE      = os.getenv("MUDIMODEM_STALE")   or "/etc/mudimodem/gl-stale"
 local HIST_DIR   = os.getenv("MUDIMODEM_HIST") or "/tmp/mudimodem"
 local SAMPLES    = HIST_DIR .. "/samples.jsonl"
 local EVENTS     = HIST_DIR .. "/events.jsonl"
+local BATTERY    = HIST_DIR .. "/battery.jsonl"
 
 -- An empty Lua table encodes as {} (object); GL's set_feature_config wants []
 -- for empty band lists. cjson.empty_array is the sentinel that encodes as [].
@@ -601,65 +602,80 @@ end
 -- os.time() are both UTC epoch — but absolute skew on a travel router is real.
 -- Neither given => everything retained (24h). Files absent (collector not
 -- started) => empty arrays.
-function M.get_history(args)
-  local now   = os.time() * 1000
+--
+-- Read the TAIL of an append-ordered jsonl file BACKWARD in chunks, stopping at
+-- the window edge. Returns decoded records oldest-first. Shared by get_history
+-- and get_battery_history.
+--
+-- ⚠️ Do not "simplify" this into a read-all-then-filter loop. That was the
+-- original, and on the box over 14.6k lines / 3.8 MB it cost ~7.4 s of CPU —
+-- FLAT: a 15-minute window (224 samples) cost exactly what the full 24 h
+-- (14,647) did, on page load AND on every 10 s poll. The bytes are cheap
+-- (read("*a") of 3.8 MB = 0.09 s) and 226 cjson.decodes are 0.005 s; the cost is
+-- materialising 14.6k interned strings in one growing table. Cost is now
+-- O(window): a 15 m load and each poll are ~10 ms.
+local READ_CHUNK = 65536
+local function read_window(path, since)
+  local fh = io.open(path, "r")
+  if not fh then return {} end
+  local pos   = fh:seek("end")
+  local carry = ""                                   -- head fragment: a line cut by the chunk edge
+  local rev   = {}                                   -- collected newest-first
+  local done  = false
+  while pos > 0 and not done do
+    local from = pos - READ_CHUNK
+    if from < 0 then from = 0 end
+    fh:seek("set", from)
+    local buf = (fh:read(pos - from) or "") .. carry
+    pos = from
+    if pos > 0 then                                  -- buf's first line is (probably) incomplete:
+      local nl = buf:find("\n", 1, true)             -- hold it back for the next, earlier read
+      if nl then carry, buf = buf:sub(1, nl - 1), buf:sub(nl + 1)
+      else carry, buf = buf, "" end                  -- no newline in the chunk: it's all one fragment
+    else carry = "" end                              -- reached the file start: nothing left to splice
+    local lines = {}
+    for line in buf:gmatch("[^\n]+") do lines[#lines + 1] = line end
+    for i = #lines, 1, -1 do
+      local ok, obj = pcall(cjson.decode, lines[i])  -- cjson.decode can't yield; pcall is safe here
+      if ok and type(obj) == "table" and obj.t then
+        if since and obj.t <= since then done = true; break end  -- window edge: stop reading
+        rev[#rev + 1] = obj
+      end                                            -- malformed line: skip, keep scanning
+    end
+  end
+  fh:close()
+  local out = {}                                     -- flip back to oldest-first (the contract)
+  for i = #rev, 1, -1 do out[#out + 1] = rev[i] end
+  return out
+end
+
+-- Resolve the {window_ms} / {since} argument pair against the BOX clock.
+-- Callers send one or the other; if both arrive, honour the narrower.
+local function window_since(args, now)
   local since = args and tonumber(args.since) or nil
   local win   = args and tonumber(args.window_ms) or nil
-  -- Callers send one or the other; if both arrive, honour the narrower.
   if win and win > 0 then
     local rel = now - win
     since = (since == nil) and rel or math.max(since, rel)
   end
-  -- Read the file's TAIL BACKWARD in chunks and stop at the window edge. The
-  -- files are append-ordered by time (the collector appends per tick; trim()
-  -- rewrites in order), so everything before the first out-of-window record is
-  -- older still — once we pass `since` there is nothing left worth looking at.
-  --
-  -- ⚠️ Stopping the DECODE early is not enough: an earlier version still slurped
-  -- every line into a Lua table first ("reading the raw lines is cheap"). It
-  -- isn't. Measured on the box over 14.6k lines / 3.8 MB that loop cost ~7.4 s of
-  -- CPU, and it was FLAT — a 15-minute window (224 samples) cost exactly what the
-  -- full 24 h (14,647) did, on the page load AND on every 10s poll. The bytes are
-  -- cheap (read("*a") of 3.8 MB = 0.09 s) and 226 cjson.decodes are 0.005 s; the
-  -- cost is materialising 14.6k interned strings in one growing table. So never
-  -- touch bytes older than the window: seek to the end, walk back a chunk at a
-  -- time, splicing the partial line at each chunk's head onto the next (earlier)
-  -- read. Cost is now O(window) — a 15 m load and each poll are ~10 ms.
-  local CHUNK = 65536
-  local function read_lines(path)
-    local fh = io.open(path, "r")
-    if not fh then return {} end
-    local pos   = fh:seek("end")
-    local carry = ""                                   -- head fragment: a line cut by the chunk edge
-    local rev   = {}                                   -- collected newest-first
-    local done  = false
-    while pos > 0 and not done do
-      local from = pos - CHUNK
-      if from < 0 then from = 0 end
-      fh:seek("set", from)
-      local buf = (fh:read(pos - from) or "") .. carry
-      pos = from
-      if pos > 0 then                                  -- buf's first line is (probably) incomplete:
-        local nl = buf:find("\n", 1, true)             -- hold it back for the next, earlier read
-        if nl then carry, buf = buf:sub(1, nl - 1), buf:sub(nl + 1)
-        else carry, buf = buf, "" end                  -- no newline in the chunk: it's all one fragment
-      else carry = "" end                              -- reached the file start: nothing left to splice
-      local lines = {}
-      for line in buf:gmatch("[^\n]+") do lines[#lines + 1] = line end
-      for i = #lines, 1, -1 do
-        local ok, obj = pcall(cjson.decode, lines[i])  -- cjson.decode can't yield; pcall is safe here
-        if ok and type(obj) == "table" and obj.t then
-          if since and obj.t <= since then done = true; break end  -- window edge: stop reading
-          rev[#rev + 1] = obj
-        end                                            -- malformed line: skip, keep scanning
-      end
-    end
-    fh:close()
-    local out = {}                                     -- flip back to oldest-first (the contract)
-    for i = #rev, 1, -1 do out[#out + 1] = rev[i] end
-    return out
-  end
-  return { samples = arr(read_lines(SAMPLES)), events = arr(read_lines(EVENTS)), now = now }
+  return since
+end
+
+function M.get_history(args)
+  local now   = os.time() * 1000
+  local since = window_since(args, now)
+  return { samples = arr(read_window(SAMPLES, since)),
+           events  = arr(read_window(EVENTS, since)),
+           now     = now }
+end
+
+-- Battery history (issue #1). Same {window_ms}/{since} contract as get_history,
+-- read from the collector's battery.jsonl. No `events` key: the chart's
+-- annotations (plug/unplug, charging band, the limit-engaged marker) are all
+-- DERIVED client-side from the sample stream.
+function M.get_battery_history(args)
+  local now = os.time() * 1000
+  return { samples = arr(read_window(BATTERY, window_since(args, now))), now = now }
 end
 
 -- Commit a pending change durably (Path B). Two things happen here:
@@ -1243,6 +1259,8 @@ local function snapshot_battlimit()
     enabled = pol.enabled,
     limit_gui = pol.limit_gui,
     limit_gauge = gui_to_gauge(pol.limit_gui),
+    gui_m = 13867,          -- the chunk converts gauge -> GUI for display; serving
+    gui_b = 189300,         -- the constants here keeps that formula in ONE place
     active = false,
     active_gauge = nil,
     capacity_gauge = nil,
