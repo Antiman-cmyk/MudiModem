@@ -53,7 +53,7 @@ module.exports = (function () {
       FS_SCALE = 10.5,     // y-domain bounds
       FS_TICK = 10.5,      // target line + plug/unplug labels
       FS_AXIS = 11,        // x-axis times
-      FS_READOUT = 12.5;   // the hover readout under the axis
+      FS_READOUT = 14;     // the hover readout under the axis
   // Fallback GUI fit, mirroring glbattlimit + the Lua backend. Only used before
   // get_battlimit lands; the served gui_m/gui_b win.
   var GUI_M = 13867, GUI_B = 189300;
