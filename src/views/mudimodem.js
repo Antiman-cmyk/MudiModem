@@ -1670,6 +1670,26 @@ module.exports = {
       return out.length >= 2 ? out : null;
     },
     stripFromDaemon() { return !!this.stripPoints(); },
+    // RSRP field-test base is −120…−80 dBm. Expand (never shrink) when a point
+    // sits outside so a strong signal isn't clamped flat to the top of the strip
+    // — same rule as Tracking's domainFor. Absolute scale stays absolute for
+    // in-range data; noise is not auto-zoomed into a full-height wiggle.
+    stripRsrpDomain(vals) {
+      var FLOOR = -120, CEIL = -80;
+      for (var i = 0; i < vals.length; i++) {
+        var v = vals[i];
+        if (v == null || v === "" || isNaN(v)) continue;
+        v = +v;
+        if (v < FLOOR) FLOOR = v;
+        if (v > CEIL) CEIL = v;
+      }
+      return [FLOOR, CEIL];
+    },
+    stripAxisDomain() {
+      var pts = this.stripPoints();
+      if (pts) return this.stripRsrpDomain(pts.map(function (p) { return p.v; }));
+      return this.stripRsrpDomain(this.trace);
+    },
     tracePath() {
       var pts = this.stripPoints();
       return pts ? this.tracePathTimed(pts) : this.tracePathIndexed();
@@ -1678,7 +1698,8 @@ module.exports = {
     // stopped collector leaves a visible hole instead of a straight line drawn
     // across it.
     tracePathTimed(pts) {
-      var FLOOR = -120, CEIL = -80, W = 320, H = 40;
+      var dom = this.stripRsrpDomain(pts.map(function (p) { return p.v; }));
+      var FLOOR = dom[0], CEIL = dom[1], W = 320, H = 40, ySpan = CEIL - FLOOR;
       var span = this.STRIP_MIN * 60000, end = this.stripEnd(), start = end - span;
       var d = "", prev = null;
       for (var i = 0; i < pts.length; i++) {
@@ -1686,7 +1707,7 @@ module.exports = {
         var x = ((t - start) / span) * W;
         if (x < 0) x = 0; else if (x > W) x = W;
         var cl = Math.max(FLOOR, Math.min(CEIL, pts[i].v));
-        var y = H - ((cl - FLOOR) / (CEIL - FLOOR)) * H;
+        var y = ySpan ? H - ((cl - FLOOR) / ySpan) * H : H / 2;
         d += ((prev === null || t - prev > this.STRIP_GAP_MS) ? "M" : "L") +
              x.toFixed(1) + "," + y.toFixed(1);
         prev = t;
@@ -1694,15 +1715,16 @@ module.exports = {
       return d;
     },
     // Fallback path: evenly spaced websocket samples, right-aligned. Unchanged
-    // from before the daemon fed the strip.
+    // from before the daemon fed the strip (domain now expands for strong RSRP).
     tracePathIndexed() {
       var pts = this.trace, n = pts.length;
       if (n < 2) return "";
-      var FLOOR = -120, CEIL = -80, W = 320, H = 40;
+      var dom = this.stripRsrpDomain(pts);
+      var FLOOR = dom[0], CEIL = dom[1], W = 320, H = 40, ySpan = CEIL - FLOOR;
       var step = W / (this.TRACE_MAX - 1);
       var y = function (v) {
         var cl = Math.max(FLOOR, Math.min(CEIL, v));
-        return (H - ((cl - FLOOR) / (CEIL - FLOOR)) * H).toFixed(1);
+        return (ySpan ? H - ((cl - FLOOR) / ySpan) * H : H / 2).toFixed(1);
       };
       var off = this.TRACE_MAX - n, d = "";
       for (var i = 0; i < n; i++) {
@@ -2356,10 +2378,10 @@ module.exports = {
             ])
           ]),
           h("div", { staticClass: "mm-axis" }, [
-            h("span", "-120"),
+            h("span", String(this.stripAxisDomain()[0])),
             h("span", (c.mode || "") + (this.servingCarrier ? "  " + this.servingCarrier : "") +
               (this.activeSlot ? "  SIM " + this.activeSlot : "")),
-            h("span", "-80 dBm")
+            h("span", this.stripAxisDomain()[1] + " dBm")
           ])
         ]),
         h("div", { staticClass: "mm-read" }, [

@@ -28,6 +28,12 @@ module.exports = (function () {
   // desaturated text ramp — so rose is the third distinct hue.) Signal QUALITY is
   // no longer painted on the lines; it lives in the hover readout + the strip.
   // `lvl` is retained for the readout's quality colouring.
+  //
+  // `dom` is a FIXED field-test base — never auto-zoomed to the series (that
+  // makes noise look like signal). domainFor() still EXPANDS past the base when
+  // a sample falls outside, so a strong RSRP (better than −80) is not clamped
+  // flat against the top of the plot. Same expand-on-overflow rule as the
+  // battery tab's fixed lanes.
   var LINES = [
     { key: "rsrp", label: "RSRP · dBm", dom: [-120, -80], color: "var(--primary)", lvl: "rsrp_level" },
     { key: "sinr", label: "SINR · dB",  dom: [-10, 30],   color: "var(--success)", lvl: "sinr_level" },
@@ -39,7 +45,11 @@ module.exports = (function () {
   var RANGES = [[15,"15 m"],[60,"1 h"],[360,"6 h"],[1440,"24 h"]];
   var TICKSTEP = { 15:2, 60:10, 360:60, 1440:240 };
   var RECENT_USER_MS = 8000;
-  var PADL = 30, PADR = 12, BUS_H = 20, PLOT_H = 230;
+  // PADL / PADR clear the RSRP (left) and SINR (right) y-axis labels. Was 30/12
+  // when the overlay had no numeric scale and the legend carried every domain.
+  var PADL = 42, PADR = 36, BUS_H = 20, PLOT_H = 230;
+  // How many intervals on each numeric y-axis (→ N+1 labels, incl. floor + ceiling).
+  var Y_INTERVALS = 4;
 
   var component = {
     name: "mudimodem-tracking",
@@ -261,6 +271,75 @@ module.exports = (function () {
         }
         return out;
       },
+      // Fixed base domain from L.dom, expanded for out-of-range samples in `ss`
+      // (window samples). Never shrinks to the series min/max — in-range data
+      // keeps the absolute field-test scale. Pass `ss` once per render so legend
+      // + y-map share one pass over the same array.
+      domainFor: function (L, ss) {
+        var d0 = L.dom[0], d1 = L.dom[1], key = L.key;
+        for (var i = 0; i < ss.length; i++) {
+          var v = ss[i][key];
+          if (v == null || v === "" || isNaN(v)) continue;
+          v = +v;
+          if (v < d0) d0 = v;
+          if (v > d1) d1 = v;
+        }
+        return [d0, d1];
+      },
+      // Y-axis tick values, top→bottom inclusive. Evenly spaced across the
+      // effective domain (which may have expanded past the metric's fixed base).
+      yTicks: function (d0, d1) {
+        var out = [], n = Y_INTERVALS, span = d1 - d0;
+        for (var i = 0; i <= n; i++) out.push(d1 - (span * i) / n);
+        return out;
+      },
+      fmtTick: function (v) {
+        if (v == null || isNaN(v)) return "";
+        var r = Math.round(v);
+        return Math.abs(v - r) < 0.05 ? String(r) : v.toFixed(1);
+      },
+      // Paint one metric's y-axis into `kids`. `side` is "left" (RSRP) or
+      // "right" (SINR). Only the left axis draws interior gridlines — two sets
+      // at different absolute positions would fight, and RSRP is the headline.
+      // The two axes do NOT share a scale; colour + name + unit make that explicit.
+      paintYAxis: function (h, kids, opts) {
+        var self = this;
+        var d0 = opts.d0, d1 = opts.d1, span = d1 - d0;
+        var plotTop = opts.plotTop, plotBot = opts.plotBot, W = opts.W;
+        var left = opts.side === "left";
+        var xLab = left ? PADL - 5 : W - PADR + 5;
+        var anchor = left ? "end" : "start";
+        var yOf = function (v) {
+          if (!span) return plotTop + PLOT_H / 2;
+          return plotBot - (Math.max(d0, Math.min(d1, v)) - d0) / span * PLOT_H;
+        };
+        // Metric name sits ABOVE the plot frame in the axis gutter so the
+        // column reads as "RSRP · dBm" / "SINR · dB" without scanning the legend.
+        kids.push(h("text", { attrs: {
+          x: xLab, y: plotTop - 6, "text-anchor": anchor, "font-size": 9.5,
+          "font-weight": 600, fill: opts.color,
+          "font-family": "var(--mono,ui-monospace,monospace)"
+        } }, opts.name));
+        self.yTicks(d0, d1).forEach(function (tv, i, arr) {
+          var yy = yOf(tv);
+          if (left && i > 0 && i < arr.length - 1) {
+            kids.push(h("line", { attrs: { x1: PADL, x2: W - PADR, y1: yy, y2: yy,
+              stroke: "var(--divider)", "stroke-width": 1, "stroke-dasharray": "2 3" } }));
+          }
+          var dy = i === 0 ? 10 : (i === arr.length - 1 ? -3 : 3);
+          kids.push(h("text", { attrs: {
+            x: xLab, y: yy + dy, "text-anchor": anchor, "font-size": 9.5,
+            fill: opts.color,
+            "font-family": "var(--mono,ui-monospace,monospace)"
+          } }, self.fmtTick(tv)));
+        });
+        // Unit under the ceiling tick so it isn't repeated on every label.
+        kids.push(h("text", { attrs: {
+          x: xLab, y: plotTop + 20, "text-anchor": anchor, "font-size": 8,
+          fill: "var(--text-badge)",
+          "font-family": "var(--mono,ui-monospace,monospace)"
+        } }, opts.unit));
+      },
       winEvents: function () {
         var cutoff = this.nowMs() - this.winW * 60000, self = this;
         return this.allEvents.filter(function (e) { return e.t >= cutoff; })
@@ -340,13 +419,19 @@ module.exports = (function () {
       renderLanes: function (h) {
         var self = this, W = this.width, kids = [];
         var ss = this.winSamples();
+        // Resolve each metric's domain ONCE for this render — legend labels and
+        // y-mapping must agree, and walking samples thrice would re-expand thrice.
+        var doms = LINES.map(function (L) { return self.domainFor(L, ss); });
 
-        // ---- legend: one swatch + name + domain range per metric. A single
-        // shared Y-axis can't label three scales, so the ranges live here; exact
-        // per-sample values are in the hover readout.
+        // ---- legend: one swatch + name + domain range per metric. RSRP has a
+        // left y-axis and SINR a right one (each in its own colour/unit); RSRQ
+        // stays legend + hover only — three absolute scales can't all get an
+        // axis without turning the plot into a muddle. Legend shows the
+        // *effective* domain (base, possibly expanded).
         var lx = PADL;
-        LINES.forEach(function (L) {
-          var lab = L.label + "  " + L.dom[0] + "…" + L.dom[1];
+        LINES.forEach(function (L, i) {
+          var dom = doms[i];
+          var lab = L.label + "  " + dom[0] + "…" + dom[1];
           kids.push(h("rect", { attrs: { x: lx, y: 3, width: 13, height: 3, rx: 1.5, fill: L.color } }));
           kids.push(h("text", { attrs: { x: lx + 18, y: 9, "font-size": 9.5,
             fill: "var(--text-badge)" } }, lab));
@@ -359,14 +444,28 @@ module.exports = (function () {
           kids.push(h("line", { attrs: { x1: PADL, x2: W - PADR, y1: yy, y2: yy,
             stroke: "var(--divider)", "stroke-width": 1 } }));
         });
-        kids.push(h("line", { attrs: { x1: PADL, x2: W - PADR,
-          y1: plotTop + PLOT_H / 2, y2: plotTop + PLOT_H / 2,
-          stroke: "var(--divider)", "stroke-width": 1, "stroke-dasharray": "2 3" } }));
 
-        LINES.forEach(function (L) {
-          var d0 = L.dom[0], d1 = L.dom[1];
+        // Dual y-axes: RSRP left (primary/dBm, draws the interior grid), SINR
+        // right (success/dB, labels only). Same pixel height, different domains
+        // — colour + name + unit keep them from looking like one shared scale.
+        self.paintYAxis(h, kids, {
+          side: "left", d0: doms[0][0], d1: doms[0][1],
+          name: "RSRP", color: LINES[0].color, unit: "dBm",
+          plotTop: plotTop, plotBot: plotBot, W: W
+        });
+        self.paintYAxis(h, kids, {
+          side: "right", d0: doms[1][0], d1: doms[1][1],
+          name: "SINR", color: LINES[1].color, unit: "dB",
+          plotTop: plotTop, plotBot: plotBot, W: W
+        });
+
+        LINES.forEach(function (L, i) {
+          var d0 = doms[i][0], d1 = doms[i][1], span = d1 - d0;
           var yv = function (v) {
-            return plotBot - (Math.max(d0, Math.min(d1, v)) - d0) / (d1 - d0) * PLOT_H;
+            if (!span) return plotTop + PLOT_H / 2;
+            // Still clamp to the *effective* domain (which already expanded to
+            // cover every sample) so a NaN/outlier can't paint outside the frame.
+            return plotBot - (Math.max(d0, Math.min(d1, v)) - d0) / span * PLOT_H;
           };
           var d = "", pen = false;                       // one path per metric
           ss.forEach(function (s) {

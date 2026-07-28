@@ -351,6 +351,38 @@ test('strip trace: daemon points are plotted on a real-time x-axis', async () =>
   } finally { unstubRpc(); }
 });
 
+test('strip domain: expands for strong RSRP instead of pinning to −80', async () => {
+  const boxNow = 2500000;
+  // −72 → −65: under the old fixed −120…−80 both points clamped to y=0 (top).
+  const calls = stubAxios([histReply(boxNow, 60000, [-72, -65])]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.fetchStripHistory();
+    await new Promise((r) => setImmediate(r));
+    assert.deepStrictEqual(vm.stripAxisDomain(), [-120, -65], 'ceiling expands to strongest');
+    const d = vm.tracePath();
+    const pts = d.split(/(?=[ML])/).map((s) => s.slice(1).split(',').map(Number));
+    assert.strictEqual(pts.length, 2);
+    assert.ok(pts[0][1] > pts[1][1], 'stronger sample is higher on the strip');
+    assert.ok(pts[0][1] - pts[1][1] > 2, 'the 7 dB swing is visible, not collapsed');
+    assert.strictEqual(pts[1][1], 0, 'the strongest sample still sits at the top edge');
+    const axis = walk(c.render.call(vm, h))
+      .filter((n) => n.data && n.data.staticClass === 'mm-axis');
+    assert.ok(axis.length, 'axis row present');
+    const axisTxt = textOf(axis[0]);
+    assert.match(axisTxt, /^-120/, 'floor label still the field-test base');
+    assert.match(axisTxt, /-65 dBm/, 'ceiling label tracks the expanded domain');
+  } finally { unstubRpc(); }
+});
+
+test('strip domain: in-range samples keep the fixed −120…−80 base', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, LIVE);
+  vm.trace = [-100, -95, -90];
+  assert.deepStrictEqual(vm.stripAxisDomain(), [-120, -80]);
+});
+
 test('strip trace: a hole in the history breaks the line instead of bridging it', async () => {
   const boxNow = 3000000;
   const reply = histReply(boxNow, 4000, [-95, -94]);

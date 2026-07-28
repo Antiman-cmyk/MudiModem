@@ -126,6 +126,137 @@ test('legend shows each metric name with its domain range', () => {
   assert.match(txt, /RSRQ · dB {2}-20…-3/, 'RSRQ range in legend');
 });
 
+test('domainFor keeps the fixed base when samples sit inside it', () => {
+  const c = loadChunk();
+  const vm = makeVm(c);
+  const L = { key: 'rsrp', dom: [-120, -80] };
+  assert.deepStrictEqual(vm.domainFor(L, [
+    s({ rsrp: -100 }), s({ rsrp: -95 }), s({ rsrp: -90 })
+  ]), [-120, -80], 'in-range data does not auto-zoom');
+});
+
+test('domainFor expands past the base when RSRP is stronger than −80', () => {
+  const c = loadChunk();
+  const vm = makeVm(c);
+  const L = { key: 'rsrp', dom: [-120, -80] };
+  // A strong outdoor/indoor reading — previously clamped flat to the plot top.
+  assert.deepStrictEqual(vm.domainFor(L, [
+    s({ rsrp: -72 }), s({ rsrp: -68 }), s({ rsrp: -65 })
+  ]), [-120, -65], 'ceiling rises to the strongest sample');
+});
+
+test('domainFor expands the floor for a very weak RSRP', () => {
+  const c = loadChunk();
+  const vm = makeVm(c);
+  const L = { key: 'rsrp', dom: [-120, -80] };
+  assert.deepStrictEqual(vm.domainFor(L, [s({ rsrp: -128 })]), [-128, -80]);
+});
+
+test('strong RSRP is not pinned to the top of the plot', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  // Two strong points with a real 7 dB swing — under the old clamp both sat at y=plotTop.
+  const samples = [
+    { t: now - 60000, slot: '1', id: 'A1', band: 71, mode: 'NR5G-SA FDD',
+      rsrp: -72, sinr: 18, rsrq: -8, rsrp_level: 4, sinr_level: 4, rsrq_level: 4,
+      carrier: 'T-Mobile', tx_channel: '127490', dl_bandwidth: '15MHz' },
+    { t: now, slot: '1', id: 'A1', band: 71, mode: 'NR5G-SA FDD',
+      rsrp: -65, sinr: 22, rsrq: -7, rsrp_level: 4, sinr_level: 4, rsrq_level: 4,
+      carrier: 'T-Mobile', tx_channel: '127490', dl_bandwidth: '15MHz' }
+  ];
+  const vm = makeVm(c, { samples, events: [], winW: 15, serverNow: now, serverNowAt: Date.now() });
+  const paths = walk(c.render.call(vm, h)).filter((n) => n.tag === 'path');
+  // First path is RSRP (LINES order).
+  const rsrpPath = paths[0].data.attrs.d;
+  const ys = rsrpPath.match(/[\d.]+/g).filter((_, i) => i % 2 === 1).map(Number);
+  assert.strictEqual(ys.length, 2, 'two RSRP points drawn');
+  assert.ok(ys[0] > ys[1], 'stronger (−65) is higher on the plot than −72');
+  assert.ok(ys[0] - ys[1] > 5, 'the 7 dB swing is visible, not collapsed by clamping');
+  const txt = textOf(c.render.call(vm, h));
+  assert.match(txt, /RSRP · dBm {2}-120…-65/, 'legend shows the expanded ceiling');
+});
+
+test('yTicks walks the domain top→bottom inclusive', () => {
+  const c = loadChunk();
+  const vm = makeVm(c);
+  assert.deepStrictEqual(vm.yTicks(-120, -80), [-80, -90, -100, -110, -120]);
+  assert.deepStrictEqual(vm.yTicks(-120, -65), [-65, -78.75, -92.5, -106.25, -120]);
+});
+
+test('fmtTick rounds near-integers and keeps one decimal otherwise', () => {
+  const c = loadChunk();
+  const vm = makeVm(c);
+  assert.strictEqual(vm.fmtTick(-80), '-80');
+  assert.strictEqual(vm.fmtTick(-92.5), '-92.5');
+  assert.strictEqual(vm.fmtTick(-89.999), '-90');
+});
+
+test('plot draws RSRP left + SINR right y-axes with units and one interior grid', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { samples: seedSamples(), events: [], winW: 60 });
+  const tree = c.render.call(vm, h);
+  // Left = RSRP (primary, end-anchored); right = SINR (success, start-anchored).
+  // Assert against individual text nodes — full-page concat fuses "10"+"0" into "100".
+  const rsrpLabels = walk(tree).filter((n) =>
+    n.tag === 'text' && n.data.attrs && n.data.attrs['text-anchor'] === 'end'
+    && n.data.attrs.fill === 'var(--primary)');
+  const sinrLabels = walk(tree).filter((n) =>
+    n.tag === 'text' && n.data.attrs && n.data.attrs['text-anchor'] === 'start'
+    && n.data.attrs.fill === 'var(--success)');
+  // First text node on each axis is the metric name above the frame; then ticks.
+  assert.deepStrictEqual(rsrpLabels.map((n) => textOf(n)),
+    ['RSRP', '-80', '-90', '-100', '-110', '-120'], 'RSRP name + ticks');
+  assert.deepStrictEqual(sinrLabels.map((n) => textOf(n)),
+    ['SINR', '30', '20', '10', '0', '-10'], 'SINR name + ticks');
+  // Names sit above the plot frame (y < plotTop=22).
+  assert.ok(rsrpLabels[0].data.attrs.y < 22, 'RSRP label above the axis');
+  assert.ok(sinrLabels[0].data.attrs.y < 22, 'SINR label above the axis');
+  const txt = textOf(tree);
+  assert.match(txt, /dBm/, 'RSRP unit marked');
+  assert.match(txt, /dB/, 'SINR unit marked');
+  // Interior gridlines come from the LEFT axis only (not doubled by SINR).
+  const grids = walk(tree).filter((n) =>
+    n.tag === 'line' && n.data.attrs && n.data.attrs['stroke-dasharray'] === '2 3'
+    && n.data.attrs.x1 === 42 /* PADL */);
+  assert.strictEqual(grids.length, 3, 'three interior y-gridlines from RSRP only');
+});
+
+test('y-axis ceiling tracks an expanded strong-signal domain', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const samples = [
+    { t: now - 60000, slot: '1', id: 'A1', band: 71, mode: 'NR5G-SA FDD',
+      rsrp: -68, sinr: 20, rsrq: -8, carrier: 'T-Mobile' },
+    { t: now, slot: '1', id: 'A1', band: 71, mode: 'NR5G-SA FDD',
+      rsrp: -65, sinr: 22, rsrq: -7, carrier: 'T-Mobile' }
+  ];
+  const vm = makeVm(c, { samples, events: [], winW: 15, serverNow: now, serverNowAt: Date.now() });
+  const labels = walk(c.render.call(vm, h)).filter((n) =>
+    n.tag === 'text' && n.data.attrs && n.data.attrs.fill === 'var(--primary)');
+  const nums = labels.map((n) => textOf(n));
+  assert.ok(nums.includes('-65'), 'expanded ceiling on the axis');
+  assert.ok(nums.includes('-120'), 'field-test floor still labelled');
+  assert.ok(!nums.includes('-80'), 'old fixed ceiling is gone once domain expands');
+});
+
+test('SINR right axis expands when samples exceed the base domain', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  // SINR 35 is above the base ceiling of 30 — axis should expand, not clamp.
+  const samples = [
+    { t: now - 60000, slot: '1', id: 'A1', band: 71, mode: 'NR5G-SA FDD',
+      rsrp: -95, sinr: 28, rsrq: -12, carrier: 'T-Mobile' },
+    { t: now, slot: '1', id: 'A1', band: 71, mode: 'NR5G-SA FDD',
+      rsrp: -94, sinr: 35, rsrq: -11, carrier: 'T-Mobile' }
+  ];
+  const vm = makeVm(c, { samples, events: [], winW: 15, serverNow: now, serverNowAt: Date.now() });
+  const sinrLabels = walk(c.render.call(vm, h)).filter((n) =>
+    n.tag === 'text' && n.data.attrs && n.data.attrs.fill === 'var(--success)');
+  const nums = sinrLabels.map((n) => textOf(n));
+  assert.ok(nums.includes('35'), 'expanded SINR ceiling on the right axis');
+  assert.ok(nums.includes('-10'), 'SINR floor still labelled');
+});
+
 test('three overlaid metric lines, one fixed distinct GL colour each', () => {
   const c = loadChunk();
   const vm = makeVm(c, { samples: seedSamples(), events: [], winW: 60 });
