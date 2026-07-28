@@ -26,7 +26,7 @@ module.exports = (function () {
   // whole feature exists to show: `cur == 0` must read as ZERO, not as "low".
   // Each lane keeps real units and its own y-domain; `h` is its pixel height.
   var LANES = [
-    { key: "capGui", label: "Charge · %",        unit: "%",  h: 96, dec: 0,
+    { key: "capGui", label: "GL UI Reported Charge · %", unit: "%",  h: 96, dec: 0,
       color: "var(--primary)",    fixed: [0, 100] },
     { key: "cur",    label: "Current · mA",      unit: "mA", h: 64, dec: 0,
       color: "var(--success)",    zero: true },
@@ -241,7 +241,7 @@ module.exports = (function () {
         var limit_gui = (patch && patch.limit_gui != null)
           ? Number(patch.limit_gui) : Number(this.blDraft || cur.limit_gui);
         if (!(limit_gui >= 20 && limit_gui <= 100)) {
-          this.blErr = "Target must be 20–100 % GUI";
+          this.blErr = "Target must be 20–100 % GL UI Reported Charge";
           return;
         }
         // Same gui2gauge floor as glbattlimit / the backend (gauge must be ≥ 50).
@@ -254,7 +254,8 @@ module.exports = (function () {
         // this closes it through the toggle.
         var gauge = this.gaugeOf(limit_gui);
         if (gauge < 50 || gauge > 100) {
-          this.blErr = "limit too low (min ~50% gauge / use higher GUI %)";
+          this.blErr = "Target too low — the charge IC needs at least "
+            + "50 % IC Reported Charge (about 50 % GL UI Reported Charge)";
           return;
         }
         this.blBusy = true; this.blErr = "";
@@ -560,7 +561,9 @@ module.exports = (function () {
           // accent-color keeps the thumb/track on the GL palette without a hex
           // literal; engines without it fall back to the default control colour.
           ".mmb-v input[type=range]{width:180px;vertical-align:middle;accent-color:var(--primary)}",
-          ".mmb-err{font-size:12px;color:var(--error);margin-top:6px}"
+          ".mmb-err{font-size:12px;color:var(--error);margin-top:6px}",
+          // Attribution: deliberately the quietest text on the card.
+          ".mmb-credit{font-size:11px;color:var(--text-hint);margin-top:10px}"
         ].join("");
         var el = document.createElement("style");
         el.id = this.styleId; el.textContent = css;
@@ -582,16 +585,19 @@ module.exports = (function () {
           stats.push(h("div", { staticClass: "mmb-stat" },
             [h("b", value), h("span", label)]));
         };
-        // GUI % leads, gauge follows: the UI always speaks GUI % and shows gauge
-        // as a secondary estimate (battery spec 2026-07-22, decision 3).
-        push("Charge", s ? fmt(s.capGui, 1, " %") : "—");
-        push("Gauge", s ? fmt(s.cap, 0, " %") : "—");
+        // Two scales for one battery, and the labels say which is which:
+        //   GL UI Reported Charge — the rescaled figure GL's admin + LCD show
+        //   IC Reported Charge    — the raw CW221x fuel-gauge reading, and what
+        //                           glbattlimit actually enforces against
+        // GL UI leads, IC follows (battery spec 2026-07-22, decision 3).
+        push("GL UI Reported Charge", s ? fmt(s.capGui, 1, " %") : "—");
+        push("IC Reported Charge", s ? fmt(s.cap, 0, " %") : "—");
         push("Current", s ? fmt(s.cur, 0, " mA") : "—");
         push("Voltage", s ? fmt(s.voltV, 2, " V") : "—");
         push("Temp", s ? fmt(s.temp, 1, " °C") : "—");
         push("State", s ? STATE_LABEL[this.chargeState(s)] : "—");
         push("Limit", bl.available === false ? "n/a"
-          : (bl.enabled ? bl.limit_gui + " % GUI" : "Off"));
+          : (bl.enabled ? bl.limit_gui + " % GL UI" : "Off"));
         return h("div", { staticClass: "mmb-card" }, [
           h("div", { staticClass: "mmb-row" }, stats)
         ]);
@@ -700,7 +706,7 @@ module.exports = (function () {
           if (near) {
             var bits = [this.clock(near.t),
               (near.capGui == null ? "—" : near.capGui.toFixed(1) + "%")
-                + (near.cap == null ? "" : " (gauge " + near.cap + ")"),
+                + (near.cap == null ? "" : " (IC " + near.cap + "%)"),
               (near.cur == null ? "—" : near.cur + " mA"),
               (near.voltV == null ? "—" : near.voltV.toFixed(2) + " V"),
               (near.temp == null ? "—" : near.temp.toFixed(1) + " °C"),
@@ -759,15 +765,15 @@ module.exports = (function () {
                   change: function () { self.applyBattLimit({ limit_gui: self.blDraft }); }
                 }
               }),
-              " " + self.blDraft + " % GUI",
+              " " + self.blDraft + " % GL UI Reported Charge",
               // Tracks the DRAFT, not bl.limit_gauge — the latter is the SAVED
               // value and would lag the thumb during a drag.
               h("span", { staticClass: "mmb-note" },
-                "  (≈ " + self.gaugeOf(self.blDraft) + "% gauge)")
+                "  (≈ " + self.gaugeOf(self.blDraft) + " % IC Reported Charge)")
             ])
           ]));
           var statusLine;
-          if (bl.active) statusLine = "Active · " + (bl.active_gauge != null ? bl.active_gauge + "% gauge" : "on");
+          if (bl.active) statusLine = "Active · " + (bl.active_gauge != null ? bl.active_gauge + " % IC Reported Charge" : "on");
           else if (bl.enabled && !bl.charger_online) statusLine = "Armed · will apply when the charger connects";
           else if (bl.enabled && bl.charger_online) statusLine = "Enabled · not active";
           else statusLine = "Off";
@@ -777,6 +783,10 @@ module.exports = (function () {
           ]));
           if (this.blErr) kids.push(h("div", { staticClass: "mmb-err" }, this.blErr));
         }
+        // Credit, shown in every state of the card (including "not available"):
+        // the whole charge-limit stack is ChiliApple's work, vendored here.
+        kids.push(h("div", { staticClass: "mmb-credit" },
+          "Based on ChiliApple's battery control scripts"));
         return h("div", { staticClass: "mmb-card" }, kids);
       },
     },

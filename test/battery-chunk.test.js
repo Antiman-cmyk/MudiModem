@@ -810,8 +810,8 @@ test('renderLimitCard: shows the form fields once bl has loaded', () => {
   const txt = textOf(tree);
   assert.match(txt, /Battery charge limit/, 'card title');
   assert.match(txt, /Limit charging/, 'toggle label');
-  assert.match(txt, /% GUI/, 'GUI scale label');
-  assert.match(txt, /71% gauge/, 'shows limit_gauge approximation');
+  assert.match(txt, /% GL UI Reported Charge/, 'names the scale the target is set in');
+  assert.match(txt, /71 % IC Reported Charge/, 'shows the IC-scale equivalent');
   // limit_gui is a slider VALUE (domProps), which this harness's textOf never
   // surfaces as text (it only walks .children) - assert on the actual node
   // instead of scraping for a "80" substring that could just as easily match
@@ -872,9 +872,10 @@ test('the readout tracks the DRAFT, not the saved snapshot', () => {
   // saved value is 80 (gauge 71); the user has dragged to 60 but not released.
   const vm = makeVm(c, { bl: Object.assign({}, BL_ARMED), blDraft: 60 });
   const txt = textOf(vm.renderLimitCard(h));
-  assert.match(txt, /60 % GUI/, 'shows the dragged value, not the stored 80');
-  assert.match(txt, /57% gauge/, 'gauge estimate follows the draft (gaugeOf(60) === 57)');
-  assert.doesNotMatch(txt, /71% gauge/, 'must not show the stale saved gauge while dragging');
+  assert.match(txt, /60 % GL UI Reported Charge/, 'shows the dragged value, not the stored 80');
+  assert.match(txt, /57 % IC Reported Charge/, 'IC estimate follows the draft (gaugeOf(60) === 57)');
+  assert.doesNotMatch(txt, /71 % IC Reported Charge/,
+    'must not show the stale saved IC value while dragging');
 });
 
 test('the slider is disabled when the limit is off or a save is in flight', () => {
@@ -900,6 +901,19 @@ test('a stored limit below the slider floor clamps the thumb and saves nothing',
     assert.equal(calls.length, 1, 'the get_battlimit read only - no write');
     assert.equal(calls[0].params[2], 'get_battlimit');
   } finally { unstubRpc(); }
+});
+
+test('the charge-limit card credits ChiliApple in every state', () => {
+  const c = loadChunk();
+  const CREDIT = /Based on ChiliApple's battery control scripts/;
+  const loaded = makeVm(c, { bl: Object.assign({}, BL_ARMED), blDraft: 80 });
+  assert.match(textOf(loaded.renderLimitCard(h)), CREDIT, 'shown with the form');
+  // The attribution is owed whether or not the tool is present, so it must not
+  // sit inside the branch that renders the form.
+  const missing = makeVm(c, { bl: { available: false, error: 'glbattlimit not installed' } });
+  assert.match(textOf(missing.renderLimitCard(h)), CREDIT, 'shown when the tool is unavailable');
+  const loading = makeVm(c, { bl: null });
+  assert.match(textOf(loading.renderLimitCard(h)), CREDIT, 'shown while still loading');
 });
 
 test('gaugeOf matches the backend integer formula at the boundaries', () => {
@@ -945,5 +959,5 @@ test('renderLimitCard status: Active when the limiter is actually holding charge
   const vm = makeVm(c, { bl: Object.assign({}, BL_ACTIVE), blDraft: 80 });
   const txt = textOf(vm.renderLimitCard(h));
   assert.match(txt, /Active ·/, 'Active status');
-  assert.match(txt, /71% gauge/, 'active_gauge shown in the status line');
+  assert.match(txt, /71 % IC Reported Charge/, 'active_gauge shown in the status line');
 });
