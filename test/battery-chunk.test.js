@@ -29,6 +29,39 @@ function seed(now, n, step, fn) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// window.$rpcRequest stub for fetchBattLimit/applyBattLimit — same shape as
+// test/chunk.test.js's stubRpc (that's the harness these two methods were
+// tested against before they moved here from the Config tab; see 8d5d790).
+// Also stubs addEventListener/removeEventListener because mounted() calls
+// window.addEventListener("resize", ...) unconditionally once window exists.
+// ---------------------------------------------------------------------------
+function stubRpc(replies) {
+  const calls = [];
+  const take = () => replies.shift();
+  global.window = {
+    $rpcRequest(method, params, opts) {
+      calls.push({ method, params, opts });
+      const r = take();
+      return (r instanceof Error) ? Promise.reject(r) : Promise.resolve(r);
+    },
+    $getCookie: () => 'tok',
+    addEventListener() {},
+    removeEventListener() {},
+    $axios: {
+      post(url, body, opts) {
+        calls.push({ method: body.method, params: body.params, opts });
+        const r = take();
+        return (r instanceof Error)
+          ? Promise.reject(r)
+          : Promise.resolve({ data: { result: r } });
+      }
+    }
+  };
+  return calls;
+}
+function unstubRpc() { delete global.window; }
+
 test('chunk is one expression exporting a runtime-only component', () => {
   const c = loadChunk();
   assert.equal(c.name, 'mudimodem-battery');
@@ -278,6 +311,149 @@ test('nowMs is skew-corrected to the box clock', () => {
     'the axis follows the box clock, not the browser clock');
 });
 
+// ---------------------------------------------------------------------------
+// Charge-limit form: fetchBattLimit (read) / applyBattLimit (write), ported
+// from test/chunk.test.js (see git show 8d5d790:test/chunk.test.js) when the
+// form moved from the Config tab into this chunk. Same RPC shape
+// (window.$rpcRequest("call", ["sid","mudimodem",method,args])) and same
+// validation rules, just against `vm.bl`/`vm.blDraft`/`vm.blErr`/`vm.blBusy`
+// instead of the old `battLimit`/`battLimitDraft`/`battLimitErr`/`battLimitBusy`.
+// ---------------------------------------------------------------------------
+
+const BL_OFF = {
+  enabled: false, limit_gui: 80, limit_gauge: 71,
+  active: false, active_gauge: null, capacity_gauge: 72, capacity_gui: 81,
+  charger_online: false, available: true, error: null
+};
+const BL_ARMED = {
+  enabled: true, limit_gui: 80, limit_gauge: 71,
+  active: false, active_gauge: null, capacity_gauge: 72, capacity_gui: 81,
+  charger_online: false, available: true, error: null
+};
+const BL_ACTIVE = {
+  enabled: true, limit_gui: 80, limit_gauge: 71,
+  active: true, active_gauge: 71, capacity_gauge: 68, capacity_gui: 77,
+  charger_online: true, available: true, error: null
+};
+const BL_ENABLED_NOT_ACTIVE = {
+  enabled: true, limit_gui: 80, limit_gauge: 71,
+  active: false, active_gauge: null, capacity_gauge: 72, capacity_gui: 81,
+  charger_online: true, available: true, error: null
+};
+
+test('fetchBattLimit stores the snapshot and seeds blDraft from limit_gui', async () => {
+  const calls = stubRpc([Object.assign({}, BL_OFF)]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, {});
+    await vm.fetchBattLimit();
+    assert.equal(calls.length, 1, 'one get_battlimit call');
+    assert.equal(calls[0].params[0], 'sid', 'literal sid placeholder');
+    assert.equal(calls[0].params[1], 'mudimodem');
+    assert.equal(calls[0].params[2], 'get_battlimit');
+    assert.ok(vm.bl && vm.bl.limit_gui === 80, 'stores get_battlimit result');
+    assert.equal(vm.blDraft, 80, 'seeds draft from limit_gui');
+    assert.equal(vm.blErr, '');
+  } finally { unstubRpc(); }
+});
+
+test('fetchBattLimit: a null response is stored as null, not left stuck on a stale value', async () => {
+  const calls = stubRpc([null]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, { bl: Object.assign({}, BL_ACTIVE) });
+    await vm.fetchBattLimit();
+    assert.equal(vm.bl, null, 'a null get_battlimit reply clears any stale snapshot');
+  } finally { unstubRpc(); }
+});
+
+test('fetchBattLimit: a rejection surfaces as blErr, not an eternal Loading', async () => {
+  const calls = stubRpc([Object.assign(new Error('rpc down'), { type: 'timeout' })]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, {});
+    await vm.fetchBattLimit();
+    assert.equal(vm.bl, null, 'bl stays null on rejection');
+    assert.ok(vm.blErr, 'blErr set from the rejection');
+    assert.match(vm.blErr, /timeout|rpc down|request failed/);
+    // renderLimitCard directly - isolates the charge-limit card from the
+    // chart's own loading state, which is unrelated to this behaviour.
+    const txt = textOf(vm.renderLimitCard(h));
+    assert.match(txt, /Battery charge limit/, 'card still present');
+    assert.match(txt, /timeout|rpc down|request failed/, 'error text surfaced in the card');
+    assert.doesNotMatch(txt, /Loading…$/, 'not stuck on the bare Loading placeholder');
+  } finally { unstubRpc(); }
+});
+
+test('applyBattLimit: rejects limit_gui outside 20–100 without making an RPC call', async () => {
+  const calls = stubRpc([]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, { bl: Object.assign({}, BL_OFF), blDraft: 5 });
+    vm.applyBattLimit({ limit_gui: 5 });
+    assert.equal(calls.length, 0, 'no RPC on invalid input - the guard runs before any network call');
+    assert.match(vm.blErr, /20–100/, 'validation error message');
+  } finally { unstubRpc(); }
+});
+
+test('applyBattLimit: rejects a GUI value that maps below gauge 50, without making an RPC call', async () => {
+  const calls = stubRpc([]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, { bl: Object.assign({}, BL_OFF), blDraft: 40 });
+    vm.applyBattLimit({ limit_gui: 40 });
+    assert.equal(calls.length, 0, 'no RPC when the gauge floor rejects the target');
+    assert.match(vm.blErr, /too low|50% gauge/i, 'gauge-floor message');
+  } finally { unstubRpc(); }
+});
+
+test('applyBattLimit: toggling enabled posts set_battlimit and refreshes state', async () => {
+  const calls = stubRpc([Object.assign({}, BL_ARMED)]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, { bl: Object.assign({}, BL_OFF), blDraft: 80 });
+    await vm.applyBattLimit({ enabled: true });
+    assert.equal(calls.length, 1, 'one set_battlimit call');
+    assert.equal(calls[0].params[2], 'set_battlimit');
+    assert.deepEqual(calls[0].params[3], { enabled: true, limit_gui: 80 });
+    assert.equal(vm.bl.enabled, true, 'state updated from the response');
+    assert.equal(vm.blBusy, false);
+  } finally { unstubRpc(); }
+});
+
+test('applyBattLimit: an incomplete error response keeps the prior bl snapshot', async () => {
+  const prior = Object.assign({}, BL_OFF);
+  const calls = stubRpc([{ error: 'tool failed' }]);   // no available / limit_gui
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, { bl: prior, blDraft: 80 });
+    await vm.applyBattLimit({ enabled: true });
+    assert.equal(calls.length, 1, 'set_battlimit called');
+    assert.equal(vm.bl, prior, 'snapshot object not overwritten by an incomplete response');
+    assert.equal(vm.bl.enabled, false, 'prior enabled preserved');
+    assert.match(vm.blErr, /tool failed/, 'error from the response is shown');
+    assert.equal(vm.blBusy, false);
+  } finally { unstubRpc(); }
+});
+
+test('mounted() fetches get_battlimit up front, alongside the history load', async () => {
+  const calls = stubRpc([Object.assign({}, BL_OFF)]);
+  let vm;
+  try {
+    const c = loadChunk();
+    vm = makeVm(c, {});
+    vm.fetchHistory = function () {};   // isolate: history has its own test coverage above
+    c.mounted.call(vm);
+    await Promise.resolve(); await Promise.resolve();
+    const blCalls = calls.filter((x) => x.params && x.params[2] === 'get_battlimit');
+    assert.equal(blCalls.length, 1, 'get_battlimit called once on mount');
+    assert.ok(vm.bl && vm.bl.limit_gui === 80, 'stores the result');
+  } finally {
+    if (vm && vm.poll) clearInterval(vm.poll);
+    unstubRpc();
+  }
+});
+
 function h(tag, data, children) {
   if (Array.isArray(data) || typeof data === 'string') { children = data; data = {}; }
   return { tag, data: data || {}, children };
@@ -401,4 +577,84 @@ test('the status row reports a full battery as "Full", not "Charge blocked"', ()
   // this file already uses for the same reason (see the range-selector test).
   assert.ok(out.includes('Full'), 'a full, trickle-charging battery must not be mislabeled as blocked');
   assert.ok(!out.includes('Charge blocked'), 'must not also claim the charge is blocked');
+});
+
+// ---------------------------------------------------------------------------
+// renderLimitCard status branches — ported from the old Config-tab tests
+// (git show 8d5d790:test/chunk.test.js), rendered against renderLimitCard
+// directly instead of the old renderConfig, since the card has no Config-tab
+// scaffolding around it here.
+// ---------------------------------------------------------------------------
+
+test('renderLimitCard: null bl shows Loading, not a blank card', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { bl: null, blErr: '' });
+  const txt = textOf(vm.renderLimitCard(h));
+  assert.match(txt, /Battery charge limit/, 'card still present');
+  assert.match(txt, /Loading/, 'loading placeholder');
+});
+
+test('renderLimitCard: unavailable shows a static note, no interactive controls', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {
+    bl: { enabled: false, limit_gui: 80, limit_gauge: null, active: false, available: false,
+      error: 'glbattlimit not installed', charger_online: false, capacity_gauge: null, capacity_gui: null }
+  });
+  const txt = textOf(vm.renderLimitCard(h));
+  assert.match(txt, /not available/i, 'static unavailability note');
+  assert.doesNotMatch(txt, /Limit charging/, 'no interactive toggle when the tool is unavailable');
+});
+
+test('renderLimitCard: shows the form fields once bl has loaded', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { bl: Object.assign({}, BL_OFF), blDraft: 80 });
+  const tree = vm.renderLimitCard(h);
+  const txt = textOf(tree);
+  assert.match(txt, /Battery charge limit/, 'card title');
+  assert.match(txt, /Limit charging/, 'toggle label');
+  assert.match(txt, /% GUI/, 'GUI scale label');
+  assert.match(txt, /71% gauge/, 'shows limit_gauge approximation');
+  // limit_gui is a number-input VALUE (domProps), which this harness's textOf
+  // never surfaces as text (it only walks .children) - assert on the actual
+  // node instead of scraping for a "80" substring that could just as easily
+  // match unrelated text.
+  const numberInput = walk(tree).find((n) => n.data.attrs && n.data.attrs.type === 'number');
+  assert.ok(numberInput, 'target number input renders');
+  assert.equal(numberInput.data.domProps.value, 80, 'input value seeded from blDraft/limit_gui');
+});
+
+test('renderLimitCard status: Off when disabled', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { bl: Object.assign({}, BL_OFF), blDraft: 80 });
+  const txt = textOf(vm.renderLimitCard(h));
+  assert.match(txt, /Off/, 'Off status');
+  assert.doesNotMatch(txt, /Active ·/, 'not Active');
+  assert.doesNotMatch(txt, /Armed ·/, 'not Armed');
+  assert.doesNotMatch(txt, /Enabled · not active/, 'not the enabled-not-active line');
+});
+
+test('renderLimitCard status: Armed when enabled and charger offline', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { bl: Object.assign({}, BL_ARMED), blDraft: 80 });
+  const txt = textOf(vm.renderLimitCard(h));
+  assert.match(txt, /Armed · will apply when the charger connects/, 'Armed status');
+  assert.doesNotMatch(txt, /Active ·/, 'not Active');
+  assert.doesNotMatch(txt, /Enabled · not active/, 'not the plugged-in stuck line');
+});
+
+test('renderLimitCard status: Enabled - not active when plugged in but not currently limiting', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { bl: Object.assign({}, BL_ENABLED_NOT_ACTIVE), blDraft: 80 });
+  const txt = textOf(vm.renderLimitCard(h));
+  assert.match(txt, /Enabled · not active/, 'honest stuck/failed-apply line');
+  assert.doesNotMatch(txt, /Armed ·/, 'not Armed while charger is online');
+  assert.doesNotMatch(txt, /Active ·/, 'not Active');
+});
+
+test('renderLimitCard status: Active when the limiter is actually holding charge off', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { bl: Object.assign({}, BL_ACTIVE), blDraft: 80 });
+  const txt = textOf(vm.renderLimitCard(h));
+  assert.match(txt, /Active ·/, 'Active status');
+  assert.match(txt, /71% gauge/, 'active_gauge shown in the status line');
 });
