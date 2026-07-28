@@ -96,5 +96,95 @@ class Trim(unittest.TestCase):
             collectd.trim(os.path.join(d, "absent.jsonl"), 5000, 100)  # no raise
 
 
+def _mkbat(d, **over):
+    """Build a fake /sys/class/power_supply tree. Values are the real ones
+    captured off the box 2026-07-27 (unplugged/discharging)."""
+    bat = os.path.join(d, "cw221X-bat")
+    chg = os.path.join(d, "charger")
+    os.makedirs(bat, exist_ok=True)
+    os.makedirs(chg, exist_ok=True)
+    fields = {
+        "cw221X-bat/capacity": "70", "cw221X-bat/voltage_now": "4010000",
+        "cw221X-bat/current_now": "-363", "cw221X-bat/temp": "316",
+        "cw221X-bat/cycle_count": "4", "cw221X-bat/health": "Good",
+        "charger/online": "0", "charger/status": "Discharging",
+        "charger/charge_type": "N/A",
+    }
+    fields.update(over)
+    for rel, val in fields.items():
+        if val is None:                       # None => the node does not exist
+            p = os.path.join(d, rel)
+            if os.path.exists(p):
+                os.unlink(p)
+            continue
+        with open(os.path.join(d, rel), "w") as f:
+            f.write(val + "\n")
+    return d
+
+
+class ReadBattery(unittest.TestCase):
+    def test_units_converted_per_node(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = collectd.read_battery(_mkbat(d), t=1000)
+            self.assertEqual(s["t"], 1000)
+            self.assertEqual(s["cap"], 70)        # raw gauge %, NOT converted to GUI
+            self.assertEqual(s["volt"], 4010)     # uV -> mV
+            self.assertEqual(s["temp"], 31.6)     # deci-C -> C
+            self.assertEqual(s["cycles"], 4)
+
+    def test_current_is_milliamps_already_and_keeps_its_sign(self):
+        # glbattlimit line 166: "mA (+charging -discharging 0=blocked)".
+        # Dividing by 1000 here would be the obvious wrong guess (the Linux
+        # power_supply class normally uses uA) and would silently flatten the lane.
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(collectd.read_battery(_mkbat(d), t=1)["cur"], -363)
+        with tempfile.TemporaryDirectory() as d:
+            s = collectd.read_battery(_mkbat(d, **{"cw221X-bat/current_now": "1183"}), t=1)
+            self.assertEqual(s["cur"], 1183)
+
+    def test_blocked_is_zero_current_while_online(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = collectd.read_battery(_mkbat(d, **{
+                "cw221X-bat/current_now": "0", "charger/online": "1",
+                "charger/status": "Full", "charger/charge_type": "Trickle"}), t=1)
+            self.assertEqual(s["cur"], 0)
+            self.assertEqual(s["online"], 1)
+            self.assertEqual(s["status"], "Full")
+            self.assertEqual(s["ctype"], "Trickle")
+
+    def test_missing_gauge_returns_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            _mkbat(d, **{"cw221X-bat/capacity": None})
+            self.assertIsNone(collectd.read_battery(d, t=1))
+
+    def test_absent_tree_returns_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(collectd.read_battery(os.path.join(d, "nope"), t=1))
+
+    def test_garbage_numeric_node_becomes_none_without_killing_the_sample(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = collectd.read_battery(_mkbat(d, **{"cw221X-bat/temp": "n/a"}), t=1)
+            self.assertIsNotNone(s)
+            self.assertIsNone(s["temp"])
+            self.assertEqual(s["cap"], 70)
+
+    def test_charger_nodes_absent_degrade_to_offline(self):
+        with tempfile.TemporaryDirectory() as d:
+            _mkbat(d, **{"charger/online": None, "charger/status": None,
+                         "charger/charge_type": None})
+            s = collectd.read_battery(d, t=1)
+            self.assertIsNotNone(s, "battery data survives a missing charger node")
+            self.assertEqual(s["online"], 0)
+            self.assertEqual(s["status"], "")
+
+
+class BatteryConstants(unittest.TestCase):
+    def test_retention_matches_20s_cadence_over_24h(self):
+        self.assertEqual(collectd.BATT_INTERVAL, 20)
+        self.assertEqual(collectd.BATT_MAX_AGE, 24 * 3600 * 1000)
+        # 24h at 20s = 4320 samples; the cap is a backstop above that.
+        self.assertGreater(collectd.BATT_MAX_LINE, 4320)
+
+
 if __name__ == "__main__":
     unittest.main()
