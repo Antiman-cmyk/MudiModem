@@ -191,9 +191,40 @@ test('chargeState distinguishes blocked from merely idle', () => {
   assert.equal(vm.chargeState({ online: 0, cur: -363 }), 'discharging');
 });
 
+test('chargeState reports full for a genuinely full battery, even at zero current', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  // A battery that finished charging sits on trickle: online, 0 mA - the same
+  // signature glbattlimit uses for "held off". `status` is what tells them
+  // apart, so it must win over the current-based rule, not the reverse.
+  assert.equal(vm.chargeState({ online: 1, cur: 0, status: 'Full' }), 'full');
+  // status is a raw sysfs string - tolerate whitespace and case.
+  assert.equal(vm.chargeState({ online: 1, cur: 0, status: '  full  ' }), 'full');
+  assert.equal(vm.chargeState({ online: 1, cur: 0, status: 'FULL' }), 'full');
+});
+
+test('chargeState still reports blocked when status says something other than Full', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  assert.equal(vm.chargeState({ online: 1, cur: 0, status: 'Not charging' }), 'blocked');
+  assert.equal(vm.chargeState({ online: 1, cur: 0, status: 'Charging' }), 'blocked');
+});
+
+test('chargeState falls through to the current-based rules when status is missing', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  // Older retained samples predate the `status` field entirely - must not
+  // crash, and a missing status must not silently read as "full".
+  assert.equal(vm.chargeState({ online: 1, cur: 0 }), 'blocked');
+  assert.equal(vm.chargeState({ online: 1, cur: 0, status: '' }), 'blocked');
+  assert.equal(vm.chargeState({ online: 1, cur: 1183 }), 'charging');
+});
+
 test('stateRuns collapses consecutive samples into labelled runs', () => {
   const c = loadChunk();
   const now = Date.now();
+  // Second half is a battery that finished charging (status Full) settling
+  // onto trickle at 0 mA - a distinct "full" state, not "blocked".
   const samples = seed(now, 6, 20000, (i) => (
     i < 3 ? { online: 1, cur: 1183, status: 'Charging' }
           : { online: 1, cur: 0, status: 'Full' }));
@@ -201,7 +232,26 @@ test('stateRuns collapses consecutive samples into labelled runs', () => {
   const runs = vm.stateRuns();
   assert.equal(runs.length, 2);
   assert.equal(runs[0].v, 'charging');
-  assert.equal(runs[1].v, 'blocked');
+  assert.equal(runs[1].v, 'full');
+});
+
+test('a full<->charging transition is not a plug/unplug event', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  // Contiguous samples, no gap: bulk-charging (cur>0) settles into trickle at
+  // full (cur=0, status=Full). Neither side is "discharging", so this must
+  // NOT be read as an unplug/replug - the charger never left.
+  const samples = seed(now, 10, 20000, (i) => (
+    i < 5 ? { online: 1, cur: 1183, status: 'Charging', cap: 99 }
+          : { online: 1, cur: 0, status: 'Full', cap: 100 }));
+  const vm = makeVm(c, { samples, serverNow: now, serverNowAt: now, winW: 15, loading: false });
+  const runs = vm.stateRuns();
+  assert.equal(runs.length, 2);
+  assert.equal(runs[0].v, 'charging');
+  assert.equal(runs[1].v, 'full');
+  const out = textOf(render(vm, c));
+  assert.ok(!/\b(un)?plugged\b/i.test(out),
+    'full<->charging must not draw a plug/unplug tick - the charger never left');
 });
 
 test('stateRuns breaks across a gap longer than GAP_MS, like segments does', () => {
@@ -260,8 +310,18 @@ test('renders all four lane labels once samples exist', () => {
     samples: seed(now, 30, 20000), serverNow: now, serverNowAt: now,
     loading: false, bl: { available: true, enabled: true, limit_gui: 80, gui_m: 13867, gui_b: 189300 }
   });
-  const out = textOf(render(vm, c));
-  for (const label of ['Charge', 'Current', 'Voltage', 'Temperature'])
+  const tree = render(vm, c);
+  // Assert against renderLanes' OWN svg subtree, not the whole component: the
+  // bare words 'Charge'/'Current'/'Voltage' are also emitted unconditionally
+  // by renderStatusRow's stat captions and renderLimitCard's heading, so a
+  // whole-page text check on those words would pass even if renderLanes never
+  // drew a label. Scoping to the '.mmb-lanes' svg, plus asserting the FULL
+  // label strings with units (which appear nowhere else), makes this
+  // discriminating for all four lanes, not just Temperature/Temp.
+  const svg = walk(tree).find((n) => n.data && n.data.staticClass === 'mmb-lanes');
+  assert.ok(svg, 'lanes svg missing');
+  const out = textOf(svg);
+  for (const label of ['Charge · %', 'Current · mA', 'Voltage · V', 'Temperature · °C'])
     assert.ok(out.includes(label), 'missing lane: ' + label);
 });
 
@@ -286,9 +346,15 @@ test('the chart still renders when glbattlimit is unavailable', () => {
     samples: seed(now, 30, 20000), serverNow: now, serverNowAt: now, loading: false,
     bl: { available: false, error: 'glbattlimit not installed' }
   });
-  const out = textOf(render(vm, c));
-  assert.ok(out.includes('Charge'), 'chart must not depend on the charge-limit tool');
-  assert.match(out, /not available/i);
+  const tree = render(vm, c);
+  // Same fix as the lane-labels test above: check the actual '.mmb-lanes' svg
+  // (and a full, unit-bearing label) rather than a bare word ('Charge') that
+  // renderStatusRow/renderLimitCard emit regardless of whether the chart drew.
+  const svg = walk(tree).find((n) => n.data && n.data.staticClass === 'mmb-lanes');
+  assert.ok(svg, 'chart must not depend on the charge-limit tool');
+  assert.ok(textOf(svg).includes('Charge · %'),
+    'lane label missing - the chart must still draw when glbattlimit is unavailable');
+  assert.match(textOf(tree), /not available/i);
 });
 
 test('the range selector offers the four spec windows', () => {
@@ -310,10 +376,29 @@ test('render survives a sample stream full of nulls', () => {
 test('the status row reports the blocked state in words', () => {
   const c = loadChunk();
   const now = Date.now();
-  const samples = seed(now, 10, 20000, () => ({ online: 1, cur: 0, status: 'Full', cap: 71 }));
+  // status is NOT 'Full' here - this is the limiter genuinely holding charge
+  // off below the target, not a battery that finished charging.
+  const samples = seed(now, 10, 20000, () => ({ online: 1, cur: 0, status: 'Not charging', cap: 71 }));
   const vm = makeVm(c, {
     samples, serverNow: now, serverNowAt: now, loading: false,
     bl: { available: true, enabled: true, limit_gui: 80, gui_m: 13867, gui_b: 189300 }
   });
   assert.match(textOf(render(vm, c)), /Charge blocked/i);
+});
+
+test('the status row reports a full battery as "Full", not "Charge blocked"', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const samples = seed(now, 10, 20000, () => ({ online: 1, cur: 0, status: 'Full', cap: 100 }));
+  const vm = makeVm(c, {
+    samples, serverNow: now, serverNowAt: now, loading: false,
+    bl: { available: true, enabled: true, limit_gui: 80, gui_m: 13867, gui_b: 189300 }
+  });
+  const out = textOf(render(vm, c));
+  // No separator between adjacent stat nodes in this fake render harness
+  // (e.g. "...°CTempFullState80..."), so there's no word boundary to anchor
+  // on either side of "Full" - a plain substring check is what the rest of
+  // this file already uses for the same reason (see the range-selector test).
+  assert.ok(out.includes('Full'), 'a full, trickle-charging battery must not be mislabeled as blocked');
+  assert.ok(!out.includes('Charge blocked'), 'must not also claim the charge is blocked');
 });

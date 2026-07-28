@@ -42,12 +42,15 @@ module.exports = (function () {
   var GUI_M = 13867, GUI_B = 189300;
   var STATE_COLOR = {
     charging:    "var(--success)",
+    // A full battery on mains is a healthy, unremarkable state - same token
+    // as charging, not the `blocked` warning colour.
+    full:        "var(--success)",
     blocked:     "var(--warning)",
     draining:    "var(--error)",
     discharging: "var(--text-hint)"
   };
   var STATE_LABEL = {
-    charging: "Charging", blocked: "Charge blocked",
+    charging: "Charging", full: "Full", blocked: "Charge blocked",
     draining: "Draining on power", discharging: "On battery"
   };
 
@@ -355,8 +358,19 @@ module.exports = (function () {
       // What the charger is doing, per sample.
       // `blocked` (online with exactly 0 mA) is glbattlimit's own signature for
       // "charging is being held off" — far crisper than reading `status`.
+      // ⚠️ BUT a battery that simply finished charging also sits online at
+      // 0 mA (trickle) — the same signature. `status` is what tells the two
+      // apart ("Full" vs "Charging"/"Not charging"), so it must be checked
+      // FIRST, ahead of the current-based rule, or a full/healthy battery
+      // reads as "Charge blocked" — exactly the misrepresentation this
+      // project exists to correct. `status` is a raw sysfs string, so it's
+      // trimmed/lowercased; a missing/empty value (older retained samples
+      // predate this field) falls through to the current-based rules below,
+      // never crashes, and never silently becomes "full".
       chargeState: function (s) {
         if (!s.online) return "discharging";
+        var status = (s.status == null ? "" : String(s.status)).trim().toLowerCase();
+        if (status === "full") return "full";
         if (s.cur === 0) return "blocked";
         if (s.cur > 0) return "charging";
         return "draining";
