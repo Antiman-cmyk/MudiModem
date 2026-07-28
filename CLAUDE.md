@@ -733,9 +733,22 @@ MudiModem/
   read as ZERO. The charge-limit form **moved out of the Config tab** into this chunk (one owner).
   ⚠️ **Unit traps, verified on box:** `current_now` is **mA already** (the Linux power_supply class
   normally uses µA — `glbattlimit` line 166 documents mA, and the physics agree), signed
-  **+charging / −discharging**, and **`0` means BLOCKED** — so "the limit is engaged" is
-  `cur == 0 && online == 1`, which is what the chart marks. Meanwhile `voltage_now` on the same
-  node is µV and the *charger* node's limits are µA. Convert per node.
+  **+charging / −discharging**. Meanwhile `voltage_now` on the same node is µV and the *charger*
+  node's limits are µA. Convert per node.
+  ⚠️⚠️ **`cur == 0 && online == 1` does NOT by itself mean "the limiter is engaged"** — it means
+  only that **charging stopped**, and it cannot say why. This cost a full review cycle, twice, in
+  opposite directions. **`glbattlimit` blocks by setting the buck `vreg` BELOW the cell voltage
+  (`src/sbin/glbattlimit` ~line 74) — which is exactly what makes the charger report
+  `status=Full` + `charge_type=Trickle`.** So `status` cannot disambiguate either: the limiter
+  *manufactures* the full-battery signature. Measured live 2026-07-28 with the limiter active at an
+  80 % GUI target: `capacity=71` (= `gui_to_gauge(80)` exactly), `current_now=0`, `online=1`,
+  `status=Full`, `charge_type=Trickle`, `charge_en=0`, `vreg=3900000` (factory `4400000`) — a
+  reading indistinguishable from a genuinely full cell except that a full cell sits near
+  **86–100 % gauge**, not 71.
+  ⇒ **Attribution needs the limiter's OWN state, so the collector records it per sample**
+  (`lim` / `lim_gauge`, from glbattlimit's pid file — the same signal `glbattlimit status` and
+  `get_battlimit` use, so the chart and the limit card cannot disagree). Samples predating those
+  fields degrade to `idle`, never to a confident `full`/`blocked`.
   Spec: `docs/superpowers/specs/2026-07-27-battery-tab-history-design.md`;
   plan: `docs/superpowers/plans/2026-07-27-battery-tab-history.md`.
 - 🔭 Later: `install.sh`/`uninstall.sh` (device-guarded + idempotent, mirroring MudiUI's); register
