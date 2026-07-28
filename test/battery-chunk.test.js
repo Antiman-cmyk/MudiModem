@@ -1209,3 +1209,47 @@ test('avgCurrent takes the window as an argument (no requadratic)', () => {
   vm.avgCurrent(ss, 60000);
   assert.equal(calls, 0, 'avgCurrent must not recompute the sample window');
 });
+
+// ---------------------------------------------------------------------------
+// Chart legibility. The axis labels and the hover readout shipped at 8.5–10
+// viewBox units, which is ~8.5–10 CSS px (the viewBox width is the measured
+// pixel width and preserveAspectRatio is "none", so the scale is ~1:1).
+// ---------------------------------------------------------------------------
+
+function lanesSvg(vm, ss) {
+  return vm.renderLanes(h, ss);
+}
+
+test('no chart text is smaller than 10 units', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const ss = seed(now, 60, 20000, (i) => ({ cap: 71 - Math.floor(i / 10), cur: -500 }))
+    .map((s) => Object.assign(s, { capGui: 78.1, voltV: 4.01, m: 0 }));
+  const vm = makeVm(c, { samples: ss, serverNow: now, serverNowAt: now, winW: 60,
+    bl: { enabled: true, limit_gui: 80, gui_m: 13867, gui_b: 189300 }, cursor: -5 });
+  const sizes = walk(lanesSvg(vm, vm.winSamples()))
+    .filter((n) => n.tag === 'text' && n.data.attrs && n.data.attrs['font-size'] != null)
+    .map((n) => Number(n.data.attrs['font-size']));
+  assert.ok(sizes.length >= 5, 'found the chart text nodes, got ' + sizes.length);
+  const tiny = sizes.filter((s) => s < 10);
+  assert.deepEqual(tiny, [], 'every chart label is at least 10 units, got ' + JSON.stringify(sizes));
+});
+
+test('the hover readout fits inside the svg height', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const ss = seed(now, 60, 20000, () => ({ cur: -500 }))
+    .map((s) => Object.assign(s, { capGui: 78.1, voltV: 4.01, m: 0 }));
+  const vm = makeVm(c, { samples: ss, serverNow: now, serverNowAt: now, winW: 60,
+    bl: {}, cursor: -5 });
+  const svg = lanesSvg(vm, vm.winSamples());
+  const height = Number(svg.data.attrs.height);
+  // Every text baseline, plus its descender, must sit inside the viewBox —
+  // otherwise the readout is silently clipped at the bottom of the chart.
+  walk(svg).filter((n) => n.tag === 'text' && n.data.attrs).forEach((n) => {
+    const y = Number(n.data.attrs.y), fs = Number(n.data.attrs['font-size'] || 10);
+    assert.ok(y + fs * 0.3 <= height,
+      'text at y=' + y + ' (size ' + fs + ') overflows svg height ' + height);
+    assert.ok(y - fs >= 0, 'text at y=' + y + ' (size ' + fs + ') clips off the top');
+  });
+});

@@ -43,7 +43,17 @@ module.exports = (function () {
   // poll on a travel router's cellular link is normal and must not alarm;
   // three in a row (~30 s) means the chart is stale and the user should know.
   var FAIL_NOTE_AFTER = 3;
-  var PADL = 42, PADR = 12, LANE_GAP = 16, BAND_H = 9, TOP = 18;
+  // TOP is the headroom above the first lane; the plug/unplug tick labels hang
+  // in it, so it has to clear FS_TICK's ascender or they clip off the top.
+  var PADL = 42, PADR = 12, LANE_GAP = 16, BAND_H = 9, TOP = 24;
+  // SVG type sizes, in viewBox units — and since the viewBox width is set to the
+  // measured pixel width with preserveAspectRatio="none", these are ~CSS px.
+  // Raised from 8.5–10, which was too small to read comfortably.
+  var FS_LANE = 11.5,      // lane titles
+      FS_SCALE = 10.5,     // y-domain bounds
+      FS_TICK = 10.5,      // target line + plug/unplug labels
+      FS_AXIS = 11,        // x-axis times
+      FS_READOUT = 12.5;   // the hover readout under the axis
   // Fallback GUI fit, mirroring glbattlimit + the Lua backend. Only used before
   // get_battlimit lands; the served gui_m/gui_b win.
   var GUI_M = 13867, GUI_B = 189300;
@@ -783,10 +793,10 @@ module.exports = (function () {
             kids.push(h("line", { attrs: { x1: PADL, x2: W - PADR, y1: yy, y2: yy,
               stroke: "var(--divider)", "stroke-width": 1 } }));
           });
-          kids.push(h("text", { attrs: { x: PADL, y: laneTop - 4, "font-size": 9.5,
+          kids.push(h("text", { attrs: { x: PADL, y: laneTop - 6, "font-size": FS_LANE,
             fill: "var(--text-badge)" } }, L.label));
-          [[d1, laneTop + 8], [d0, laneTop + L.h - 2]].forEach(function (p) {
-            kids.push(h("text", { attrs: { x: PADL - 5, y: p[1], "font-size": 8.5,
+          [[d1, laneTop + 10], [d0, laneTop + L.h - 3]].forEach(function (p) {
+            kids.push(h("text", { attrs: { x: PADL - 5, y: p[1], "font-size": FS_SCALE,
               "text-anchor": "end", fill: "var(--text-hint)" } },
               Number(p[0]).toFixed(L.dec)));
           });
@@ -806,7 +816,7 @@ module.exports = (function () {
             kids.push(h("line", { attrs: { class: "mmb-target",
               x1: PADL, x2: W - PADR, y1: yt, y2: yt, stroke: "var(--warning)",
               "stroke-width": 1.25, "stroke-dasharray": "5 3" } }));
-            kids.push(h("text", { attrs: { x: W - PADR, y: yt - 3, "font-size": 8.5,
+            kids.push(h("text", { attrs: { x: W - PADR, y: yt - 3, "font-size": FS_TICK,
               "text-anchor": "end", fill: "var(--warning)" } },
               "target " + self.bl.limit_gui + "%"));
           }
@@ -840,16 +850,16 @@ module.exports = (function () {
           var xe = self.xOf(runs[i].m0);
           kids.push(h("line", { attrs: { x1: xe, x2: xe, y1: TOP - 10, y2: bandY + BAND_H,
             stroke: "var(--text-hint)", "stroke-width": 1, "stroke-dasharray": "1 3" } }));
-          kids.push(h("text", { attrs: { x: xe + 3, y: TOP - 12, "font-size": 8.5,
+          kids.push(h("text", { attrs: { x: xe + 3, y: TOP - 13, "font-size": FS_TICK,
             fill: "var(--text-hint)" } }, isOn ? "plugged" : "unplugged"));
         }
 
         // ---- x axis
-        var axisY = bandY + BAND_H + 11;
+        var axisY = bandY + BAND_H + 13;
         var step = TICKSTEP[this.winW] || 10;
         for (var m = -this.winW; m <= 0; m += step) {
           var x = this.xOf(m);
-          kids.push(h("text", { attrs: { x: x, y: axisY, "font-size": 9,
+          kids.push(h("text", { attrs: { x: x, y: axisY, "font-size": FS_AXIS,
             "text-anchor": "middle", fill: "var(--text-hint)" } },
             m === 0 ? "now" : (m + " m")));
         }
@@ -868,12 +878,12 @@ module.exports = (function () {
               (near.voltV == null ? "—" : near.voltV.toFixed(2) + " V"),
               (near.temp == null ? "—" : near.temp.toFixed(1) + " °C"),
               STATE_LABEL[this.chargeState(near)]];
-            kids.push(h("text", { attrs: { x: PADL, y: axisY + 12, "font-size": 10,
+            kids.push(h("text", { attrs: { x: PADL, y: axisY + 16, "font-size": FS_READOUT,
               fill: "var(--text-primary)" } }, bits.join("  ·  ")));
           }
         }
 
-        var H = axisY + 20;
+        var H = axisY + 24;
         return h("svg", {
           ref: "lanes", staticClass: "mmb-lanes",
           attrs: { viewBox: "0 0 " + W + " " + H, height: H,
