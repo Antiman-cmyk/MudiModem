@@ -121,8 +121,7 @@ whether the limit is *Off*, *Armed* (will apply when the charger connects), or *
 with which one it is: **GL UI Reported Charge** (what GL's admin and the front panel show) and **IC
 Reported Charge** (the raw fuel-gauge reading, which is what the limiter actually enforces against).
 
-The charge-limit stack is based on **[ChiliApple](https://github.com/ChiliApple)'s battery control
-scripts**; this tab exists because of their issue #1.
+The charge-limit stack is based on **[ChiliApple](https://github.com/ChiliApple)'s battery control scripts**
 
 ### 🖥️ LCD Display
 
@@ -145,7 +144,7 @@ Battery charts rather than polling the modem itself, so the front panel costs th
 
 ## Installing it
 
-One line — no app store, no firmware flash. From a **root shell on the router** 
+From a **root shell on the router** 
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/kevinherzig/MudiModem/main/install.sh | sh
