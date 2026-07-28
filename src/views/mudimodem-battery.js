@@ -392,11 +392,286 @@ module.exports = (function () {
         var d = new Date(t), p = function (n) { return (n < 10 ? "0" : "") + n; };
         return p(d.getHours()) + ":" + p(d.getMinutes());
       },
-      injectStyle: function () { /* Task 4 */ }
+
+      // ---- interaction ----
+      mFromEvent: function (e) {
+        var el = this.$refs && this.$refs.lanes; if (!el) return null;
+        var r = el.getBoundingClientRect(); if (!r.width) return null;
+        // clientX is CSS px within the container; the SVG scales its viewBox to
+        // the rendered width. Convert px -> viewBox units before applying the
+        // geometry, or the drawn cursor drifts right of the pointer.
+        var ux = (e.clientX - r.left) * this.width / r.width;
+        var plotW = this.width - PADL - PADR;
+        return -this.winW + (ux - PADL) / plotW * this.winW;
+      },
+      clampM: function (m) { return Math.max(-this.winW, Math.min(0, m)); },
+      onMove: function (e) {
+        if (this.pinnedM != null) return;
+        var m = this.mFromEvent(e); if (m == null) return;
+        this.cursor = this.clampM(m);
+      },
+      onLeave: function () { if (this.pinnedM == null) this.cursor = null; },
+      onClick: function (e) {
+        if (this.pinnedM != null) { this.pinnedM = null; return; }
+        var m = this.mFromEvent(e); if (m == null) return;
+        this.pinnedM = this.cursor = this.clampM(m);
+      },
+
+      injectStyle: function () {
+        if (typeof document === "undefined" || document.getElementById(this.styleId)) return;
+        // GL theme tokens only — never hand-picked colours (CLAUDE.md §8).
+        var css = [
+          ".mmb{display:flex;flex-direction:column;gap:12px}",
+          ".mmb-card{background:var(--card-bg,var(--bg-content));border-radius:8px;padding:12px 14px}",
+          ".mmb-h{font-weight:600;margin-bottom:8px;color:var(--text-primary)}",
+          ".mmb-row{display:flex;flex-wrap:wrap;gap:16px;align-items:baseline}",
+          ".mmb-stat{display:flex;flex-direction:column;min-width:84px}",
+          ".mmb-stat b{font-size:18px;font-weight:600;color:var(--text-primary);line-height:1.25}",
+          ".mmb-stat span{font-size:11px;color:var(--text-badge)}",
+          ".mmb-seg{display:inline-flex;gap:2px}",
+          ".mmb-seg button{border:0;background:var(--bg-body);color:var(--text-badge);",
+          "padding:3px 10px;font-size:12px;border-radius:4px;cursor:pointer}",
+          ".mmb-seg button.on{background:var(--primary);color:#fff}",
+          ".mmb-lanes{width:100%;display:block;cursor:crosshair}",
+          ".mmb-note{font-size:12px;color:var(--text-badge);margin-top:6px}",
+          ".mmb-kv{display:flex;align-items:center;gap:10px;margin:6px 0}",
+          ".mmb-k{font-size:13px;color:var(--text-badge);min-width:92px}",
+          ".mmb-v{font-size:13px;color:var(--text-primary)}",
+          ".mmb-v input[type=number]{width:72px}",
+          ".mmb-err{font-size:12px;color:var(--error);margin-top:6px}"
+        ].join("");
+        var el = document.createElement("style");
+        el.id = this.styleId; el.textContent = css;
+        document.head.appendChild(el);
+      },
+
+      // ---- render helpers ----
+      renderStatusRow: function (h) {
+        var ss = this.winSamples();
+        var s = ss.length ? ss[ss.length - 1] : null;
+        var bl = this.bl || {};
+        var fmt = function (v, dec, unit) {
+          return (v == null) ? "—" : (dec ? Number(v).toFixed(dec) : String(v)) + unit;
+        };
+        var stats = [];
+        var push = function (label, value) {
+          stats.push(h("div", { staticClass: "mmb-stat" },
+            [h("b", value), h("span", label)]));
+        };
+        // GUI % leads, gauge follows: the UI always speaks GUI % and shows gauge
+        // as a secondary estimate (battery spec 2026-07-22, decision 3).
+        push("Charge", s ? fmt(s.capGui, 1, " %") : "—");
+        push("Gauge", s ? fmt(s.cap, 0, " %") : "—");
+        push("Current", s ? fmt(s.cur, 0, " mA") : "—");
+        push("Voltage", s ? fmt(s.voltV, 2, " V") : "—");
+        push("Temp", s ? fmt(s.temp, 1, " °C") : "—");
+        push("State", s ? STATE_LABEL[this.chargeState(s)] : "—");
+        push("Limit", bl.available === false ? "n/a"
+          : (bl.enabled ? bl.limit_gui + " % GUI" : "Off"));
+        return h("div", { staticClass: "mmb-card" }, [
+          h("div", { staticClass: "mmb-row" }, stats)
+        ]);
+      },
+
+      renderLanes: function (h) {
+        var self = this, W = this.width, kids = [];
+        var cols = Math.max(40, Math.round((W - PADL - PADR) / 2));
+        var top = TOP;
+
+        LANES.forEach(function (L) {
+          var d = self.domainFor(L), d0 = d[0], d1 = d[1];
+          var laneTop = top;
+
+          // frame + label + the two domain bounds (each lane has its own scale,
+          // so a single shared y-axis could not label them)
+          [laneTop, laneTop + L.h].forEach(function (yy) {
+            kids.push(h("line", { attrs: { x1: PADL, x2: W - PADR, y1: yy, y2: yy,
+              stroke: "var(--divider)", "stroke-width": 1 } }));
+          });
+          kids.push(h("text", { attrs: { x: PADL, y: laneTop - 4, "font-size": 9.5,
+            fill: "var(--text-badge)" } }, L.label));
+          [[d1, laneTop + 8], [d0, laneTop + L.h - 2]].forEach(function (p) {
+            kids.push(h("text", { attrs: { x: PADL - 5, y: p[1], "font-size": 8.5,
+              "text-anchor": "end", fill: "var(--text-hint)" } },
+              Number(p[0]).toFixed(L.dec)));
+          });
+
+          // zero rule where zero is meaningful — the Current lane's 0 is the
+          // "charging blocked" line, so it gets drawn, not implied.
+          if (L.zero && d0 < 0 && d1 > 0) {
+            var yz = self.yIn(L, laneTop, 0);
+            kids.push(h("line", { attrs: { x1: PADL, x2: W - PADR, y1: yz, y2: yz,
+              stroke: "var(--divider)", "stroke-width": 1, "stroke-dasharray": "2 3" } }));
+          }
+
+          // the target line lives on the Charge lane only, and only when armed
+          if (L.key === "capGui" && self.bl && self.bl.enabled
+              && typeof self.bl.limit_gui === "number") {
+            var yt = self.yIn(L, laneTop, self.bl.limit_gui);
+            kids.push(h("line", { attrs: { class: "mmb-target",
+              x1: PADL, x2: W - PADR, y1: yt, y2: yt, stroke: "var(--warning)",
+              "stroke-width": 1.25, "stroke-dasharray": "5 3" } }));
+            kids.push(h("text", { attrs: { x: W - PADR, y: yt - 3, "font-size": 8.5,
+              "text-anchor": "end", fill: "var(--warning)" } },
+              "target " + self.bl.limit_gui + "%"));
+          }
+
+          // one path per contiguous segment: a break is an outage, never bridged
+          self.segments(L.key).forEach(function (seg) {
+            var pts = self.reduce(seg, cols), dstr = "";
+            pts.forEach(function (p, i) {
+              dstr += (i ? "L" : "M") + self.xOf(p.m).toFixed(1) + " "
+                + self.yIn(L, laneTop, p.v).toFixed(1) + " ";
+            });
+            if (dstr) kids.push(h("path", { attrs: { fill: "none", stroke: L.color,
+              "stroke-width": 1.75, "stroke-linejoin": "round", "stroke-linecap": "round",
+              d: dstr.trim() } }));
+          });
+
+          top = laneTop + L.h + LANE_GAP;
+        });
+
+        // ---- charger-state band + plug/unplug ticks, under the lanes
+        var bandY = top - LANE_GAP + 6;
+        var runs = this.stateRuns();
+        runs.forEach(function (r) {
+          var x0 = self.xOf(r.m0), x1 = self.xOf(r.m1);
+          kids.push(h("rect", { attrs: { x: x0, y: bandY, width: Math.max(1, x1 - x0),
+            height: BAND_H, fill: STATE_COLOR[r.v], "fill-opacity": 0.55 } }));
+        });
+        for (var i = 1; i < runs.length; i++) {
+          var wasOn = runs[i - 1].v !== "discharging", isOn = runs[i].v !== "discharging";
+          if (wasOn === isOn) continue;                 // not a plug/unplug edge
+          var xe = self.xOf(runs[i].m0);
+          kids.push(h("line", { attrs: { x1: xe, x2: xe, y1: TOP - 10, y2: bandY + BAND_H,
+            stroke: "var(--text-hint)", "stroke-width": 1, "stroke-dasharray": "1 3" } }));
+          kids.push(h("text", { attrs: { x: xe + 3, y: TOP - 12, "font-size": 8.5,
+            fill: "var(--text-hint)" } }, isOn ? "plugged" : "unplugged"));
+        }
+
+        // ---- x axis
+        var axisY = bandY + BAND_H + 11;
+        var step = TICKSTEP[this.winW] || 10;
+        for (var m = -this.winW; m <= 0; m += step) {
+          var x = this.xOf(m);
+          kids.push(h("text", { attrs: { x: x, y: axisY, "font-size": 9,
+            "text-anchor": "middle", fill: "var(--text-hint)" } },
+            m === 0 ? "now" : (m + " m")));
+        }
+
+        // ---- hover cursor + readout
+        if (this.cursor != null) {
+          var cx = this.xOf(this.cursor);
+          kids.push(h("line", { attrs: { x1: cx, x2: cx, y1: TOP, y2: bandY + BAND_H,
+            stroke: "var(--text-hint)", "stroke-width": 1 } }));
+          var near = this.nearestSample(this.cursor);
+          if (near) {
+            var bits = [this.clock(near.t),
+              (near.capGui == null ? "—" : near.capGui.toFixed(1) + "%")
+                + (near.cap == null ? "" : " (gauge " + near.cap + ")"),
+              (near.cur == null ? "—" : near.cur + " mA"),
+              (near.voltV == null ? "—" : near.voltV.toFixed(2) + " V"),
+              (near.temp == null ? "—" : near.temp.toFixed(1) + " °C"),
+              STATE_LABEL[this.chargeState(near)]];
+            kids.push(h("text", { attrs: { x: PADL, y: axisY + 12, "font-size": 10,
+              fill: "var(--text-primary)" } }, bits.join("  ·  ")));
+          }
+        }
+
+        var H = axisY + 20;
+        return h("svg", {
+          ref: "lanes", staticClass: "mmb-lanes",
+          attrs: { viewBox: "0 0 " + W + " " + H, height: H,
+            preserveAspectRatio: "none" },
+          on: { mousemove: this.onMove, mouseleave: this.onLeave, click: this.onClick }
+        }, kids);
+      },
+
+      renderLimitCard: function (h) {
+        var self = this, bl = this.bl, kids = [h("div", { staticClass: "mmb-h" }, "Battery charge limit")];
+        if (!bl) {
+          // A first-load failure must not stick on "Loading…" — surface the error.
+          kids.push(h("div", { staticClass: "mmb-note" }, this.blErr || "Loading…"));
+        } else if (bl.available === false) {
+          kids.push(h("div", { staticClass: "mmb-note" }, "Charge limit not available on this device."));
+          if (this.blErr) kids.push(h("div", { staticClass: "mmb-err" }, this.blErr));
+        } else {
+          kids.push(h("div", { staticClass: "mmb-kv" }, [
+            h("label", { staticClass: "mmb-k" }, [
+              h("input", {
+                attrs: { type: "checkbox", disabled: !!self.blBusy },
+                domProps: { checked: !!bl.enabled },
+                on: { change: function (e) {
+                  self.applyBattLimit({ enabled: !!(e.target && e.target.checked) });
+                } }
+              }),
+              " Limit charging"
+            ])
+          ]));
+          kids.push(h("div", { staticClass: "mmb-kv" }, [
+            h("span", { staticClass: "mmb-k" }, "Target"),
+            h("span", { staticClass: "mmb-v" }, [
+              h("input", {
+                attrs: { type: "number", min: 20, max: 100, step: 1,
+                  disabled: !bl.enabled || !!self.blBusy },
+                domProps: { value: self.blDraft },
+                on: {
+                  input: function (e) { self.blDraft = Number(e.target && e.target.value); },
+                  change: function () { self.applyBattLimit({ limit_gui: self.blDraft }); }
+                }
+              }),
+              " % GUI",
+              h("span", { staticClass: "mmb-note" },
+                "  (≈ " + (bl.limit_gauge != null ? bl.limit_gauge : "—") + "% gauge)")
+            ])
+          ]));
+          var statusLine;
+          if (bl.active) statusLine = "Active · " + (bl.active_gauge != null ? bl.active_gauge + "% gauge" : "on");
+          else if (bl.enabled && !bl.charger_online) statusLine = "Armed · will apply when the charger connects";
+          else if (bl.enabled && bl.charger_online) statusLine = "Enabled · not active";
+          else statusLine = "Off";
+          kids.push(h("div", { staticClass: "mmb-kv" }, [
+            h("span", { staticClass: "mmb-k" }, "Status"),
+            h("span", { staticClass: "mmb-v" }, statusLine)
+          ]));
+          if (this.blErr) kids.push(h("div", { staticClass: "mmb-err" }, this.blErr));
+        }
+        return h("div", { staticClass: "mmb-card" }, kids);
+      },
     },
 
-    // Replaced in Task 4.
-    render: function (h) { return h("div", { staticClass: "mmb" }, ""); }
+    render: function (h) {
+      var self = this;
+      this.tick;                                   // re-render on each poll
+      var kids = [];
+      if (!this.embedded) kids.push(h("div", { staticClass: "mmb-h" }, "Battery"));
+      kids.push(this.renderStatusRow(h));
+
+      var chartKids = [
+        h("div", { staticClass: "mmb-row" }, [
+          h("div", { staticClass: "mmb-h" }, "History"),
+          h("span", { staticClass: "mmb-seg" }, RANGES.map(function (r) {
+            return h("button", {
+              key: r[0], staticClass: (self.winW === r[0] ? "on" : ""),
+              on: { click: function () { self.setRange(r[0]); } }
+            }, r[1]);
+          }))
+        ])
+      ];
+      if (this.loading) {
+        chartKids.push(h("div", { staticClass: "mmb-note" }, "Loading battery history…"));
+      } else if (!this.winSamples().length) {
+        chartKids.push(h("div", { staticClass: "mmb-note" },
+          "No battery history yet — sampling starts within 20 s."));
+        if (this.err) chartKids.push(h("div", { staticClass: "mmb-err" }, this.err));
+      } else {
+        chartKids.push(this.renderLanes(h));
+        if (this.err) chartKids.push(h("div", { staticClass: "mmb-err" }, this.err));
+      }
+      kids.push(h("div", { staticClass: "mmb-card" }, chartKids));
+      kids.push(this.renderLimitCard(h));
+      return h("div", { staticClass: "mmb" }, kids);
+    }
   };
 
   component.LANES = LANES;

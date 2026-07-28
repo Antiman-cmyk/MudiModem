@@ -227,3 +227,93 @@ test('nowMs is skew-corrected to the box clock', () => {
   assert.ok(Math.abs(vm.nowMs() - 5000000) < 1000,
     'the axis follows the box clock, not the browser clock');
 });
+
+function h(tag, data, children) {
+  if (Array.isArray(data) || typeof data === 'string') { children = data; data = {}; }
+  return { tag, data: data || {}, children };
+}
+function textOf(n) {
+  if (n == null) return '';
+  if (typeof n === 'string') return n;
+  if (Array.isArray(n)) return n.map(textOf).join('');
+  return textOf(n.children);
+}
+function walk(n, out) {
+  out = out || [];
+  if (n == null || typeof n === 'string') return out;
+  if (Array.isArray(n)) { n.forEach((x) => walk(x, out)); return out; }
+  out.push(n); walk(n.children, out); return out;
+}
+function render(vm, c) { return c.render.call(vm, h); }
+
+test('renders an empty state, not a broken chart, before the first sample', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { samples: [], loading: false, bl: { available: true, enabled: false } });
+  const out = textOf(render(vm, c));
+  assert.match(out, /No battery history yet/i);
+});
+
+test('renders all four lane labels once samples exist', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const vm = makeVm(c, {
+    samples: seed(now, 30, 20000), serverNow: now, serverNowAt: now,
+    loading: false, bl: { available: true, enabled: true, limit_gui: 80, gui_m: 13867, gui_b: 189300 }
+  });
+  const out = textOf(render(vm, c));
+  for (const label of ['Charge', 'Current', 'Voltage', 'Temperature'])
+    assert.ok(out.includes(label), 'missing lane: ' + label);
+});
+
+test('draws the target line only when the limit is enabled', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const base = { samples: seed(now, 30, 20000), serverNow: now, serverNowAt: now, loading: false };
+  const on = makeVm(c, Object.assign({}, base,
+    { bl: { available: true, enabled: true, limit_gui: 80, gui_m: 13867, gui_b: 189300 } }));
+  assert.ok(walk(render(on, c)).some((n) => n.data && n.data.attrs
+    && n.data.attrs.class === 'mmb-target'), 'target line missing when enabled');
+  const off = makeVm(c, Object.assign({}, base,
+    { bl: { available: true, enabled: false, limit_gui: 80 } }));
+  assert.ok(!walk(render(off, c)).some((n) => n.data && n.data.attrs
+    && n.data.attrs.class === 'mmb-target'), 'target line drawn while the limit is off');
+});
+
+test('the chart still renders when glbattlimit is unavailable', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const vm = makeVm(c, {
+    samples: seed(now, 30, 20000), serverNow: now, serverNowAt: now, loading: false,
+    bl: { available: false, error: 'glbattlimit not installed' }
+  });
+  const out = textOf(render(vm, c));
+  assert.ok(out.includes('Charge'), 'chart must not depend on the charge-limit tool');
+  assert.match(out, /not available/i);
+});
+
+test('the range selector offers the four spec windows', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const vm = makeVm(c, { samples: seed(now, 30, 20000), serverNow: now, serverNowAt: now, loading: false });
+  const out = textOf(render(vm, c));
+  for (const r of ['15 m', '1 h', '6 h', '24 h']) assert.ok(out.includes(r), 'missing range ' + r);
+});
+
+test('render survives a sample stream full of nulls', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const samples = seed(now, 10, 20000, () => ({ cap: null, volt: null, cur: null, temp: null }));
+  const vm = makeVm(c, { samples, serverNow: now, serverNowAt: now, loading: false });
+  assert.doesNotThrow(() => render(vm, c));
+});
+
+test('the status row reports the blocked state in words', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const samples = seed(now, 10, 20000, () => ({ online: 1, cur: 0, status: 'Full', cap: 71 }));
+  const vm = makeVm(c, {
+    samples, serverNow: now, serverNowAt: now, loading: false,
+    bl: { available: true, enabled: true, limit_gui: 80, gui_m: 13867, gui_b: 189300 }
+  });
+  assert.match(textOf(render(vm, c)), /Charge blocked/i);
+});
