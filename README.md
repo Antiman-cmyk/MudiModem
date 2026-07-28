@@ -1,6 +1,10 @@
 # MudiModem
 
-The Mudi 7 is a great cell modem/router but I found one thing a bit lacking, which is modem control.   I spent a weekend vibe coding a new modem control panel that brings all things modem into one section of the built in UI.
+I have the Mudi 7 which is an amazing device.  I felt that it has good modem controls, but they were spread around.  I also felt it could have better signal and event tracking.   I spent a couple of weeks vibe coding a new modem control panel that brings all things modem into one section of the built in UI.
+
+MudiModem uses GL's built in modem commands to accomplish what it does so should not conflict with settings made through the native UI.
+
+I also included another screen I created which will put a live graph display on the modem's LCD screen.
 
 
 ---
@@ -44,9 +48,7 @@ Pin the modem to a specific cell so it won't hand over. The tab shows your curre
 **scan for nearby lockable cells**, listed with your **serving carrier's cells first** and **5G above
 LTE**, each with a one-click Lock. Same confirm-or-revert safety as Bands.
 
-⚠️ A kept cell lock lives in the modem's own memory and survives reboot, reflash, *and* factory reset —
-the panel documents the ssh recovery path right on the page. (A scan takes the modem offline for up to
-~10 minutes.)
+⚠️ A kept cell lock lives in the modem's own memory and survives reboot, reflash, *and* factory reset 
 
 ### ⌨️ AT console
 
@@ -143,8 +145,7 @@ Battery charts rather than polling the modem itself, so the front panel costs th
 
 ## Installing it
 
-One line — no app store, no firmware flash. From a **root shell on the router** (`ssh root@<router>`
-first if you're remote):
+One line — no app store, no firmware flash. From a **root shell on the router** 
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/kevinherzig/MudiModem/main/install.sh | sh
@@ -160,12 +161,7 @@ them into place — no toolchain, nothing to build. Then **reload the GL admin i
 curl -fsSL https://raw.githubusercontent.com/kevinherzig/MudiModem/main/uninstall.sh | sh
 ```
 
-Both scripts **refuse to run against anything that isn't a GL-E5800** (they check the model first — a
-safeguard because GL's default `192.168.8.1` may be a *different* router on your LAN), are idempotent, and
-register/de-register the files in `/etc/sysupgrade.conf` so a firmware upgrade doesn't wipe them.
-
-> Developing on it? `./tools/deploy.sh` pushes your local checkout to the box over ssh (set
-> `MUDI_HOST`), and `./tools/verify.sh` runs the on-device assertions.
+Both scripts **refuse to run against anything that isn't a GL-E5800** 
 
 > **Heads up — it's a travel router on cellular.** If you administer the Mudi *over* its own cellular
 > link, a bad band or cell lock can drop the connection you're using. MudiModem's confirm-or-revert
@@ -179,23 +175,3 @@ register/de-register the files in `/etc/sysupgrade.conf` so a firmware upgrade d
 
 This was built and verified against one specific box. The band model and AT commands are Quectel- and
 firmware-specific; treat other hardware as untested.
-
-## Under the hood
-
-MudiModem is a native page in GL's own **oui**/Vue admin — a view chunk plus a menu entry, so it loads
-alongside GL's UI with no rebuild and no patched binaries. Most data arrives free over GL's existing
-websocket; a small Lua backend handles the writes and the AT passthrough, guarded by a detached
-auto-revert watchdog.
-
-The full reverse-engineering notes live in [`CLAUDE.md`](CLAUDE.md), and the Quectel AT knowledge (marked
-verified-on-box vs. from-the-manual) in
-[`reference/quectel-at-reference.md`](reference/quectel-at-reference.md). The community AT library is its
-own project at [`kevinherzig/mudi7-at-library`](https://github.com/kevinherzig/mudi7-at-library).
-
-## Status
-
-Working today: live tracking, band read/write with auto-revert, cell scan + lock, the AT console and
-library, the SIM/APN tab, the speed test with scheduling, the battery history chart + charge limit, and
-the front-LCD panel. Still in progress: making band writes durable across a modem-manager
-restart, finishing the cell-lock write path, and a one-shot install/uninstall script. See `CLAUDE.md` §12
-for the live status.
