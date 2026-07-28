@@ -322,8 +322,11 @@ the LCD merge. Nothing gets renamed.
 - **Restart the collector** (`/etc/init.d/mudimodem-collectd restart`) — the sampler is new code.
 - **Restart nginx, do not reload** (CLAUDE.md §8): each of the 4 workers `dofile`s its own copy of
   the plugin, and a HUP leaves old workers serving drained connections with the old backend.
-- `/etc/sysupgrade.conf` — **nothing new registered.** That is a pre-existing repo-wide gap
-  (§12), not something this change introduces or fixes.
+- `/etc/sysupgrade.conf` — **the new chunk is added to `deploy.sh`'s registration list.**
+  ⚠️ CLAUDE.md §12 claims nothing is registered; that note is **stale**. `deploy.sh` has registered
+  every shipped file idempotently since the speedtest phase (`grep -qxF … || echo … >> "$f"`), so
+  the new chunk must be added there or it will not survive a firmware upgrade. Fixing the stale
+  CLAUDE.md note is part of the docs task.
 
 ## 6. Risks
 
