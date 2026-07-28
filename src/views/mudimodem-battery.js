@@ -47,6 +47,11 @@ module.exports = (function () {
   // Fallback GUI fit, mirroring glbattlimit + the Lua backend. Only used before
   // get_battlimit lands; the served gui_m/gui_b win.
   var GUI_M = 13867, GUI_B = 189300;
+  // Slider bounds, in GUI %. The floor is not cosmetic: glbattlimit enforces
+  // gauge >= 50, and gui_to_gauge(49) === 49, so GUI 50 is the lowest target
+  // the box will accept. Anything below it is a value the backend would take
+  // and then refuse — so the control simply cannot express it.
+  var LIMIT_MIN = 50, LIMIT_MAX = 100;
   var STATE_COLOR = {
     charging:    "var(--success)",
     // A genuinely full battery on mains is a healthy, unremarkable state —
@@ -215,7 +220,13 @@ module.exports = (function () {
         return window.$rpcRequest("call", ["sid", "mudimodem", "get_battlimit", {}], { timeout: 8000 })
           .then(function (r) {
             self.bl = r || null;
-            if (r && typeof r.limit_gui === "number") self.blDraft = r.limit_gui;
+            // Clamp the DRAFT into the slider's range so the thumb cannot
+            // misrepresent a stored value below the floor. Deliberately does
+            // NOT write the clamped value back: silently rewriting a user's
+            // setting because the UI changed shape is worse than a clamped
+            // thumb. The next deliberate interaction saves a valid value.
+            if (r && typeof r.limit_gui === "number")
+              self.blDraft = Math.max(LIMIT_MIN, Math.min(LIMIT_MAX, r.limit_gui));
             self.blErr = (r && r.error) || "";
           })
           .catch(function (e) {
@@ -234,7 +245,14 @@ module.exports = (function () {
           return;
         }
         // Same gui2gauge floor as glbattlimit / the backend (gauge must be ≥ 50).
-        var gauge = Math.floor((limit_gui * 10000 + GUI_B + GUI_M / 2) / GUI_M);
+        //
+        // ⚠️ This guard is NOT dead just because the slider starts at 50. The
+        // OTHER caller is the enable/disable checkbox, which passes the
+        // SERVER's stored limit_gui — and a stored value below the floor can
+        // exist (a hand-edited /etc/mudimodem/battlimit.json, or a legacy
+        // setting). The slider closes the invalid range through the slider;
+        // this closes it through the toggle.
+        var gauge = this.gaugeOf(limit_gui);
         if (gauge < 50 || gauge > 100) {
           this.blErr = "limit too low (min ~50% gauge / use higher GUI %)";
           return;
@@ -276,6 +294,16 @@ module.exports = (function () {
       },
       // gauge % -> GL's "GUI" %, using the constants get_battlimit serves so the
       // fit lives in exactly one place (the Lua backend).
+      // GUI % -> gauge %, the inverse of guiOf and byte-for-byte the integer
+      // formula the Lua backend's gui_to_gauge uses, so the UI and the box
+      // never disagree about what a target means. Same served-constants-with-
+      // fallback rule as guiOf.
+      gaugeOf: function (gui) {
+        if (gui == null) return null;
+        var bl = this.bl || {};
+        var m = bl.gui_m || GUI_M, b = bl.gui_b || GUI_B;
+        return Math.floor((gui * 10000 + b + m / 2) / m);
+      },
       guiOf: function (gauge) {
         if (gauge == null) return null;
         var bl = this.bl || {};
@@ -529,7 +557,9 @@ module.exports = (function () {
           ".mmb-kv{display:flex;align-items:center;gap:10px;margin:6px 0}",
           ".mmb-k{font-size:13px;color:var(--text-badge);min-width:92px}",
           ".mmb-v{font-size:13px;color:var(--text-primary)}",
-          ".mmb-v input[type=number]{width:72px}",
+          // accent-color keeps the thumb/track on the GL palette without a hex
+          // literal; engines without it fall back to the default control colour.
+          ".mmb-v input[type=range]{width:180px;vertical-align:middle;accent-color:var(--primary)}",
           ".mmb-err{font-size:12px;color:var(--error);margin-top:6px}"
         ].join("");
         var el = document.createElement("style");
@@ -713,18 +743,27 @@ module.exports = (function () {
           kids.push(h("div", { staticClass: "mmb-kv" }, [
             h("span", { staticClass: "mmb-k" }, "Target"),
             h("span", { staticClass: "mmb-v" }, [
+              // A SLIDER, floored at LIMIT_MIN: the backend refuses anything
+              // below it (gauge < 50), so the old number input's 20–49 range
+              // was values it would accept and then reject. Unreachable beats
+              // validated-against.
               h("input", {
-                attrs: { type: "number", min: 20, max: 100, step: 1,
+                attrs: { type: "range", min: LIMIT_MIN, max: LIMIT_MAX, step: 1,
                   disabled: !bl.enabled || !!self.blBusy },
                 domProps: { value: self.blDraft },
                 on: {
+                  // `input` fires per drag-pixel: update the label only. Each
+                  // save spawns a process on the router, so committing here
+                  // would hammer it. `change` fires once, on release.
                   input: function (e) { self.blDraft = Number(e.target && e.target.value); },
                   change: function () { self.applyBattLimit({ limit_gui: self.blDraft }); }
                 }
               }),
-              " % GUI",
+              " " + self.blDraft + " % GUI",
+              // Tracks the DRAFT, not bl.limit_gauge — the latter is the SAVED
+              // value and would lag the thumb during a drag.
               h("span", { staticClass: "mmb-note" },
-                "  (≈ " + (bl.limit_gauge != null ? bl.limit_gauge : "—") + "% gauge)")
+                "  (≈ " + self.gaugeOf(self.blDraft) + "% gauge)")
             ])
           ]));
           var statusLine;

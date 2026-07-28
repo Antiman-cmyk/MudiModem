@@ -812,13 +812,104 @@ test('renderLimitCard: shows the form fields once bl has loaded', () => {
   assert.match(txt, /Limit charging/, 'toggle label');
   assert.match(txt, /% GUI/, 'GUI scale label');
   assert.match(txt, /71% gauge/, 'shows limit_gauge approximation');
-  // limit_gui is a number-input VALUE (domProps), which this harness's textOf
-  // never surfaces as text (it only walks .children) - assert on the actual
-  // node instead of scraping for a "80" substring that could just as easily
-  // match unrelated text.
-  const numberInput = walk(tree).find((n) => n.data.attrs && n.data.attrs.type === 'number');
-  assert.ok(numberInput, 'target number input renders');
-  assert.equal(numberInput.data.domProps.value, 80, 'input value seeded from blDraft/limit_gui');
+  // limit_gui is a slider VALUE (domProps), which this harness's textOf never
+  // surfaces as text (it only walks .children) - assert on the actual node
+  // instead of scraping for a "80" substring that could just as easily match
+  // unrelated text.
+  const slider = walk(tree).find((n) => n.data.attrs && n.data.attrs.type === 'range');
+  assert.ok(slider, 'target slider renders');
+  assert.equal(slider.data.domProps.value, 80, 'slider value seeded from blDraft/limit_gui');
+});
+
+// ---------------------------------------------------------------------------
+// Target slider (spec: docs/superpowers/specs/2026-07-28-charge-limit-slider-design.md).
+// The old number input accepted GUI 20-100 while the backend rejects anything
+// below GUI 50 (glbattlimit's gauge>=50 floor), so ~30% of its range was dead.
+// The slider makes that range unreachable rather than merely validated-against.
+// ---------------------------------------------------------------------------
+
+function sliderOf(vm) {
+  return walk(vm.renderLimitCard(h)).find((n) => n.data.attrs && n.data.attrs.type === 'range');
+}
+
+test('target slider is bounded at the gauge>=50 floor, so a rejected value cannot be picked', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { bl: Object.assign({}, BL_ARMED), blDraft: 80 });
+  const s = sliderOf(vm);
+  assert.ok(s, 'renders a range input, not a number input');
+  assert.equal(s.data.attrs.min, 50, 'GUI 49 maps to gauge 49, which glbattlimit refuses');
+  assert.equal(s.data.attrs.max, 100);
+  assert.equal(s.data.attrs.step, 1);
+});
+
+test('dragging the slider updates the draft and makes NO rpc call', () => {
+  const calls = stubRpc([]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, { bl: Object.assign({}, BL_ARMED), blDraft: 80 });
+    // Each save spawns a process on the router; firing per drag-pixel would hammer it.
+    sliderOf(vm).data.on.input({ target: { value: '65' } });
+    assert.equal(vm.blDraft, 65, 'draft follows the thumb');
+    assert.equal(calls.length, 0, 'no RPC while dragging');
+  } finally { unstubRpc(); }
+});
+
+test('releasing the slider commits exactly one set_battlimit', async () => {
+  const calls = stubRpc([Object.assign({}, BL_ARMED, { limit_gui: 65, limit_gauge: 61 })]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, { bl: Object.assign({}, BL_ARMED), blDraft: 80 });
+    sliderOf(vm).data.on.input({ target: { value: '65' } });
+    await sliderOf(vm).data.on.change();
+    assert.equal(calls.length, 1, 'exactly one call on release');
+    assert.equal(calls[0].params[2], 'set_battlimit');
+    assert.deepEqual(calls[0].params[3], { enabled: true, limit_gui: 65 });
+  } finally { unstubRpc(); }
+});
+
+test('the readout tracks the DRAFT, not the saved snapshot', () => {
+  const c = loadChunk();
+  // saved value is 80 (gauge 71); the user has dragged to 60 but not released.
+  const vm = makeVm(c, { bl: Object.assign({}, BL_ARMED), blDraft: 60 });
+  const txt = textOf(vm.renderLimitCard(h));
+  assert.match(txt, /60 % GUI/, 'shows the dragged value, not the stored 80');
+  assert.match(txt, /57% gauge/, 'gauge estimate follows the draft (gaugeOf(60) === 57)');
+  assert.doesNotMatch(txt, /71% gauge/, 'must not show the stale saved gauge while dragging');
+});
+
+test('the slider is disabled when the limit is off or a save is in flight', () => {
+  const c = loadChunk();
+  const off = makeVm(c, { bl: Object.assign({}, BL_OFF), blDraft: 80 });
+  assert.equal(sliderOf(off).data.attrs.disabled, true, 'disabled while the limit is off');
+  const busy = makeVm(c, { bl: Object.assign({}, BL_ARMED), blDraft: 80, blBusy: true });
+  assert.equal(sliderOf(busy).data.attrs.disabled, true, 'disabled while a save is in flight');
+  const on = makeVm(c, { bl: Object.assign({}, BL_ARMED), blDraft: 80 });
+  assert.equal(sliderOf(on).data.attrs.disabled, false, 'enabled otherwise');
+});
+
+test('a stored limit below the slider floor clamps the thumb and saves nothing', async () => {
+  // Only reachable by hand-editing /etc/mudimodem/battlimit.json, but the thumb
+  // must not misrepresent what is stored - and rewriting the user's setting
+  // just because the UI changed shape would be worse than a clamped thumb.
+  const calls = stubRpc([Object.assign({}, BL_ARMED, { limit_gui: 30, limit_gauge: 35 })]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, {});
+    await vm.fetchBattLimit();
+    assert.equal(vm.blDraft, 50, 'draft clamped up to the floor for display');
+    assert.equal(calls.length, 1, 'the get_battlimit read only - no write');
+    assert.equal(calls[0].params[2], 'get_battlimit');
+  } finally { unstubRpc(); }
+});
+
+test('gaugeOf matches the backend integer formula at the boundaries', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { bl: { gui_m: 13867, gui_b: 189300 } });
+  assert.equal(vm.gaugeOf(50), 50, 'the floor maps exactly onto gauge 50');
+  assert.equal(vm.gaugeOf(80), 71);
+  assert.equal(vm.gaugeOf(100), 86, '100 % GUI is NOT a full cell - it is gauge 86');
+  const noSnap = makeVm(c, { bl: null });
+  assert.equal(noSnap.gaugeOf(80), 71, 'falls back to the module constants');
 });
 
 test('renderLimitCard status: Off when disabled', () => {
