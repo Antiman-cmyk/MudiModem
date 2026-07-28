@@ -289,22 +289,32 @@ module.exports = (function () {
       // ⚠️ NEVER average. Averaging smears the Current lane's exact 0 (the
       // charge limit engaging) into a small non-zero number and erases the one
       // reading this whole feature exists to show.
+      // ⚠️ min/max alone is NOT the same as "0 survives": a bucket straddling
+      // zero (e.g. charging (+) -> blocked (0) -> discharging (-)) has the 0
+      // as neither its min nor its max, so it must be tracked and kept
+      // EXPLICITLY, not assumed to fall out of the lo/hi selection.
       reduce: function (pts, cols) {
         if (!pts.length || pts.length <= cols) return pts;
         var span = (pts[pts.length - 1].m - pts[0].m) / cols;
         if (!(span > 0)) return pts;
         var out = [], i = 0;
         while (i < pts.length) {
-          var edge = pts[i].m + span, lo = pts[i], hi = pts[i], j = i;
+          var edge = pts[i].m + span, lo = pts[i], hi = pts[i], zero = null, j = i;
           while (j < pts.length && pts[j].m < edge) {
             if (pts[j].v < lo.v) lo = pts[j];
             if (pts[j].v > hi.v) hi = pts[j];
+            if (pts[j].v === 0 && zero === null) zero = pts[j];
             j++;
           }
           if (j === i) j = i + 1;                        // always advance
-          if (lo === hi) out.push(lo);
-          else if (lo.m <= hi.m) { out.push(lo); out.push(hi); }
-          else { out.push(hi); out.push(lo); }
+          if (lo === hi) {
+            out.push(lo);
+          } else {
+            var keep = [lo, hi];
+            if (zero !== null && zero !== lo && zero !== hi) keep.push(zero);
+            keep.sort(function (a, b) { return a.m - b.m; });
+            for (var k = 0; k < keep.length; k++) out.push(keep[k]);
+          }
           i = j;
         }
         return out;
@@ -351,12 +361,22 @@ module.exports = (function () {
         if (s.cur > 0) return "charging";
         return "draining";
       },
+      // Same gap discipline as segments(): a hole bigger than GAP_MS ends the
+      // current run rather than extending across it, even when the state on
+      // both sides matches — otherwise a multi-hour outage between two
+      // "charging" samples paints one solid "charging" band through data we
+      // don't have.
       stateRuns: function () {
         var ss = this.winSamples(), runs = [], self = this;
         for (var i = 0; i < ss.length; i++) {
           var v = self.chargeState(ss[i]), last = runs[runs.length - 1];
-          if (last && last.v === v) last.m1 = ss[i].m;
-          else { if (last) last.m1 = ss[i].m; runs.push({ v: v, m0: ss[i].m, m1: ss[i].m }); }
+          var gap = i > 0 && (ss[i].t - ss[i - 1].t) > GAP_MS;
+          if (last && !gap && last.v === v) {
+            last.m1 = ss[i].m;
+          } else {
+            if (last) last.m1 = gap ? ss[i - 1].m : ss[i].m;
+            runs.push({ v: v, m0: ss[i].m, m1: ss[i].m });
+          }
         }
         if (runs.length) runs[runs.length - 1].m1 = 0;
         return runs;

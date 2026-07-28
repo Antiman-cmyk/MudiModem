@@ -115,6 +115,28 @@ test('reduce leaves small series untouched', () => {
   assert.deepEqual(vm.reduce(pts, 50), pts);
 });
 
+test('reduce keeps a 0 that straddles a bucket - neither its min nor its max', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  // One bucket (of two) holds a charging run (1200), a single blocked sample
+  // (0), then a discharging run (-50). min/max alone picks -50 and 1200 and
+  // silently drops the 0 sitting strictly between them - the exact failure
+  // this fixture is built to catch (the old fixture never could, because its
+  // one 0 was always the bucket's global minimum).
+  const pts = [
+    { m: 0, v: 1200, t: 0 }, { m: 1, v: 1200, t: 1 }, { m: 2, v: 0, t: 2 },
+    { m: 3, v: -50, t: 3 }, { m: 4, v: -50, t: 4 },
+    { m: 5, v: -50, t: 5 }, { m: 6, v: -50, t: 6 }, { m: 7, v: -50, t: 7 },
+    { m: 8, v: -50, t: 8 }, { m: 9, v: -50, t: 9 }
+  ];
+  const out = vm.reduce(pts, 2);
+  assert.ok(out.length < pts.length, 'actually reduced');
+  assert.ok(out.some((p) => p.v === 0),
+    'the exact 0 survives even when it is neither the bucket min nor max');
+  for (let i = 1; i < out.length; i++)
+    assert.ok(out[i].m >= out[i - 1].m, 'output stays in time order');
+});
+
 test('charge lane is fixed 0-100 so drift is not dramatised', () => {
   const c = loadChunk();
   const now = Date.now();
@@ -180,6 +202,23 @@ test('stateRuns collapses consecutive samples into labelled runs', () => {
   assert.equal(runs.length, 2);
   assert.equal(runs[0].v, 'charging');
   assert.equal(runs[1].v, 'blocked');
+});
+
+test('stateRuns breaks across a gap longer than GAP_MS, like segments does', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  // Two 'charging' samples 4 hours apart, nothing in between - a real
+  // collector outage, not jitter. Must NOT collapse into one solid run
+  // claiming the device was charging the whole time we have no data for.
+  const samples = [
+    { t: now - 4 * 3600000 - 60000, cap: 70, volt: 4010, cur: 1183, temp: 31, online: 1 },
+    { t: now - 60000, cap: 70, volt: 4010, cur: 1183, temp: 31, online: 1 }
+  ];
+  const vm = makeVm(c, { samples, serverNow: now, serverNowAt: now, winW: 300 });
+  const runs = vm.stateRuns();
+  assert.equal(runs.length, 2, 'an outage is a break, not a bridge, even when the state matches on both sides');
+  assert.equal(runs[0].v, 'charging');
+  assert.equal(runs[1].v, 'charging');
 });
 
 test('nowMs is skew-corrected to the box clock', () => {
