@@ -23,7 +23,10 @@ function seed(now, n, step, fn) {
   for (let i = n - 1; i >= 0; i--) {
     const t = now - i * step;
     out.push(Object.assign({ t, cap: 70, volt: 4010, cur: -363, temp: 31.6,
-      online: 0, status: 'Discharging', ctype: 'N/A', cycles: 4, health: 'Good' },
+      online: 0, status: 'Discharging', ctype: 'N/A', cycles: 4, health: 'Good',
+      // glbattlimit's watcher exits on unplug, so an unplugged sample carries
+      // lim: 0. See read_limiter in src/sbin/mudimodem-collectd.
+      lim: 0, lim_gauge: null },
       fn ? fn(n - 1 - i, t) : {}));
   }
   return out;
@@ -215,52 +218,105 @@ test('voltage lane is fixed to the Li-ion range but expands rather than clipping
   assert.ok(vm.domainFor(lane)[0] <= 3.1, 'an out-of-range reading expands, never clips silently');
 });
 
-test('chargeState distinguishes blocked from merely idle', () => {
+// ---------------------------------------------------------------------------
+// chargeState. THE FIXTURE BELOW IS THE LIVE BOX, 2026-07-28:
+//   /etc/mudimodem/battlimit.json  {"enabled":true,"limit_gui":80}
+//   glbattlimit status  ->  Limit: active (71 % gauge / ~80 % GUI, PID 26702)
+//                           Current: 0 mA · Charger: online=1 · charge_en=0
+//                           Buck vreg: 3900000 uV (factory 4400000)
+//   sysfs               ->  capacity=71 current_now=0 online=1
+//                           status=Full charge_type=Trickle
+// cap 71 IS gui_to_gauge(80), i.e. the configured target: the limiter is
+// holding the charge off. status=Full is what the CHARGER reports when the
+// limiter drops vreg below Vbat — it is the limiter's signature, NOT a full
+// cell (a full cell here reads ~86 gauge). Keying "full" off `status` inverts
+// the label exactly when the feature has something to show, which is why the
+// discriminator is the limiter's own per-sample state (lim / lim_gauge).
+// test/collectd.test.py asserts the same fixture from the collector's side.
+// ---------------------------------------------------------------------------
+test('chargeState reads current and online for the unambiguous states', () => {
   const c = loadChunk();
   const vm = makeVm(c, {});
-  assert.equal(vm.chargeState({ online: 1, cur: 1183 }), 'charging');
-  assert.equal(vm.chargeState({ online: 1, cur: 0 }), 'blocked');
-  assert.equal(vm.chargeState({ online: 1, cur: -50 }), 'draining');
-  assert.equal(vm.chargeState({ online: 0, cur: -363 }), 'discharging');
+  assert.equal(vm.chargeState({ online: 1, cur: 1183, lim: 0 }), 'charging');
+  assert.equal(vm.chargeState({ online: 1, cur: -50, lim: 0 }), 'draining');
+  assert.equal(vm.chargeState({ online: 0, cur: -363, lim: 0 }), 'discharging');
 });
 
-test('chargeState reports full for a genuinely full battery, even at zero current', () => {
+test('chargeState: a missing current reading is unknown, not a measured behaviour', () => {
   const c = loadChunk();
   const vm = makeVm(c, {});
-  // A battery that finished charging sits on trickle: online, 0 mA - the same
-  // signature glbattlimit uses for "held off". `status` is what tells them
-  // apart, so it must win over the current-based rule, not the reverse.
-  assert.equal(vm.chargeState({ online: 1, cur: 0, status: 'Full' }), 'full');
+  // current_now absent or garbage => `cur: null`. Reporting that as
+  // "Draining on power" would state a measurement we never took.
+  assert.equal(vm.chargeState({ online: 1, cur: null, lim: 0 }), 'unknown');
+});
+
+test('chargeState: the limiter holding charge off at its target reads BLOCKED, not full', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  // The live capture above, verbatim. status/ctype say Full/Trickle and must
+  // NOT win: the limiter is running (lim 1) and the gauge is at its target.
+  assert.equal(vm.chargeState({ online: 1, cur: 0, status: 'Full', ctype: 'Trickle',
+    cap: 71, lim: 1, lim_gauge: 71 }), 'blocked');
+  // Above the target too (the gauge can sit a point high).
+  assert.equal(vm.chargeState({ online: 1, cur: 0, status: 'Full',
+    cap: 73, lim: 1, lim_gauge: 71 }), 'blocked');
+});
+
+test('chargeState: the same charger strings with NO limiter running are a genuinely full battery', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  // Byte-identical charger state; only the limiter differs. This is the pair
+  // that proves the two cases are actually distinguishable.
+  assert.equal(vm.chargeState({ online: 1, cur: 0, status: 'Full', ctype: 'Trickle',
+    cap: 86, lim: 0, lim_gauge: null }), 'full');
   // status is a raw sysfs string - tolerate whitespace and case.
-  assert.equal(vm.chargeState({ online: 1, cur: 0, status: '  full  ' }), 'full');
-  assert.equal(vm.chargeState({ online: 1, cur: 0, status: 'FULL' }), 'full');
+  assert.equal(vm.chargeState({ online: 1, cur: 0, status: '  full  ', cap: 86, lim: 0 }), 'full');
+  assert.equal(vm.chargeState({ online: 1, cur: 0, status: 'FULL', cap: 86, lim: 0 }), 'full');
 });
 
-test('chargeState still reports blocked when status says something other than Full', () => {
+test('chargeState: a running watcher BELOW its target is not the one blocking', () => {
   const c = loadChunk();
   const vm = makeVm(c, {});
-  assert.equal(vm.chargeState({ online: 1, cur: 0, status: 'Not charging' }), 'blocked');
-  assert.equal(vm.chargeState({ online: 1, cur: 0, status: 'Charging' }), 'blocked');
+  // glbattlimit only gates at/above its target (watch_loop: cap -ge lim), so a
+  // 0 mA reading well below the target is not attributable to it.
+  assert.equal(vm.chargeState({ online: 1, cur: 0, status: 'Full',
+    cap: 60, lim: 1, lim_gauge: 71 }), 'full');
 });
 
-test('chargeState falls through to the current-based rules when status is missing', () => {
+test('chargeState: plugged in at 0 mA with no limiter and no Full is honestly "not charging"', () => {
   const c = loadChunk();
   const vm = makeVm(c, {});
-  // Older retained samples predate the `status` field entirely - must not
-  // crash, and a missing status must not silently read as "full".
-  assert.equal(vm.chargeState({ online: 1, cur: 0 }), 'blocked');
-  assert.equal(vm.chargeState({ online: 1, cur: 0, status: '' }), 'blocked');
+  assert.equal(vm.chargeState({ online: 1, cur: 0, status: 'Not charging', cap: 60, lim: 0 }), 'idle');
+  assert.equal(vm.chargeState({ online: 1, cur: 0, status: '', cap: 60, lim: 0 }), 'idle');
+});
+
+test('chargeState: samples predating the lim field claim neither Full nor blocked', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  // Retained history written before the collector recorded the limiter state.
+  // status=Full is ambiguous on this hardware, so the honest answer is
+  // "not charging" - never a confident "Full", never a false "blocked".
+  assert.equal(vm.chargeState({ online: 1, cur: 0, status: 'Full', cap: 71 }), 'idle');
+  assert.equal(vm.chargeState({ online: 1, cur: 0, cap: 71 }), 'idle');
+  // ...but the unambiguous states still work without it.
   assert.equal(vm.chargeState({ online: 1, cur: 1183 }), 'charging');
+});
+
+test('the blocked and full labels are distinct words in the UI', () => {
+  const c = loadChunk();
+  assert.notEqual(c.STATE_LABEL.blocked, c.STATE_LABEL.full);
+  assert.match(c.STATE_LABEL.blocked, /limit/i,
+    'the blocked label must name the limiter - that is the whole point of the tab');
 });
 
 test('stateRuns collapses consecutive samples into labelled runs', () => {
   const c = loadChunk();
   const now = Date.now();
   // Second half is a battery that finished charging (status Full) settling
-  // onto trickle at 0 mA - a distinct "full" state, not "blocked".
+  // onto trickle at 0 mA with NO limiter running - a distinct "full" state.
   const samples = seed(now, 6, 20000, (i) => (
-    i < 3 ? { online: 1, cur: 1183, status: 'Charging' }
-          : { online: 1, cur: 0, status: 'Full' }));
+    i < 3 ? { online: 1, cur: 1183, status: 'Charging', cap: 85, lim: 0 }
+          : { online: 1, cur: 0, status: 'Full', cap: 86, lim: 0 }));
   const vm = makeVm(c, { samples, serverNow: now, serverNowAt: now, winW: 15 });
   const runs = vm.stateRuns();
   assert.equal(runs.length, 2);
@@ -275,8 +331,8 @@ test('a full<->charging transition is not a plug/unplug event', () => {
   // full (cur=0, status=Full). Neither side is "discharging", so this must
   // NOT be read as an unplug/replug - the charger never left.
   const samples = seed(now, 10, 20000, (i) => (
-    i < 5 ? { online: 1, cur: 1183, status: 'Charging', cap: 99 }
-          : { online: 1, cur: 0, status: 'Full', cap: 100 }));
+    i < 5 ? { online: 1, cur: 1183, status: 'Charging', cap: 85, lim: 0 }
+          : { online: 1, cur: 0, status: 'Full', cap: 86, lim: 0 }));
   const vm = makeVm(c, { samples, serverNow: now, serverNowAt: now, winW: 15, loading: false });
   const runs = vm.stateRuns();
   assert.equal(runs.length, 2);
@@ -549,34 +605,176 @@ test('render survives a sample stream full of nulls', () => {
   assert.doesNotThrow(() => render(vm, c));
 });
 
-test('the status row reports the blocked state in words', () => {
+test('the status row reports the blocked state in words, and does not contradict the limit card', () => {
   const c = loadChunk();
   const now = Date.now();
-  // status is NOT 'Full' here - this is the limiter genuinely holding charge
-  // off below the target, not a battery that finished charging.
-  const samples = seed(now, 10, 20000, () => ({ online: 1, cur: 0, status: 'Not charging', cap: 71 }));
+  // The live box, 2026-07-28: the limiter is active and holding at the target,
+  // and the charger says Full/Trickle *because of that*. The limit card says
+  // "Active"; the status row beside it must not say "Full".
+  const samples = seed(now, 10, 20000, () => ({
+    online: 1, cur: 0, status: 'Full', ctype: 'Trickle', cap: 71, lim: 1, lim_gauge: 71 }));
   const vm = makeVm(c, {
     samples, serverNow: now, serverNowAt: now, loading: false,
-    bl: { available: true, enabled: true, limit_gui: 80, gui_m: 13867, gui_b: 189300 }
+    bl: { available: true, enabled: true, limit_gui: 80, limit_gauge: 71,
+      active: true, active_gauge: 71, charger_online: true,
+      gui_m: 13867, gui_b: 189300 }
   });
-  assert.match(textOf(render(vm, c)), /Charge blocked/i);
+  const out = textOf(render(vm, c));
+  assert.ok(out.includes('Charge blocked (limit)'),
+    'an actively-limited battery must be shown as limited - that is the feature');
+  assert.ok(out.includes('Active ·'), 'the limit card still reports Active');
+  assert.ok(!out.includes('Full'),
+    'the status row must not call the limiter\'s own signature a full battery');
 });
 
-test('the status row reports a full battery as "Full", not "Charge blocked"', () => {
+test('the status row reports a genuinely full battery as "Full", not "Charge blocked"', () => {
   const c = loadChunk();
   const now = Date.now();
-  const samples = seed(now, 10, 20000, () => ({ online: 1, cur: 0, status: 'Full', cap: 100 }));
+  // Same charger strings as the test above, but no limiter running.
+  const samples = seed(now, 10, 20000, () => ({
+    online: 1, cur: 0, status: 'Full', ctype: 'Trickle', cap: 86, lim: 0, lim_gauge: null }));
   const vm = makeVm(c, {
     samples, serverNow: now, serverNowAt: now, loading: false,
-    bl: { available: true, enabled: true, limit_gui: 80, gui_m: 13867, gui_b: 189300 }
+    bl: { available: true, enabled: false, limit_gui: 80, gui_m: 13867, gui_b: 189300 }
   });
   const out = textOf(render(vm, c));
   // No separator between adjacent stat nodes in this fake render harness
   // (e.g. "...°CTempFullState80..."), so there's no word boundary to anchor
   // on either side of "Full" - a plain substring check is what the rest of
   // this file already uses for the same reason (see the range-selector test).
-  assert.ok(out.includes('Full'), 'a full, trickle-charging battery must not be mislabeled as blocked');
+  assert.ok(out.includes('Full'), 'a genuinely full battery must not be mislabeled as blocked');
   assert.ok(!out.includes('Charge blocked'), 'must not also claim the charge is blocked');
+});
+
+// ---------------------------------------------------------------------------
+// Render budget. THE REGRESSION THIS GUARDS:
+// yIn() used to resolve its lane domain itself, and domainFor() -> segments()
+// -> winSamples() re-filters, re-maps, re-sorts and re-dedupes the entire
+// retained sample array. Calling that per PLOTTED POINT made one 24 h render
+// take 6.0 s (3,157 winSamples() calls, measured on this repo before the fix;
+// 1.2 s at 6 h), and the chart re-renders on every 10 s poll AND every
+// mousemove — i.e. the two widest ranges locked the tab up.
+//
+// The call-count assertion is the real guard: it is exact, machine-independent,
+// and any reintroduction of per-point (or even per-lane) recomputation breaks
+// it immediately. The wall-clock budget is the backstop for a slow algorithm
+// that somehow keeps the call count down; it is set ~50x over the measured
+// post-fix time (~12 ms here) and far under the 1.2-6.0 s pathological figures,
+// so it will not flake on a loaded CI box but cannot pass a quadratic render.
+// ---------------------------------------------------------------------------
+test('a 24 h render computes the sample window once, and stays inside its time budget', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const N = 24 * 60 * 60 / 20;            // 4,320 — 24 h at the collector's 20 s
+  // Varied values, so no lane collapses to a trivial domain and the min/max
+  // downsampler has real work to do.
+  const samples = seed(now, N, 20000, (i) => ({
+    cap: 60 + (i % 30), volt: 3700 + (i % 400), temp: 28 + (i % 90) / 10,
+    cur: (i % 40 === 0) ? 0 : (i % 3 ? -300 - (i % 200) : 900 + (i % 300)),
+    online: (i % 7) ? 1 : 0, status: (i % 40 === 0) ? 'Full' : 'Charging',
+    lim: (i % 40 === 0) ? 1 : 0, lim_gauge: 71
+  }));
+  const vm = makeVm(c, {
+    samples, serverNow: now, serverNowAt: now, winW: 1440, loading: false,
+    width: 900, cursor: -100,             // hover active: the mousemove path too
+    bl: { available: true, enabled: true, limit_gui: 80, limit_gauge: 71,
+      gui_m: 13867, gui_b: 189300 }
+  });
+  let calls = 0;
+  const real = vm.winSamples;
+  vm.winSamples = function () { calls++; return real.call(vm); };
+
+  const t0 = process.hrtime.bigint();
+  const tree = render(vm, c);
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+
+  assert.equal(calls, 1,
+    'the sample window must be computed ONCE per render and threaded down, '
+    + 'not recomputed per lane or per point (got ' + calls + ' calls)');
+  assert.ok(walk(tree).some((n) => n.tag === 'path'), 'actually drew the lanes');
+  assert.ok(ms < 750, '24 h render took ' + ms.toFixed(0)
+    + ' ms; budget is 750 ms (pre-fix this was ~6,000 ms)');
+});
+
+// ---------------------------------------------------------------------------
+// Poll failures must be visible on the page — WITHOUT going through
+// $rpcRequest, whose interceptor raises GL's global banner. rpcSilent keeps
+// swallowing the rejection (required); the caller has to notice the `null`.
+// ---------------------------------------------------------------------------
+test('a failed first load says so, instead of promising samples "within 20 s"', async () => {
+  stubRpc([Object.assign(new Error('ECONNREFUSED'), { type: 'timeout' })]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, { loading: true });
+    await vm.fetchHistory();
+    assert.equal(vm.okCount, 0, 'nothing ever loaded');
+    assert.equal(vm.failStreak, 1);
+    assert.equal(vm.loading, false, 'must not hang on the loading placeholder');
+    const out = textOf(render(vm, c));
+    assert.match(out, /Couldn't reach the router/i);
+    assert.doesNotMatch(out, /No battery history yet/i,
+      'claiming the collector is about to produce samples is a falsehood when we never reached it');
+  } finally { unstubRpc(); }
+});
+
+test('one dropped poll is not an alarm; three in a row surfaces an error', async () => {
+  stubRpc([
+    Object.assign(new Error('down'), { type: 'timeout' }),
+    Object.assign(new Error('down'), { type: 'timeout' }),
+    Object.assign(new Error('down'), { type: 'timeout' })
+  ]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, { loading: false });
+    await vm.fetchHistory();
+    assert.equal(vm.err, '', 'a single failed poll on a cellular link is normal');
+    await vm.fetchHistory();
+    assert.equal(vm.err, '', 'two is still not worth alarming about');
+    await vm.fetchHistory();
+    assert.ok(vm.err, 'a sustained failure must become visible');
+    assert.match(vm.err, /reach the router/i);
+    assert.equal(c.FAIL_NOTE_AFTER, 3, 'the threshold this test encodes');
+  } finally { unstubRpc(); }
+});
+
+test('the error note reaches the page while a chart is already drawn', async () => {
+  const now = Date.now();
+  stubRpc([null, null, null]);   // result absent => rpcSilent resolves null
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, {
+      samples: seed(now, 30, 20000), serverNow: now, serverNowAt: now,
+      loading: false, okCount: 1
+    });
+    await vm.fetchHistory({ since: now - 60000, merge: true });
+    await vm.fetchHistory({ since: now - 60000, merge: true });
+    await vm.fetchHistory({ since: now - 60000, merge: true });
+    const out = textOf(render(vm, c));
+    assert.match(out, /reach the router/i,
+      'the stale-chart case must surface the error too, not only the empty state');
+  } finally { unstubRpc(); }
+});
+
+test('a successful poll clears the failure note and the streak', async () => {
+  const now = Date.now();
+  stubRpc([
+    Object.assign(new Error('down'), { type: 'timeout' }),
+    Object.assign(new Error('down'), { type: 'timeout' }),
+    Object.assign(new Error('down'), { type: 'timeout' }),
+    { samples: seed(now, 3, 20000), now }
+  ]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, { loading: false });
+    await vm.fetchHistory(); await vm.fetchHistory(); await vm.fetchHistory();
+    assert.ok(vm.err, 'precondition: the note is up');
+    await vm.fetchHistory();
+    assert.equal(vm.err, '', 'recovery clears it');
+    assert.equal(vm.failStreak, 0);
+    assert.equal(vm.okCount, 1);
+    const out = textOf(render(vm, c));
+    assert.doesNotMatch(out, /reach the router/i);
+  } finally { unstubRpc(); }
 });
 
 // ---------------------------------------------------------------------------
