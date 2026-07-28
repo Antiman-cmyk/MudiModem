@@ -170,6 +170,7 @@ return { get_config = function(args) ... end, set_config = function(args) ... en
 | `/etc/init.d/mudi` | procd service for the LCD renderer; **default off** |
 | `/etc/init.d/mudi-watch` | procd service for the LCD watchdog; **default off** |
 | `/etc/config/mudi` | UCI config for the LCD renderer (enabled, brightness, screen_timeout, default_page) |
+| `/www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz` | Battery tab chunk: 4-lane history chart + charge-limit form (§12, 2026-07-27) |
 
 ⚠️ **The validator is NOT optional once a method takes free-form input.** oui applies a **default
 string-arg allowlist** (`^[%w%.%s%-_:#/]-$`) to every param when no per-object validator exists —
@@ -567,6 +568,7 @@ MudiModem/
 ├── docs/superpowers/plans/      ← implementation plans (per phase)
 ├── src/
 │   ├── views/mudimodem.js       ← chunk SOURCE (plain JS; gzipped at build → the shipped .gz)
+│   ├── views/mudimodem-battery.js  ← Battery tab chunk (chart + charge-limit form)
 │   ├── menu/mudimodem.json      ← menu registration + global_sockets (level 1, icon "modem")
 │   ├── at-library.snapshot.json ← baked fallback; sources in kevinherzig/mudi7-at-library (§7a)
 │   ├── rpc/mudimodem            ← backend, incl. get_lcd/set_lcd (§12, 2026-07-24 merge)
@@ -579,6 +581,8 @@ MudiModem/
 │   ├── verify.sh                ← on-device assertions (files, JSON parse, gzip_static, eval, backend, watchdog)
 │   └── mudimodem-at.py          ← our own AT channel on /dev/at_mdm0 (Python stdlib; Phase 3 console)
 ├── test/chunk.test.js           ← local Node test: evals the chunk exactly as the SPA does
+├── test/battery-chunk.test.js       ← evals the battery chunk; lane domains, reduce, gaps
+├── test/backend-battery-history.test.lua
 ├── test/test_collectd.py        ← collectd broadcast socket + latest.json test
 ├── test/test_lcd.py             ← LCD renderer / get_lcd / set_lcd test
 ├── build/                       ← generated, gitignored
@@ -719,8 +723,24 @@ MudiModem/
   stays on `$rpcRequest`** (user-initiated, completes before the restart, so a banner is real).
   📌 **Rule: any background/retrying call belongs on `rpcSilent`; only user-initiated one-shots
   belong on `$rpcRequest`.** (Not download speed — 8 files fetched in 2 s over cellular.)
+- ✅ **Battery tab + history chart (2026-07-27)** — answers issue #1 from **ChiliApple**, the
+  `glbattlimit` author. `mudimodem-collectd` gained a **20 s sysfs sampler** writing
+  `/tmp/mudimodem/battery.jsonl` (24 h / 5,200 lines, tmpfs); `get_battery_history` serves it
+  through the **same backward-chunk tail reader as `get_history`**, now extracted to a shared
+  `read_window(path, since)`. New lazy chunk `mudimodem-battery.js` draws **four stacked lanes**
+  (charge %, current mA, voltage V, temp °C) on one x-axis — deliberately NOT Tracking's
+  normalized overlay, because normalizing destroys the one value that matters: `cur == 0` must
+  read as ZERO. The charge-limit form **moved out of the Config tab** into this chunk (one owner).
+  ⚠️ **Unit traps, verified on box:** `current_now` is **mA already** (the Linux power_supply class
+  normally uses µA — `glbattlimit` line 166 documents mA, and the physics agree), signed
+  **+charging / −discharging**, and **`0` means BLOCKED** — so "the limit is engaged" is
+  `cur == 0 && online == 1`, which is what the chart marks. Meanwhile `voltage_now` on the same
+  node is µV and the *charger* node's limits are µA. Convert per node.
+  Spec: `docs/superpowers/specs/2026-07-27-battery-tab-history-design.md`;
+  plan: `docs/superpowers/plans/2026-07-27-battery-tab-history.md`.
 - 🔭 Later: `install.sh`/`uninstall.sh` (device-guarded + idempotent, mirroring MudiUI's); register
-  the watchdog `boot-check` in a boot hook; `/etc/sysupgrade.conf`; ipk.
+  the watchdog `boot-check` in a boot hook; an ipk. (`/etc/sysupgrade.conf` itself is already
+  handled by `deploy.sh` — see the corrected bullet below.)
 
 ### Session findings 2026-07-17 (all in reference §10–§11)
 - **DSDS, not DSDA** — both SIMs register, only one carries data at a time. No simultaneous dual-data.
@@ -772,7 +792,9 @@ MudiModem/
    exists on `/dev/at_mdm0` (`QSIMSWITCH`/`QDSDS`/`QMSIMCFG` all ERROR; `QCFG=?`/`QNWPREFCFG=?`
    list nothing sub-related). GL's `sub_id` is a QMI-layer thing behind `modem_AT`. Cross-SIM data
    stays on GL's `modem.CPU.AT`; the console is active-SIM only and labeled as such.
-- 🧹 Not yet done: nothing is registered in `/etc/sysupgrade.conf` — a firmware upgrade will wipe
-  the deployed files. Re-deploy with `./tools/deploy.sh` (idempotent) until the installer exists.
+- ✅ `/etc/sysupgrade.conf` **is** registered by `./tools/deploy.sh` (idempotent
+  `grep -qxF … || echo … >> "$f"`), covering every shipped file. **Any new shipped file must be
+  added to that list**, or a firmware upgrade wipes it. Still not done: `install.sh`/`uninstall.sh`,
+  a boot hook for the watchdog `boot-check`, and an ipk.
 - 🧹 `tools/verify.sh` still only checks the menu JSON *parses*; it should also assert
   `get_menu_list` returns it at `level:1` (§8 has the stub).

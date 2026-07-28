@@ -51,6 +51,13 @@ ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /usr/lib/mudimodem && cat > /usr/lib
   < tools/mudimodem-speedtest.py
 echo "speedtest chunk + menu + runner deployed"
 
+# Battery tab (issue #1) — chunk only; no menu JSON (it is an in-page tab, not
+# a standalone route) and no new backend file (get_battery_history ships inside
+# the existing rpc/mudimodem).
+ssh -o BatchMode=yes "root@$HOST" 'cat > /www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz' \
+  < build/gl-sdk4-ui-mudimodem-battery.common.js.gz
+echo "battery chunk deployed"
+
 if [ -f src/sbin/mudimodem-speedtestd ]; then
   ssh -o BatchMode=yes "root@$HOST" 'cat > /usr/sbin/mudimodem-speedtestd && chmod 0755 /usr/sbin/mudimodem-speedtestd' \
     < src/sbin/mudimodem-speedtestd
@@ -180,6 +187,7 @@ ssh -o BatchMode=yes "root@$HOST" 'f=/etc/sysupgrade.conf; touch "$f"; for p in 
   /usr/share/gl-validator.d/mudimodem.lua \
   /usr/lib/mudimodem/mudimodem-lib \
   /www/views/gl-sdk4-ui-mudimodem-speedtest.common.js.gz \
+  /www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz \
   /usr/share/oui/menu.d/mudimodem-speedtest.json \
   /usr/lib/mudimodem/mudimodem-speedtest.py \
   /usr/sbin/mudimodem-speedtestd \

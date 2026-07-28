@@ -123,6 +123,63 @@ if [ -f src/sbin/mudimodem-collectd ]; then
     || fail "get_history test failed on-device"
 fi
 
+# 7b. Battery history (issue #1): chunk serves + evals, collector is sampling,
+#     and get_battery_history survives a real /rpc round trip.
+echo "7b. battery chunk + battery.jsonl + get_battery_history"
+ssh -o BatchMode=yes "root@$HOST" 'test -s /www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz' \
+  || fail "battery chunk .gz missing"
+BBODY=$(ssh -o BatchMode=yes "root@$HOST" \
+  'curl -sk -H "Accept-Encoding: gzip" "https://127.0.0.1/views/gl-sdk4-ui-mudimodem-battery.common.js?_t=1" | gzip -dc')
+printf '%s' "$BBODY" | node -e '
+  let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
+    const module={exports:{}}; const c=eval(s);
+    if(!c||c.name!=="mudimodem-battery"){console.error("FAIL: battery eval");process.exit(1);}
+    if(typeof c.render!=="function"||c.template!==undefined){console.error("FAIL: not render-only");process.exit(1);}
+    if(!/"get_battery_history"/.test(s)){console.error("FAIL: does not read battery history over RPC");process.exit(1);}
+    console.log("   battery eval + render-only OK ->", c.name);
+  })' || fail "battery chunk eval failed"
+
+if [ -f src/sbin/mudimodem-collectd ]; then
+  # The newest battery sample must be FRESH (within 60 s of box now). Checking
+  # freshness rather than watching the file grow avoids a 25 s sleep here.
+  ssh -o BatchMode=yes "root@$HOST" 'for i in 1 2 3 4 5 6; do [ -s /tmp/mudimodem/battery.jsonl ] && exit 0; sleep 5; done; exit 1' \
+    || fail "no battery.jsonl written after ~30s"
+  ssh -o BatchMode=yes "root@$HOST" 'lua -e "
+    local f=io.open(\"/tmp/mudimodem/battery.jsonl\"); local last
+    for l in f:lines() do last=l end
+    local o=require(\"cjson\").decode(last)
+    local age=(os.time()*1000)-o.t
+    if age>60000 then os.exit(1) end
+    if o.cap==nil or o.cur==nil then os.exit(1) end"' \
+    || fail "battery.jsonl newest sample is stale (>60s) or missing cap/cur"
+  echo "   battery collector is sampling (fresh sample, cap+cur present)"
+  ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-bat.test.lua' < test/backend-battery-history.test.lua
+  ssh -o BatchMode=yes "root@$HOST" 'MUDIMODEM_HIST=/tmp/mmbat-test lua /tmp/mm-bat.test.lua; rc=$?; rm -f /tmp/mm-bat.test.lua; exit $rc' \
+    || fail "get_battery_history test failed on-device"
+fi
+
+# A REAL /rpc round trip. The on-device dofile test above bypasses oui's arg
+# validation entirely, so only this can catch a -32602 rejection. Needs a sid,
+# so it runs only when MM_PW is set (mirrors step 9b).
+if [ -n "${MM_PW:-}" ]; then
+  echo "7c. get_battery_history over /rpc (validation layer)"
+  SID=$(ssh -o BatchMode=yes "root@$HOST" \
+    'curl -sk -X POST https://127.0.0.1/rpc -H "Content-Type: application/json" \
+       -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"login\",\"params\":{\"username\":\"root\",\"password\":\"'"$MM_PW"'\"}}" \
+     | sed -n "s/.*\"sid\":\"\([^\"]*\)\".*/\1/p"')
+  [ -n "$SID" ] || fail "login for /rpc round trip failed"
+  RESP=$(ssh -o BatchMode=yes "root@$HOST" \
+    'curl -sk -X POST https://127.0.0.1/rpc -H "Content-Type: application/json" \
+       -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"call\",\"params\":[\"'"$SID"'\",\"mudimodem\",\"get_battery_history\",{\"window_ms\":900000}]}"')
+  echo "$RESP" | grep -q '"samples"' \
+    || fail "get_battery_history over /rpc did not return samples (got: $RESP)"
+  echo "$RESP" | grep -q '"error"' \
+    && fail "get_battery_history over /rpc returned an error (got: $RESP)"
+  echo "   /rpc round trip OK"
+else
+  echo "7c. SKIPPED — set MM_PW=<admin-password> to run the /rpc round-trip"
+fi
+
 # 8. Phase 3: AT console chunk + community library + own-channel AT tool.
 echo "8. Phase 3: console chunk + AT library + AT tool"
 ssh -o BatchMode=yes "root@$HOST" 'test -s /www/views/gl-sdk4-ui-mudimodem-console.common.js.gz' \
