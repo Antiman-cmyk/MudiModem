@@ -18,6 +18,11 @@
 //
 // Times are the box clock (os.time()*1000). We render relative to a skew-
 // corrected box-now so the axis doesn't jump if the browser clock differs.
+//
+// Chart craft (2026-07-29 hybrid with jayck88's reference hover/range work):
+// partial-window stretch, per-lane value+observed range, richer hover readout
+// with sample dots, binary-search nearest sample, stale-fetch ignore, frozen
+// sample arrays. Data plane and chargeState model are unchanged.
 module.exports = (function () {
   "use strict";
 
@@ -103,6 +108,10 @@ module.exports = (function () {
         // from "we have never reached the box"; `failStreak` keeps one dropped
         // poll on a flaky cellular link from raising an alarm.
         okCount: 0, failStreak: 0,
+        // Bumped on every fetchHistory call; late replies for a superseded
+        // range request are dropped so a 24 h click mid-15 m load cannot
+        // repaint the short window (jayck88 requestSeq pattern).
+        histRequestSeq: 0,
         pendingWindow: null, poll: null, tick: 0, live: true,
         width: 900, styleId: "mmb-css", cursor: null, pinnedM: null,
         // charge-limit form state (moved here from the Config tab)
@@ -163,15 +172,14 @@ module.exports = (function () {
         opts = opts || {};
         var self = this;
         if (typeof window === "undefined" || !window.$axios) { self.loading = false; return; }
-        // One fetch at a time; a range request landing mid-flight is remembered.
-        if (self.fetching) {
-          if (opts.window != null && !opts.merge)
-            self.pendingWindow = (self.pendingWindow == null)
-              ? opts.window : Math.max(self.pendingWindow, opts.window);
-          return;
-        }
-        self.fetching = true;
         var merge = !!opts.merge;
+        // Tail polls may coalesce, but a user-requested range reset must start
+        // immediately. Otherwise clicking 24 h while the initial 15 m request is
+        // in flight silently drops the 24 h backfill (jayck88 pattern). The
+        // in-flight reply is ignored via histRequestSeq when the new one lands.
+        if (self.fetching && merge) return;
+        self.fetching = true;
+        var requestSeq = ++self.histRequestSeq;
         // lastT is 0 until the first sample lands; since=0 would make the box
         // decode the whole retained 24 h on every 10 s tick.
         var incremental = (opts.since != null && opts.since > 0);
@@ -181,6 +189,8 @@ module.exports = (function () {
         // the 10 s interval both ignore it.
         return this.rpcSilent("get_battery_history", params)
           .then(function (res) {
+            // A newer fetch already owns the in-flight flag and state.
+            if (requestSeq !== self.histRequestSeq) return;
             self.fetching = false;
             // rpcSilent resolves null for EVERY failure mode — transport down,
             // session expired, JSON-RPC error payload. A successful call always
@@ -200,12 +210,18 @@ module.exports = (function () {
             }
             self.okCount++; self.failStreak = 0;
             var ns = res.samples || [];
-            if (merge) { if (ns.length) self.samples = self.samples.concat(ns); }
-            else self.samples = ns;
+            var merged = merge && self.samples && self.samples.length
+              ? self.samples.concat(ns) : ns;
             self.serverNow = res.now || Date.now();
             self.serverNowAt = Date.now();
             var cut = self.serverNow - 24 * 3600 * 1000;
-            self.samples = self.samples.filter(function (s) { return s.t >= cut; });
+            merged = merged.filter(function (s) { return s.t >= cut; });
+            // History samples are immutable snapshots. Freezing the container
+            // lets Vue 2 skip deep-observing thousands of points on every
+            // 10 s poll (jayck88 Object.freeze pattern). Replacing the array
+            // remains reactive.
+            self.samples = (typeof Object.freeze === "function")
+              ? Object.freeze(merged) : merged;
             if (self.samples.length) self.lastT = self.samples[self.samples.length - 1].t;
             var reached = incremental ? opts.since : (self.serverNow - winMs);
             self.loadedFrom = (self.loadedFrom == null)
@@ -306,9 +322,60 @@ module.exports = (function () {
         return Date.now();
       },
       mOf: function (t) { return -((this.nowMs() - t) / 60000); },
-      xOf: function (m) {
+      // Plot domain in box-clock ms. When retained history is shorter than the
+      // selected range, raise `start` to the first sample so the real data
+      // spans the full plot (jayck88 partial-window stretch) instead of sitting
+      // in a stub on the right of an empty 24 h canvas.
+      chartBounds: function (ss) {
+        var end = this.nowMs();
+        var start = end - this.winW * 60000;
+        if (ss && ss.length) {
+          for (var i = 0; i < ss.length; i++) {
+            if (ss[i] && ss[i].t != null && isFinite(ss[i].t)) {
+              if (ss[i].t > start) start = ss[i].t;
+              break;
+            }
+          }
+        }
+        if (start >= end) start = end - 60000;
+        return { start: start, end: end };
+      },
+      // Minutes of the *plotted* span (may be < winW on a short history).
+      spanMin: function (bounds) {
+        return Math.max(1 / 60, (bounds.end - bounds.start) / 60000);
+      },
+      xOf: function (m, bounds) {
         var plotW = this.width - PADL - PADR;
-        return PADL + (m + this.winW) / this.winW * plotW;
+        var span = bounds ? this.spanMin(bounds) : this.winW;
+        return PADL + (m + span) / span * plotW;
+      },
+      xOfT: function (t, bounds) {
+        var plotW = this.width - PADL - PADR;
+        var span = Math.max(1, bounds.end - bounds.start);
+        return PADL + (t - bounds.start) / span * plotW;
+      },
+      // Window min–max for a metric, as a label fragment (e.g. "72.0–84.1").
+      observedRange: function (ss, key, dec) {
+        var lo = null, hi = null;
+        for (var i = 0; i < (ss ? ss.length : 0); i++) {
+          var v = ss[i][key];
+          if (v == null || !isFinite(Number(v))) continue;
+          v = Number(v);
+          if (lo === null || v < lo) lo = v;
+          if (hi === null || v > hi) hi = v;
+        }
+        if (lo === null) return "—";
+        if (lo === hi) return Number(lo).toFixed(dec);
+        return Number(lo).toFixed(dec) + "–" + Number(hi).toFixed(dec);
+      },
+      fmtAgo: function (t) {
+        if (t == null) return "—";
+        var seconds = Math.max(0, Math.round((this.nowMs() - t) / 1000));
+        if (seconds < 60) return seconds + "s ago";
+        var minutes = Math.round(seconds / 60);
+        if (minutes < 60) return minutes + " min ago";
+        var hours = Math.round(minutes / 60);
+        return hours + " h ago";
       },
       // gauge % -> GL's "GUI" %, using the constants get_battlimit serves so the
       // fit lives in exactly one place (the Lua backend).
@@ -631,11 +698,23 @@ module.exports = (function () {
         return runs;
       },
       stateRuns: function () { return this.stateRunsFrom(this.winSamples()); },
+      // Binary search by sample `t`. Cursor `m` is minutes relative to nowMs
+      // (negative past → 0 now), same contract as before so existing tests and
+      // the pin path keep working.
       nearestSampleIn: function (ss, m) {
-        if (!ss.length) return null;
-        var best = ss[0];
-        for (var i = 1; i < ss.length; i++)
-          if (Math.abs(ss[i].m - m) < Math.abs(best.m - m)) best = ss[i];
+        if (!ss || !ss.length) return null;
+        var target = this.nowMs() + m * 60000;
+        var lo = 0, hi = ss.length;
+        while (lo < hi) {
+          var mid = (lo + hi) >> 1;
+          if (ss[mid].t < target) lo = mid + 1;
+          else hi = mid;
+        }
+        var best = null, bestD = Infinity;
+        for (var i = Math.max(0, lo - 1); i <= Math.min(ss.length - 1, lo); i++) {
+          var d = Math.abs(ss[i].t - target);
+          if (d < bestD) { best = ss[i]; bestD = d; }
+        }
         return best;
       },
       nearestSample: function (m) { return this.nearestSampleIn(this.winSamples(), m); },
@@ -643,9 +722,15 @@ module.exports = (function () {
         var d = new Date(t), p = function (n) { return (n < 10 ? "0" : "") + n; };
         return p(d.getHours()) + ":" + p(d.getMinutes());
       },
+      clockFull: function (t) {
+        var d = new Date(t), p = function (n) { return (n < 10 ? "0" : "") + n; };
+        return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+      },
 
       // ---- interaction ----
-      mFromEvent: function (e) {
+      // bounds comes from the last render (_lastBounds) so mousemove does not
+      // recompute winSamples on every pixel.
+      mFromEvent: function (e, bounds) {
         var el = this.$refs && this.$refs.lanes; if (!el) return null;
         var r = el.getBoundingClientRect(); if (!r.width) return null;
         // clientX is CSS px within the container; the SVG scales its viewBox to
@@ -653,19 +738,25 @@ module.exports = (function () {
         // geometry, or the drawn cursor drifts right of the pointer.
         var ux = (e.clientX - r.left) * this.width / r.width;
         var plotW = this.width - PADL - PADR;
-        return -this.winW + (ux - PADL) / plotW * this.winW;
+        var span = bounds ? this.spanMin(bounds) : this.winW;
+        return -span + (ux - PADL) / plotW * span;
       },
-      clampM: function (m) { return Math.max(-this.winW, Math.min(0, m)); },
+      clampM: function (m, bounds) {
+        var span = bounds ? this.spanMin(bounds) : this.winW;
+        return Math.max(-span, Math.min(0, m));
+      },
       onMove: function (e) {
         if (this.pinnedM != null) return;
-        var m = this.mFromEvent(e); if (m == null) return;
-        this.cursor = this.clampM(m);
+        var bounds = this._lastBounds;
+        var m = this.mFromEvent(e, bounds); if (m == null) return;
+        this.cursor = this.clampM(m, bounds);
       },
       onLeave: function () { if (this.pinnedM == null) this.cursor = null; },
       onClick: function (e) {
         if (this.pinnedM != null) { this.pinnedM = null; return; }
-        var m = this.mFromEvent(e); if (m == null) return;
-        this.pinnedM = this.cursor = this.clampM(m);
+        var bounds = this._lastBounds;
+        var m = this.mFromEvent(e, bounds); if (m == null) return;
+        this.pinnedM = this.cursor = this.clampM(m, bounds);
       },
 
       injectStyle: function () {
@@ -778,14 +869,27 @@ module.exports = (function () {
       renderLanes: function (h, ss) {
         var self = this, W = this.width, kids = [];
         ss = ss || this.winSamples();
+        var bounds = this.chartBounds(ss);
+        // Stash for mousemove handlers — avoid re-running winSamples per pixel.
+        this._lastBounds = bounds;
+        this._lastSs = ss;
+        var spanM = this.spanMin(bounds);
+        var partial = spanM < this.winW - 1;
         var cols = Math.max(40, Math.round((W - PADL - PADR) / 2));
         var top = TOP;
+        var focusM = this.cursor;
+        var near = (focusM != null) ? this.nearestSampleIn(ss, focusM) : null;
+        // When not hovering, lane labels still show the latest sample's value.
+        var focus = near || (ss.length ? ss[ss.length - 1] : null);
+        // Lane geometry kept so the hover dots can reuse the same domains.
+        var laneGeom = [];
 
         LANES.forEach(function (L) {
           // ONE domain resolution per lane per render; every y-mapping below
           // reuses it, so all marks in a lane share one scale by construction.
           var d = self.domainFrom(ss, L), d0 = d[0], d1 = d[1];
           var laneTop = top;
+          laneGeom.push({ L: L, d: d, top: laneTop });
 
           // frame + label + the two domain bounds (each lane has its own scale,
           // so a single shared y-axis could not label them)
@@ -793,8 +897,14 @@ module.exports = (function () {
             kids.push(h("line", { attrs: { x1: PADL, x2: W - PADR, y1: yy, y2: yy,
               stroke: "var(--divider)", "stroke-width": 1 } }));
           });
+          // Per-lane live value + observed window range (jayck88 scannability).
+          var fv = focus && focus[L.key];
+          var focusStr = (fv == null || !isFinite(Number(fv)))
+            ? "—" : Number(fv).toFixed(L.dec) + L.unit;
+          var rangeStr = self.observedRange(ss, L.key, L.dec) + L.unit;
           kids.push(h("text", { attrs: { x: PADL, y: laneTop - 6, "font-size": FS_LANE,
-            fill: "var(--text-badge)" } }, L.label));
+            fill: "var(--text-badge)" } },
+            L.label + "  " + focusStr + "  ·  " + rangeStr));
           [[d1, laneTop + 10], [d0, laneTop + L.h - 3]].forEach(function (p) {
             kids.push(h("text", { attrs: { x: PADL - 5, y: p[1], "font-size": FS_SCALE,
               "text-anchor": "end", fill: "var(--text-hint)" } },
@@ -825,7 +935,8 @@ module.exports = (function () {
           self.segmentsFrom(ss, L.key).forEach(function (seg) {
             var pts = self.reduce(seg, cols), dstr = "";
             pts.forEach(function (p, i) {
-              dstr += (i ? "L" : "M") + self.xOf(p.m).toFixed(1) + " "
+              // x from absolute sample time so partial-window stretch stays honest.
+              dstr += (i ? "L" : "M") + self.xOfT(p.t, bounds).toFixed(1) + " "
                 + self.yIn(L, laneTop, p.v, d).toFixed(1) + " ";
             });
             if (dstr) kids.push(h("path", { attrs: { fill: "none", stroke: L.color,
@@ -840,44 +951,74 @@ module.exports = (function () {
         var bandY = top - LANE_GAP + 6;
         var runs = this.stateRunsFrom(ss);
         runs.forEach(function (r) {
-          var x0 = self.xOf(r.m0), x1 = self.xOf(r.m1);
+          var x0 = self.xOf(r.m0, bounds), x1 = self.xOf(r.m1, bounds);
           kids.push(h("rect", { attrs: { x: x0, y: bandY, width: Math.max(1, x1 - x0),
             height: BAND_H, fill: STATE_COLOR[r.v], "fill-opacity": 0.55 } }));
         });
         for (var i = 1; i < runs.length; i++) {
           var wasOn = runs[i - 1].v !== "discharging", isOn = runs[i].v !== "discharging";
           if (wasOn === isOn) continue;                 // not a plug/unplug edge
-          var xe = self.xOf(runs[i].m0);
+          var xe = self.xOf(runs[i].m0, bounds);
           kids.push(h("line", { attrs: { x1: xe, x2: xe, y1: TOP - 10, y2: bandY + BAND_H,
             stroke: "var(--text-hint)", "stroke-width": 1, "stroke-dasharray": "1 3" } }));
           kids.push(h("text", { attrs: { x: xe + 3, y: TOP - 13, "font-size": FS_TICK,
             fill: "var(--text-hint)" } }, isOn ? "plugged" : "unplugged"));
         }
 
-        // ---- x axis
+        // ---- x axis (ticks follow the *plotted* span, not the selected winW)
         var axisY = bandY + BAND_H + 13;
-        var step = TICKSTEP[this.winW] || 10;
-        for (var m = -this.winW; m <= 0; m += step) {
-          var x = this.xOf(m);
-          kids.push(h("text", { attrs: { x: x, y: axisY, "font-size": FS_AXIS,
-            "text-anchor": "middle", fill: "var(--text-hint)" } },
-            m === 0 ? "now" : (m + " m")));
+        var step = spanM <= 15 ? 2 : spanM <= 60 ? 10 : spanM <= 360 ? 60 : 240;
+        // Always include the left edge so a partial window is labelled "~N m".
+        var ticks = [];
+        for (var m = -spanM; m < -0.001; m += step) ticks.push(m);
+        ticks.push(0);
+        for (var ti = 0; ti < ticks.length; ti++) {
+          var tm = ticks[ti];
+          var tx = this.xOf(tm, bounds);
+          var label;
+          if (tm === 0) label = "now";
+          else if (Math.abs(tm + spanM) < 0.01 && partial) {
+            // Left edge of a short history: say what we actually have.
+            label = spanM >= 60
+              ? ("~" + Math.max(1, Math.round(spanM / 60)) + " h")
+              : ("~" + Math.max(1, Math.round(spanM)) + " m");
+          } else {
+            label = (Math.round(tm * 10) / 10) + " m";
+          }
+          kids.push(h("text", { attrs: { x: tx, y: axisY, "font-size": FS_AXIS,
+            "text-anchor": "middle", fill: "var(--text-hint)" } }, label));
         }
 
-        // ---- hover cursor + readout
-        if (this.cursor != null) {
-          var cx = this.xOf(this.cursor);
+        // ---- hover cursor + sample dots + readout
+        if (focusM != null) {
+          var cx = this.xOf(focusM, bounds);
           kids.push(h("line", { attrs: { x1: cx, x2: cx, y1: TOP, y2: bandY + BAND_H,
             stroke: "var(--text-hint)", "stroke-width": 1 } }));
-          var near = this.nearestSampleIn(ss, this.cursor);
           if (near) {
-            var bits = [this.clock(near.t),
+            // Dot on each lane at the nearest sample — makes the shared cursor
+            // read as "this moment" rather than an abstract vertical rule.
+            for (var gi = 0; gi < laneGeom.length; gi++) {
+              var g = laneGeom[gi], gv = near[g.L.key];
+              if (gv == null || !isFinite(Number(gv))) continue;
+              var gy = self.yIn(g.L, g.top, gv, g.d);
+              kids.push(h("circle", { attrs: {
+                cx: self.xOfT(near.t, bounds).toFixed(1),
+                cy: gy.toFixed(1), r: 3.5,
+                fill: g.L.color,
+                stroke: "var(--background-card, var(--bg-content))",
+                "stroke-width": 1.5
+              } }));
+            }
+            var bits = [
+              this.fmtAgo(near.t),
+              this.clockFull(near.t),
               (near.capGui == null ? "—" : near.capGui.toFixed(1) + "%")
                 + (near.cap == null ? "" : " (IC " + near.cap + "%)"),
               (near.cur == null ? "—" : near.cur + " mA"),
               (near.voltV == null ? "—" : near.voltV.toFixed(2) + " V"),
               (near.temp == null ? "—" : near.temp.toFixed(1) + " °C"),
-              STATE_LABEL[this.chargeState(near)]];
+              STATE_LABEL[this.chargeState(near)]
+            ];
             kids.push(h("text", { attrs: { x: PADL, y: axisY + 16, "font-size": FS_READOUT,
               fill: "var(--text-primary)" } }, bits.join("  ·  ")));
           }
@@ -939,15 +1080,43 @@ module.exports = (function () {
                 "  (≈ " + self.gaugeOf(self.blDraft) + " % IC Reported Charge)")
             ])
           ]));
+          // GUI % leads; gauge stays on the slider note above. "Charging
+          // stopped" is only claimed when a fresh hardware sample confirms it
+          // (jayck88 freshness rule) — bl.active alone means the watcher is
+          // running, not that current is actually zero this second.
+          var last = (this.samples && this.samples.length)
+            ? this.samples[this.samples.length - 1] : null;
+          var sampleFresh = !!(last && last.t
+            && Math.abs(this.nowMs() - last.t) <= 30000);
+          var chargeStopped = !!(bl.active && sampleFresh && last.online
+            && last.cur != null && Math.abs(Number(last.cur)) <= 10);
+          var targetGui = (typeof bl.limit_gui === "number") ? bl.limit_gui + "%" : "—";
+          var currentGui = (typeof bl.capacity_gui === "number")
+            ? ("~" + bl.capacity_gui + "%") : "—";
           var statusLine;
-          if (bl.active) statusLine = "Active · " + (bl.active_gauge != null ? bl.active_gauge + " % IC Reported Charge" : "on");
-          else if (bl.enabled && !bl.charger_online) statusLine = "Armed · will apply when the charger connects";
-          else if (bl.enabled && bl.charger_online) statusLine = "Enabled · not active";
-          else statusLine = "Off";
+          if (bl.active) {
+            statusLine = "Active · target " + targetGui + " GL UI · current " + currentGui;
+            if (chargeStopped) statusLine += " · Charging stopped";
+          } else if (bl.enabled && !bl.charger_online) {
+            statusLine = "Armed · target " + targetGui
+              + " · will apply when the charger connects · current " + currentGui;
+          } else if (bl.enabled && bl.charger_online) {
+            statusLine = "Enabled · not active · target " + targetGui
+              + " · current " + currentGui;
+          } else {
+            statusLine = "Off · current " + currentGui;
+          }
           kids.push(h("div", { staticClass: "mmb-kv" }, [
             h("span", { staticClass: "mmb-k" }, "Status"),
             h("span", { staticClass: "mmb-v" }, statusLine)
           ]));
+          if (bl.active_gauge != null || bl.capacity_gauge != null) {
+            kids.push(h("div", { staticClass: "mmb-note" },
+              "Low-level: target "
+              + (bl.limit_gauge != null ? bl.limit_gauge + "% IC" : "—")
+              + ", current "
+              + (bl.capacity_gauge != null ? bl.capacity_gauge + "% IC" : "—")));
+          }
           if (this.blErr) kids.push(h("div", { staticClass: "mmb-err" }, this.blErr));
         }
         // Credit, shown in every state of the card (including "not available"):

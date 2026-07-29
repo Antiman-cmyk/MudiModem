@@ -940,7 +940,9 @@ test('renderLimitCard status: Armed when enabled and charger offline', () => {
   const c = loadChunk();
   const vm = makeVm(c, { bl: Object.assign({}, BL_ARMED), blDraft: 80 });
   const txt = textOf(vm.renderLimitCard(h));
-  assert.match(txt, /Armed · will apply when the charger connects/, 'Armed status');
+  assert.match(txt, /Armed ·/, 'Armed status');
+  assert.match(txt, /will apply when the charger connects/, 'explains the wait');
+  assert.match(txt, /target 80%/, 'GUI target leads');
   assert.doesNotMatch(txt, /Active ·/, 'not Active');
   assert.doesNotMatch(txt, /Enabled · not active/, 'not the plugged-in stuck line');
 });
@@ -959,7 +961,36 @@ test('renderLimitCard status: Active when the limiter is actually holding charge
   const vm = makeVm(c, { bl: Object.assign({}, BL_ACTIVE), blDraft: 80 });
   const txt = textOf(vm.renderLimitCard(h));
   assert.match(txt, /Active ·/, 'Active status');
-  assert.match(txt, /71 % IC Reported Charge/, 'active_gauge shown in the status line');
+  assert.match(txt, /target 80%/, 'GUI target leads the status line');
+  assert.match(txt, /Low-level:.*71% IC/, 'gauge target demoted to the diagnostic line');
+});
+
+test('renderLimitCard: Charging stopped only when a fresh sample confirms 0 mA', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  // Watcher active + fresh sample with |cur|<=10 while plugged in.
+  const samples = Object.freeze([
+    { t: now - 10000, cap: 71, cur: 0, volt: 4040, temp: 32, online: 1,
+      status: 'Full', ctype: 'Trickle', lim: 1, lim_gauge: 71 }
+  ]);
+  const vm = makeVm(c, {
+    bl: Object.assign({}, BL_ACTIVE), blDraft: 80,
+    samples: samples, serverNow: now, serverNowAt: now
+  });
+  assert.match(textOf(vm.renderLimitCard(h)), /Charging stopped/,
+    'fresh zero-current sample while active means charging has stopped');
+
+  // Stale sample (>30 s): do not claim "stopped" from ancient data.
+  const stale = Object.freeze([
+    { t: now - 60000, cap: 71, cur: 0, volt: 4040, temp: 32, online: 1,
+      status: 'Full', ctype: 'Trickle', lim: 1, lim_gauge: 71 }
+  ]);
+  const vm2 = makeVm(c, {
+    bl: Object.assign({}, BL_ACTIVE), blDraft: 80,
+    samples: stale, serverNow: now, serverNowAt: now
+  });
+  assert.doesNotMatch(textOf(vm2.renderLimitCard(h)), /Charging stopped/,
+    'a sample older than 30 s is not evidence of the present');
 });
 
 // ---------------------------------------------------------------------------
@@ -1252,4 +1283,132 @@ test('the hover readout fits inside the svg height', () => {
       'text at y=' + y + ' (size ' + fs + ') overflows svg height ' + height);
     assert.ok(y - fs >= 0, 'text at y=' + y + ' (size ' + fs + ') clips off the top');
   });
+});
+
+// ---------------------------------------------------------------------------
+// Chart hybrid craft (2026-07-29) — jayck88 hover/range presentation on our
+// data plane. Spec: docs/superpowers/specs/2026-07-29-battery-chart-hybrid-design.md
+// ---------------------------------------------------------------------------
+
+test('chartBounds stretches when retained history is shorter than the selected range', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  // Only ~2 h of samples, but the user picked 24 h.
+  const samples = seed(now, 10, 12 * 60 * 1000, () => ({}));
+  const vm = makeVm(c, { samples, serverNow: now, serverNowAt: now, winW: 1440 });
+  const ss = vm.winSamples();
+  const b = vm.chartBounds(ss);
+  assert.ok(b.end - b.start < 3 * 3600 * 1000,
+    'plot span collapses to the real data, not a padded empty 24 h');
+  assert.ok(b.start >= samples[0].t - 1, 'start is the first sample');
+});
+
+test('chartBounds keeps the full window when history already fills it', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const samples = seed(now, 20, 60000, () => ({})); // 20 min at 1 min step
+  const vm = makeVm(c, { samples, serverNow: now, serverNowAt: now, winW: 15 });
+  const ss = vm.winSamples();
+  const b = vm.chartBounds(ss);
+  // Requested 15 m; samples extend further back so the first in-window sample
+  // is near the window edge — start should stay near now-15m.
+  assert.ok(Math.abs((b.end - b.start) - 15 * 60000) < 60000,
+    'full window is not artificially shortened when data fills it');
+});
+
+test('observedRange reports min-max for a metric in the window', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  const ss = [
+    { cur: -100 }, { cur: -400 }, { cur: -200 }, { cur: null }
+  ];
+  assert.equal(vm.observedRange(ss, 'cur', 0), '-400–-100');
+  assert.equal(vm.observedRange([{ cur: 5 }, { cur: 5 }], 'cur', 0), '5');
+  assert.equal(vm.observedRange([], 'cur', 0), '—');
+});
+
+test('nearestSampleIn binary-searches by time and matches the closest sample', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const samples = seed(now, 50, 20000, () => ({}));
+  const vm = makeVm(c, { samples, serverNow: now, serverNowAt: now, winW: 60 });
+  const ss = vm.winSamples();
+  // Cursor ~ halfway through the window.
+  const mid = ss[Math.floor(ss.length / 2)];
+  const m = vm.mOf(mid.t);
+  const near = vm.nearestSampleIn(ss, m);
+  assert.equal(near.t, mid.t, 'nearest is the sample at the cursor time');
+  // Slightly past the midpoint should still land on a neighbour.
+  const near2 = vm.nearestSampleIn(ss, m + 0.05);
+  assert.ok(near2 && Math.abs(near2.t - mid.t) <= 20000 * 2);
+});
+
+test('lane labels carry the focus value and the observed range', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const samples = seed(now, 30, 20000, (i) => ({
+    cap: 70 + (i % 5), cur: -300 - i, temp: 30 + (i % 3)
+  }));
+  const vm = makeVm(c, { samples, serverNow: now, serverNowAt: now, winW: 15, bl: {} });
+  const txt = textOf(lanesSvg(vm, vm.winSamples()));
+  // Observed range fragment uses an en-dash between two numbers.
+  assert.match(txt, /\d+(?:\.\d+)?–\d+(?:\.\d+)?/, 'observed min–max appears in a lane label');
+  assert.match(txt, /mA/, 'current unit is present');
+});
+
+test('hover readout includes relative time and sample dots land on the svg', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const samples = seed(now, 40, 20000, () => ({ cur: -500, cap: 71 }))
+    .map((s) => Object.assign(s, { capGui: 78.1, voltV: 4.01 }));
+  const vm = makeVm(c, {
+    samples, serverNow: now, serverNowAt: now, winW: 15, bl: {}, cursor: -5
+  });
+  const ss = vm.winSamples();
+  const svg = lanesSvg(vm, ss);
+  const txt = textOf(svg);
+  assert.match(txt, /\d+\s*(s|min|h)\s+ago/, 'relative-time fragment in the hover readout');
+  const dots = walk(svg).filter((n) => n.tag === 'circle');
+  assert.ok(dots.length >= 1, 'at least one sample dot is drawn while hovering');
+});
+
+test('fetchHistory ignores a stale reply after a newer request supersedes it', async () => {
+  const c = loadChunk();
+  let resolveA, resolveB;
+  const pA = new Promise((r) => { resolveA = r; });
+  const pB = new Promise((r) => { resolveB = r; });
+  let n = 0;
+  global.window = {
+    $getCookie: () => 'tok',
+    addEventListener() {}, removeEventListener() {},
+    $axios: {
+      post() {
+        const i = n++;
+        return (i === 0 ? pA : pB).then((res) => ({ data: { result: res } }));
+      }
+    }
+  };
+  try {
+    const now = Date.now();
+    const vm = makeVm(c, { live: false, loading: true, samples: [], lastT: 0 });
+    // Start a 15 m load, then supersede it with a 24 h load before it returns.
+    const a = vm.fetchHistory({ window: 15 });
+    const b = vm.fetchHistory({ window: 1440 });
+    // Stale 15 m reply arrives first with a short series.
+    resolveA({
+      now, samples: seed(now, 3, 20000, () => ({ cap: 50 }))
+    });
+    await a;
+    // Samples must still be empty — the stale reply was dropped.
+    assert.equal(vm.samples.length, 0, 'stale reply must not paint the short window');
+    // Live 24 h reply lands with a longer series.
+    resolveB({
+      now, samples: seed(now, 8, 20000, () => ({ cap: 70 }))
+    });
+    await b;
+    assert.equal(vm.samples.length, 8, 'the latest request wins');
+    assert.ok(Object.isFrozen(vm.samples), 'successful history is frozen for Vue 2');
+  } finally {
+    delete global.window;
+  }
 });
