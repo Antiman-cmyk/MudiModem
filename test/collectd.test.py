@@ -279,5 +279,90 @@ class BatteryConstants(unittest.TestCase):
         self.assertGreater(collectd.BATT_MAX_LINE, 4320)
 
 
+class HistoryPersist(unittest.TestCase):
+    """eMMC backup helpers — approach #2 (RAM live + batched append flush)."""
+
+    def test_read_history_config_defaults_disabled(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "missing.json")
+            self.assertEqual(collectd.read_history_config(p), {"enabled": False})
+            with open(p, "w") as f:
+                f.write('{"enabled":false}\n')
+            self.assertEqual(collectd.read_history_config(p), {"enabled": False})
+            with open(p, "w") as f:
+                f.write('{"enabled":true}\n')
+            self.assertEqual(collectd.read_history_config(p), {"enabled": True})
+            with open(p, "w") as f:
+                f.write("not json")
+            self.assertEqual(collectd.read_history_config(p), {"enabled": False})
+
+    def test_flush_new_lines_appends_only_newer(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = os.path.join(d, "tmp.jsonl")
+            pst = os.path.join(d, "persist.jsonl")
+            with open(tmp, "w") as f:
+                for t in (1000, 2000, 3000):
+                    f.write(json.dumps({"t": t, "rsrp": -100}) + "\n")
+            # First flush: everything
+            since = collectd.flush_new_lines(tmp, pst, 0)
+            self.assertEqual(since, 3000)
+            kept = [json.loads(l)["t"] for l in open(pst)]
+            self.assertEqual(kept, [1000, 2000, 3000])
+            # Second flush with no new tmp lines: no growth
+            since2 = collectd.flush_new_lines(tmp, pst, since)
+            self.assertEqual(since2, 3000)
+            self.assertEqual(sum(1 for _ in open(pst)), 3)
+            # New samples in tmp
+            with open(tmp, "a") as f:
+                f.write(json.dumps({"t": 4000, "rsrp": -90}) + "\n")
+            since3 = collectd.flush_new_lines(tmp, pst, since2)
+            self.assertEqual(since3, 4000)
+            kept = [json.loads(l)["t"] for l in open(pst)]
+            self.assertEqual(kept, [1000, 2000, 3000, 4000])
+
+    def test_seed_tmp_from_persist_only_when_tmp_empty(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = os.path.join(d, "tmp.jsonl")
+            pst = os.path.join(d, "persist.jsonl")
+            with open(pst, "w") as f:
+                f.write(json.dumps({"t": 50, "cap": 70}) + "\n")
+            self.assertTrue(collectd.seed_tmp_from_persist(tmp, pst))
+            self.assertEqual(json.loads(open(tmp).read())["t"], 50)
+            # Non-empty tmp must not be overwritten
+            with open(tmp, "w") as f:
+                f.write(json.dumps({"t": 99, "cap": 80}) + "\n")
+            self.assertFalse(collectd.seed_tmp_from_persist(tmp, pst))
+            self.assertEqual(json.loads(open(tmp).read())["t"], 99)
+
+    def test_max_t_in_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "s.jsonl")
+            self.assertEqual(collectd.max_t_in_file(p), 0)
+            with open(p, "w") as f:
+                for t in (5, 50, 20):
+                    f.write(json.dumps({"t": t}) + "\n")
+            self.assertEqual(collectd.max_t_in_file(p), 50)
+
+    def test_maybe_flush_respects_disabled_config(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = os.path.join(d, "history.json")
+            with open(cfg, "w") as f:
+                f.write('{"enabled":false}\n')
+            old = collectd.HISTORY_CFG
+            collectd.HISTORY_CFG = cfg
+            try:
+                tmp = os.path.join(d, "tmp.jsonl")
+                with open(tmp, "w") as f:
+                    f.write(json.dumps({"t": 1}) + "\n")
+                cursors = {"samples": 0, "battery": 0}
+                en = collectd.maybe_flush_persist(
+                    tmp, tmp, os.path.join(d, "persist"), cursors)
+                self.assertFalse(en)
+                self.assertFalse(os.path.exists(
+                    os.path.join(d, "persist", "samples.jsonl")))
+            finally:
+                collectd.HISTORY_CFG = old
+
+
 if __name__ == "__main__":
     unittest.main()

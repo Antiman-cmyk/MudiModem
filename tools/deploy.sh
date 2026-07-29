@@ -160,10 +160,19 @@ if [ -f src/sbin/glbattlimit ]; then
   ssh -o BatchMode=yes "root@$HOST" '
     mkdir -p /etc/mudimodem
     [ -f /etc/mudimodem/battlimit.json ] || echo "{\"enabled\":false,\"limit_gui\":80}" > /etc/mudimodem/battlimit.json
+    # History eMMC backup policy — off by default; never clobber an existing choice.
+    [ -f /etc/mudimodem/history.json ] || echo "{\"enabled\":false}" > /etc/mudimodem/history.json
     /etc/init.d/glbattlimit enable 2>/dev/null || true
   '
   echo "battery charge limit stack deployed"
 fi
+
+# History persist policy (also ensured when battlimit block is skipped).
+ssh -o BatchMode=yes "root@$HOST" '
+  mkdir -p /etc/mudimodem
+  [ -f /etc/mudimodem/history.json ] || echo "{\"enabled\":false}" > /etc/mudimodem/history.json
+'
+echo "history persist policy present (default off)"
 
 # Preserve our files across a firmware upgrade (they live outside /etc/config).
 # Idempotent: only add lines not already present.
@@ -197,6 +206,8 @@ ssh -o BatchMode=yes "root@$HOST" 'f=/etc/sysupgrade.conf; touch "$f"; for p in 
   /etc/hotplug.d/i2c/20-glbattlimit \
   /etc/init.d/glbattlimit \
   /etc/mudimodem/battlimit.json \
+  /etc/mudimodem/history.json \
+  /etc/mudimodem/history \
   ; do \
   grep -qxF "$p" "$f" || echo "$p" >> "$f" ; done'
 echo "sysupgrade.conf registered"

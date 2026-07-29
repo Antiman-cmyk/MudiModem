@@ -229,6 +229,45 @@
    "by": "kevin"
   },
   {
+   "id": "quectel.scan-lte",
+   "cat": "Cell lock",
+   "title": "Full network scan \u2014 LTE",
+   "cmd": "AT+QSCAN=1,1",
+   "risk": "set",
+   "vendor": "quectel",
+   "verified": [],
+   "summary": "Disruptive manual scan for nearby LTE cells \u2014 the surrounding-cell data QNWLOCK's own \"lock to a cell you can't yet see\" needs.",
+   "warn": "Takes the modem OFF THE AIR for the duration of the scan \u2014 up to ~10 minutes per GL's own UI (600 s timeout). You WILL lose the cellular link, and this admin session with it if you're on it remotely. Only mode 3 (\"3,1\") is directly observed, in GL's own driving code; modes 1/2 are inferred by pattern (LTE/NSA/SA), not fired by us. QSCAN is absent from the 5-series manual entirely.",
+   "source": "inferred from AT+QSCAN=3,1 (GL's modem.scan_cell_tower, seen in libcm_modem.so + modem.sh, reference \u00a76a) \u2014 mode 1 unverified",
+   "by": "kevin"
+  },
+  {
+   "id": "quectel.scan-nsa",
+   "cat": "Cell lock",
+   "title": "Full network scan \u2014 NR5G-NSA",
+   "cmd": "AT+QSCAN=2,1",
+   "risk": "set",
+   "vendor": "quectel",
+   "verified": [],
+   "summary": "Disruptive manual scan for nearby NR5G-NSA cells \u2014 the surrounding-cell data QNWLOCK's own \"lock to a cell you can't yet see\" needs.",
+   "warn": "Takes the modem OFF THE AIR for the duration of the scan \u2014 up to ~10 minutes per GL's own UI (600 s timeout). You WILL lose the cellular link, and this admin session with it if you're on it remotely. Only mode 3 (\"3,1\") is directly observed, in GL's own driving code; modes 1/2 are inferred by pattern (LTE/NSA/SA), not fired by us. QSCAN is absent from the 5-series manual entirely.",
+   "source": "inferred from AT+QSCAN=3,1 (GL's modem.scan_cell_tower, seen in libcm_modem.so + modem.sh, reference \u00a76a) \u2014 mode 2 unverified",
+   "by": "kevin"
+  },
+  {
+   "id": "quectel.scan-sa",
+   "cat": "Cell lock",
+   "title": "Full network scan \u2014 NR5G-SA",
+   "cmd": "AT+QSCAN=3,1",
+   "risk": "set",
+   "vendor": "quectel",
+   "verified": [],
+   "summary": "Disruptive manual scan for nearby NR5G-SA cells \u2014 what GL's own \"scan\" button runs (modem.scan_cell_tower). The only mode actually observed on this box.",
+   "warn": "Takes the modem OFF THE AIR for the duration of the scan \u2014 up to ~10 minutes per GL's own UI (600 s timeout). You WILL lose the cellular link, and this admin session with it if you're on it remotely. Report flag \"1\" and the response format are not decoded here \u2014 read GL's own scan-result UI for that.",
+   "source": "AT+QSCAN=3,1 observed driving GL's modem.scan_cell_tower (libcm_modem.so + modem.sh, reference \u00a76a) \u2014 fired via GL's UI, not directly by us",
+   "by": "kevin"
+  },
+  {
    "id": "3gpp.registration-5g",
    "cat": "Diagnostics",
    "title": "5G network registration",
@@ -394,52 +433,6 @@
      }
     }
    }
-  },
-  {
-   "id": "quectel.nv-save-qprtpara",
-   "cat": "Identity",
-   "title": "Persist the change \u2014 SIM1 (QPRTPARA)",
-   "cmd": "AT+QPRTPARA=1",
-   "risk": "nv",
-   "vendor": "quectel",
-   "verified": [],
-   "summary": "Save/back up modem NV so a SIM1 change (e.g. an IMEI write) survives reboot. The '1' selects the backup action; QPRTPARA=? on this box returns (1-4).",
-   "warn": "Action, not a query \u2014 writes NAND. The 1-4 argument mapping is not fully verified on the RG650V (community and a different-family app note both read =1 as the save/back-up step). Do not power off mid-execute; don't run it frequently (NAND wear).",
-   "source": "GL.iNet forum 'Mudi 7 Mega Post', 2026-07-18; QPRTPARA=? range seen on box (reference \u00a75)",
-   "by": "community"
-  },
-  {
-   "id": "quectel.nv-save-qefssync",
-   "cat": "Identity",
-   "title": "Persist the change \u2014 SIM2 / eSIM (QEFSSYNC)",
-   "cmd": "AT+QEFSSYNC=0",
-   "risk": "nv",
-   "vendor": "quectel",
-   "verified": [],
-   "summary": "The save step for SIM2 / eSIM changes \u2014 the community reports this is the correct sequence for slot 2, distinct from SIM1's QPRTPARA.",
-   "warn": "Action that flushes the modem's EFS to NV. Unverified on the RG650V; argument 0 per community report. Use this (not QPRTPARA) after an EGMR write with index 1,11 (SIM2/eSIM).",
-   "source": "GL.iNet forum 'Mudi 7 Mega Post', community-reported 2026-07-18 (reference \u00a75a)",
-   "by": "community"
-  },
-  {
-   "id": "quectel.set-imei-sim1",
-   "cat": "Identity",
-   "title": "Set the IMEI (SIM1)",
-   "cmd": "AT+EGMR=1,7,\"{{imei}}\"",
-   "risk": "nv",
-   "vendor": "quectel",
-   "verified": [],
-   "summary": "Write the IMEI for SIM1's subscription (index 1,7). A community IMEI-repair step \u2014 must be followed by a save (QPRTPARA=1) and a reboot, or it won't stick.",
-   "warn": "Writes device identity to NV (survives reboot/factory reset). Changing an IMEI is LEGALLY RESTRICTED in many countries \u2014 only for restoring your own device's IMEI. Unverified on the RG650V; 1,7 = SIM1, 1,11 = SIM2/eSIM per community reports. Copy your current IMEI first: it is lost if you don't save it.",
-   "source": "GL.iNet forum 'Mudi 7 Mega Post', community-reported 2026-07-18 (reference \u00a75a)",
-   "by": "community",
-   "params": [
-    {
-     "name": "imei",
-     "hint": "The 15-digit IMEI to write (keep the quotes). This form targets SIM1 (1,7); for SIM2/eSIM use index 1,11.",
-     "example": "350000000000006"
-    }
-   ]
   },
   {
    "id": "3gpp.radio",

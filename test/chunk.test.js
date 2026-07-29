@@ -1951,11 +1951,13 @@ test('pollUpdate: gives up after POLL_MAX attempts with a clear message', async 
 
 test('config tab: device_info retries on a later tab open after a first failure', async () => {
   const c = loadChunk();
-  // Per open: device_info, app_version (in that order). The charge-limit form
-  // moved to its own chunk (Battery tab), so opening Config no longer fetches it.
+  // Per open (same reply queue for $rpcRequest + $axios): device_info,
+  // app_version, get_history_persist. Charge-limit lives on the Battery tab.
+  const hist = { enabled: false, path: '/etc/mudimodem/history', size_bytes: 0,
+    flush_interval_s: 600 };
   const calls = stubRpc([
-    new Error('boom'), {},                                          // 1st open: device_info fails
-    { model: 'GL.iNet GL-E5800', cpu: 'ARMv8 Processor rev 4' }, {}  // 2nd open: succeeds
+    new Error('boom'), {}, hist,                                          // 1st open
+    { model: 'GL.iNet GL-E5800', cpu: 'ARMv8 Processor rev 4' }, {}, hist  // 2nd open
   ]);
   try {
     const vm = makeVm(c, LIVE);

@@ -5,13 +5,16 @@
 # JSON sample per tick to /tmp/mudimodem/samples.jsonl. It reads GL's
 # cellular_manager CACHE over ubus — NEVER raw AT — so it adds no load on the
 # modem's AT channel and cannot cause the crossed-response contention that has
-# bitten this box (spec §3). Storage is tmpfs (RAM): survives browser reload and
-# nginx reload, lost on reboot (that's the v1 deal).
+# bitten this box (spec §3). Live storage is tmpfs (RAM). Optional eMMC backup
+# (Config → keep history across reboots) periodically APPENDs new lines to
+# /etc/mudimodem/history/ and seeds tmpfs from that on boot — off by default.
 #
 # Stdlib only (Python 3.11 on the box); no pip. Managed by procd
 # (/etc/init.d/mudimodem-collectd), respawned on crash.
 #
-# Env overrides (tests): MUDIMODEM_HIST (dir), MUDIMODEM_POLL (seconds).
+# Env overrides (tests): MUDIMODEM_HIST (dir), MUDIMODEM_POLL (seconds),
+# MUDIMODEM_HISTORY_CFG, MUDIMODEM_HISTORY_PERSIST (persist dir),
+# MUDIMODEM_FLUSH_INTERVAL (seconds).
 
 import json
 import os
@@ -45,6 +48,17 @@ BATT_SYSFS      = os.environ.get("MUDIMODEM_BATT_SYSFS", "/sys/class/power_suppl
 # samples that came before it.
 BATT_LIMIT_PIDF = os.environ.get("MUDIMODEM_BATTLIMIT_PIDF", "/tmp/glbattlimit.pid")
 BATT_LIMIT_LIMF = os.environ.get("MUDIMODEM_BATTLIMIT_LIMF", "/tmp/glbattlimit.limit")
+
+# ---- optional eMMC backup (approach #2) -----------------------------------
+# Live path is always tmpfs. When enabled, every FLUSH_INTERVAL we APPEND only
+# the new lines to /etc/mudimodem/history/ (overlay/eMMC). On startup we seed
+# empty tmpfs from that backup so charts survive reboot. Off by default —
+# see /etc/mudimodem/history.json { "enabled": false }.
+HISTORY_CFG = os.environ.get("MUDIMODEM_HISTORY_CFG",
+                             "/etc/mudimodem/history.json")
+HISTORY_PERSIST = os.environ.get("MUDIMODEM_HISTORY_PERSIST",
+                                 "/etc/mudimodem/history")
+FLUSH_INTERVAL = float(os.environ.get("MUDIMODEM_FLUSH_INTERVAL", "600"))  # 10 min
 
 
 def now_ms():
@@ -339,8 +353,128 @@ def trim(path, max_age_ms, max_lines, ref_ms=None):
     os.replace(tmp, path)
 
 
+# ---- eMMC history backup helpers (pure; unit-tested) ----------------------
+
+def read_history_config(path=None):
+    """Return {enabled: bool}. Missing/malformed file → disabled (safe default)."""
+    path = HISTORY_CFG if path is None else path
+    out = {"enabled": False}
+    try:
+        with open(path) as f:
+            obj = json.loads(f.read() or "{}")
+    except (OSError, ValueError, TypeError):
+        return out
+    if isinstance(obj, dict) and obj.get("enabled") is True:
+        out["enabled"] = True
+    return out
+
+
+def max_t_in_file(path):
+    """Largest sample `t` in a jsonl file, or 0 if absent/empty."""
+    max_t = 0
+    try:
+        with open(path) as f:
+            for ln in f:
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    t = json.loads(ln).get("t", 0)
+                except ValueError:
+                    continue
+                if isinstance(t, (int, float)) and t > max_t:
+                    max_t = int(t)
+    except FileNotFoundError:
+        pass
+    return max_t
+
+
+def seed_tmp_from_persist(tmp_path, persist_path):
+    """If tmpfs file is empty/missing and persist has data, copy persist → tmp.
+    Returns True if a seed happened. Does not overwrite non-empty tmpfs (this
+    boot may already have samples; a full merge is unnecessary and racy)."""
+    try:
+        if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
+            return False
+    except OSError:
+        pass
+    try:
+        if not os.path.exists(persist_path) or os.path.getsize(persist_path) == 0:
+            return False
+    except OSError:
+        return False
+    try:
+        with open(persist_path) as src:
+            body = src.read()
+        tmp = tmp_path + ".seed"
+        os.makedirs(os.path.dirname(tmp_path) or ".", exist_ok=True)
+        with open(tmp, "w") as dst:
+            dst.write(body)
+        os.replace(tmp, tmp_path)
+        return True
+    except OSError:
+        return False
+
+
+def flush_new_lines(tmp_path, persist_path, since_t):
+    """Append jsonl lines from tmp_path with t > since_t onto persist_path.
+    Returns the new since_t (max t flushed, or unchanged if nothing new).
+    APPEND-ONLY — never rewrites the whole persist file here (trim does that)."""
+    new_since = since_t
+    try:
+        with open(tmp_path) as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        return since_t
+    out = []
+    for ln in lines:
+        raw = ln.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except ValueError:
+            continue
+        t = obj.get("t", 0)
+        if not isinstance(t, (int, float)):
+            continue
+        t = int(t)
+        if t > since_t:
+            out.append(raw)
+            if t > new_since:
+                new_since = t
+    if not out:
+        return since_t
+    os.makedirs(os.path.dirname(persist_path) or ".", exist_ok=True)
+    with open(persist_path, "a") as f:
+        f.write("\n".join(out) + "\n")
+    return new_since
+
+
+def maybe_flush_persist(samples_tmp, battery_tmp, persist_dir, cursors):
+    """If config enabled, append new tmpfs lines to eMMC and trim backups.
+    `cursors` is a mutable dict {samples, battery} of last-flushed t.
+    Returns updated enabled flag (so the caller can log transitions)."""
+    cfg = read_history_config()
+    if not cfg["enabled"]:
+        return False
+    os.makedirs(persist_dir, exist_ok=True)
+    p_samples = os.path.join(persist_dir, "samples.jsonl")
+    p_battery = os.path.join(persist_dir, "battery.jsonl")
+    cursors["samples"] = flush_new_lines(
+        samples_tmp, p_samples, cursors.get("samples", 0))
+    cursors["battery"] = flush_new_lines(
+        battery_tmp, p_battery, cursors.get("battery", 0))
+    # Trim backups to the same 24 h window as live history.
+    trim(p_samples, SAMPLE_MAX_AGE, SAMPLE_MAX_LINE)
+    trim(p_battery, BATT_MAX_AGE, BATT_MAX_LINE)
+    # After trim the max t is unchanged; cursor stays valid.
+    return True
+
+
 def main():
     hist = os.environ.get("MUDIMODEM_HIST", "/tmp/mudimodem")
+    persist_dir = os.environ.get("MUDIMODEM_HISTORY_PERSIST", HISTORY_PERSIST)
     os.makedirs(hist, exist_ok=True)
     samples_path = os.path.join(hist, "samples.jsonl")
     events_path = os.path.join(hist, "events.jsonl")
@@ -350,6 +484,16 @@ def main():
     bc = Broadcaster(sock_path)
     bc.start()
 
+    # Seed live tmpfs from eMMC backup when the option is on and this is a
+    # fresh boot (empty tmpfs). Cursor starts at the newest t already on disk
+    # so the first flush only appends post-seed samples.
+    cursors = {"samples": 0, "battery": 0}
+    if read_history_config().get("enabled"):
+        seed_tmp_from_persist(samples_path, os.path.join(persist_dir, "samples.jsonl"))
+        seed_tmp_from_persist(battery_path, os.path.join(persist_dir, "battery.jsonl"))
+        cursors["samples"] = max_t_in_file(os.path.join(persist_dir, "samples.jsonl"))
+        cursors["battery"] = max_t_in_file(os.path.join(persist_dir, "battery.jsonl"))
+
     state = {"go": True}
     def stop(*_a):
         state["go"] = False
@@ -358,6 +502,7 @@ def main():
 
     i = 0
     last_batt = 0.0
+    last_flush = 0.0
     while state["go"]:
         try:
             # Battery FIRST, and gated on ELAPSED TIME rather than a tick count.
@@ -383,6 +528,10 @@ def main():
                 trim(battery_path, BATT_MAX_AGE, BATT_MAX_LINE)
             if i % EVENT_TRIM_EVERY == 0:
                 trim(events_path, SAMPLE_MAX_AGE, 1000)
+            # Approach #2: batched eMMC flush (config re-read each attempt).
+            if time.time() - last_flush >= FLUSH_INTERVAL:
+                last_flush = time.time()
+                maybe_flush_persist(samples_path, battery_path, persist_dir, cursors)
         except Exception as e:                       # never die out of the loop
             sys.stderr.write("collectd: %s\n" % e)
             sys.stderr.flush()
@@ -390,6 +539,15 @@ def main():
         end = time.time() + POLL_INTERVAL
         while state["go"] and time.time() < end:
             time.sleep(0.1)
+
+    # Best-effort final flush so a clean stop (procd restart / reboot with UPS)
+    # doesn't leave up to FLUSH_INTERVAL of history only in RAM.
+    try:
+        if read_history_config().get("enabled"):
+            maybe_flush_persist(samples_path, battery_path, persist_dir, cursors)
+    except Exception as e:
+        sys.stderr.write("collectd final flush: %s\n" % e)
+        sys.stderr.flush()
 
     bc.close()
 

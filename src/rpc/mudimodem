@@ -1449,4 +1449,97 @@ function M.set_lcd(args)
   return snapshot_lcd()
 end
 
+-- ---- History eMMC backup (Config tab) ------------------------------------
+-- Live history stays on tmpfs. When enabled, mudimodem-collectd periodically
+-- appends new samples to /etc/mudimodem/history/ (approach #2). Off by default.
+-- Spec session 2026-07-29. Collectd re-reads the policy file each flush — no
+-- SIGHUP / restart needed when the checkbox flips.
+
+local function history_cfg_file()
+  return os.getenv("MUDIMODEM_HISTORY_CFG") or "/etc/mudimodem/history.json"
+end
+local function history_persist_dir()
+  return os.getenv("MUDIMODEM_HISTORY_PERSIST") or "/etc/mudimodem/history"
+end
+
+local function read_history_policy()
+  local p = { enabled = false }
+  local f = io.open(history_cfg_file(), "r")
+  if not f then return p end
+  local body = f:read("*a") or ""; f:close()
+  local ok, obj = pcall(cjson.decode, body)
+  if ok and type(obj) == "table" and obj.enabled == true then
+    p.enabled = true
+  end
+  return p
+end
+
+local function write_history_policy(enabled)
+  os.execute("mkdir -p /etc/mudimodem 2>/dev/null")
+  local path = history_cfg_file()
+  local tmp = path .. ".tmp." .. tostring(os.time())
+  local f, err = io.open(tmp, "w")
+  if not f then return false, err or "open failed" end
+  f:write(string.format('{"enabled":%s}\n', enabled and "true" or "false"))
+  f:close()
+  local ok = os.rename(tmp, path)
+  if not ok then os.remove(tmp); return false, "rename failed" end
+  return true
+end
+
+local function history_dir_bytes(dir)
+  -- BusyBox du often lacks -b; sum known files with wc -c instead.
+  local total = 0
+  for _, name in ipairs({ "samples.jsonl", "battery.jsonl" }) do
+    local f = io.open(dir .. "/" .. name, "r")
+    if f then
+      local sz = f:seek("end")
+      f:close()
+      if type(sz) == "number" then total = total + sz end
+    end
+  end
+  return total
+end
+
+local function snapshot_history_persist()
+  local pol = read_history_policy()
+  local dir = history_persist_dir()
+  local out = {
+    enabled = pol.enabled,
+    path = dir,
+    size_bytes = 0,
+    flush_interval_s = 600,
+  }
+  -- Size of the on-disk backup only (what reboot survives), not the live tmpfs.
+  local st = io.open(dir, "r")
+  if st then
+    st:close()
+    out.size_bytes = history_dir_bytes(dir)
+  end
+  return out
+end
+
+function M.get_history_persist(args)
+  return snapshot_history_persist()
+end
+
+function M.set_history_persist(args)
+  args = args or {}
+  if type(args.enabled) ~= "boolean" then
+    local out = snapshot_history_persist()
+    out.error = "enabled must be a boolean"
+    return out
+  end
+  local ok, err = write_history_policy(args.enabled)
+  if not ok then
+    local out = snapshot_history_persist()
+    out.error = err or "could not write policy"
+    return out
+  end
+  if args.enabled then
+    os.execute("mkdir -p '" .. history_persist_dir():gsub("'", "'\\''") .. "' 2>/dev/null")
+  end
+  return snapshot_history_persist()
+end
+
 return M

@@ -21,6 +21,7 @@ FILES="
 /www/views/gl-sdk4-ui-mudimodem-tracking.common.js.gz
 /www/views/gl-sdk4-ui-mudimodem-console.common.js.gz
 /www/views/gl-sdk4-ui-mudimodem-speedtest.common.js.gz
+/www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz
 /www/mudimodem/at-library.json.gz
 /usr/share/oui/menu.d/mudimodem.json
 /usr/share/oui/menu.d/mudimodem-tracking.json
@@ -41,6 +42,8 @@ FILES="
 /etc/hotplug.d/i2c/20-glbattlimit
 /etc/init.d/glbattlimit
 /etc/mudimodem/battlimit.json
+/etc/mudimodem/history.json
+/etc/mudimodem/history
 /usr/bin/mudi.py
 /usr/bin/mudi-watch.py
 /etc/init.d/mudi

@@ -129,6 +129,10 @@ module.exports = {
       lcdBusy: false,
       lcdErr: "",
       lcdBrightnessDraft: 90,
+      // History eMMC backup (get/set_history_persist) — off by default
+      histPersist: null,
+      histPersistBusy: false,
+      histPersistErr: "",
       // Approximate downlink centre freq (MHz) per band, for spectrum ordering
       // and labels. Source: 3GPP TS 38.101-1 (NR) / 36.101 (LTE), rounded to the
       // marketing figure. Labels only — the modem is never sent a frequency.
@@ -306,6 +310,7 @@ module.exports = {
       if (t === "config") {
         if (!this.deviceInfo) this.fetchDeviceInfo();   // retries on every open until it succeeds
         this.checkAppVersion();   // re-check every open, per spec
+        this.fetchHistoryPersist();
       }
       if (t === "lcd") this.fetchLcd();
     },
@@ -779,6 +784,43 @@ module.exports = {
           self.lcdErr = (e && (e.message || e.type)) || "request failed";
         });
     },
+    // History eMMC backup: live charts still read tmpfs; collectd periodically
+    // appends new samples to /etc/mudimodem/history/ when this is on.
+    fetchHistoryPersist() {
+      var self = this;
+      if (typeof window === "undefined" || !window.$rpcRequest) return Promise.resolve();
+      return window.$rpcRequest("call", ["sid", "mudimodem", "get_history_persist", {}], { timeout: 8000 })
+        .then(function (r) {
+          self.histPersist = r || null;
+          self.histPersistErr = (r && r.error) || "";
+        })
+        .catch(function (e) {
+          self.histPersistErr = (e && (e.message || e.type)) || "request failed";
+        });
+    },
+    applyHistoryPersist(enabled) {
+      var self = this;
+      if (this.histPersistBusy || typeof window === "undefined" || !window.$rpcRequest) return;
+      this.histPersistBusy = true;
+      this.histPersistErr = "";
+      return window.$rpcRequest("call",
+        ["sid", "mudimodem", "set_history_persist", { enabled: !!enabled }], { timeout: 10000 })
+        .then(function (r) {
+          self.histPersistBusy = false;
+          if (r && typeof r.enabled === "boolean") self.histPersist = r;
+          self.histPersistErr = (r && r.error) || "";
+        })
+        .catch(function (e) {
+          self.histPersistBusy = false;
+          self.histPersistErr = (e && (e.message || e.type)) || "request failed";
+        });
+    },
+    fmtHistSize(bytes) {
+      var n = Number(bytes) || 0;
+      if (n < 1024) return n + " B";
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KiB";
+      return (n / (1024 * 1024)).toFixed(2) + " MiB";
+    },
     armUpdate() {
       var self = this;
       if (this.updateConfirm || this.updating || this.updateDone) return;
@@ -912,7 +954,40 @@ module.exports = {
       }
       var app = h("div", { staticClass: "mm-card" }, cardKids);
 
-      return h("div", {}, [device, app]);
+      // --- History persistence (eMMC backup, approach #2) ---
+      var hp = this.histPersist;
+      var histKids = [h("div", { staticClass: "mm-card-h" }, "History across reboots")];
+      if (!hp) {
+        histKids.push(h("div", { staticClass: "mm-note" },
+          this.histPersistErr || "Loading…"));
+      } else {
+        histKids.push(h("div", { staticClass: "mm-kv" }, [
+          h("label", { staticClass: "mm-k" }, [
+            h("input", {
+              attrs: { type: "checkbox", disabled: !!self.histPersistBusy },
+              domProps: { checked: !!hp.enabled },
+              on: { change: function (e) {
+                self.applyHistoryPersist(!!(e.target && e.target.checked));
+              } }
+            }),
+            " Keep signal & battery history across reboots"
+          ])
+        ]));
+        histKids.push(h("div", { staticClass: "mm-note" },
+          "Live charts still use RAM. When this is on, the collector appends new "
+          + "samples to eMMC about every "
+          + ((hp.flush_interval_s && Math.round(hp.flush_interval_s / 60)) || 10)
+          + " minutes (~6 MiB for a full day of signal + battery). Off by default."));
+        if (hp.enabled || (hp.size_bytes && hp.size_bytes > 0)) {
+          histKids.push(row("Backup size", self.fmtHistSize(hp.size_bytes)));
+        }
+        if (this.histPersistErr) {
+          histKids.push(h("div", { staticClass: "mm-note" }, this.histPersistErr));
+        }
+      }
+      var hist = h("div", { staticClass: "mm-card" }, histKids);
+
+      return h("div", {}, [device, app, hist]);
     },
     renderLcd(h) {
       var self = this;

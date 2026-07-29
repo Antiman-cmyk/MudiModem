@@ -38,6 +38,8 @@ gz_install src/views/mudimodem.js          /www/views/gl-sdk4-ui-mudimodem.commo
 gz_install src/views/mudimodem-tracking.js /www/views/gl-sdk4-ui-mudimodem-tracking.common.js.gz
 gz_install src/views/mudimodem-console.js  /www/views/gl-sdk4-ui-mudimodem-console.common.js.gz
 gz_install src/views/mudimodem-speedtest.js /www/views/gl-sdk4-ui-mudimodem-speedtest.common.js.gz
+# Battery tab is an in-page lazy chunk (no menu JSON) — same pattern as Tracking.
+gz_install src/views/mudimodem-battery.js  /www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz
 gz_install src/at-library.snapshot.json    /www/mudimodem/at-library.json.gz
 cp_install src/menu/mudimodem.json          /usr/share/oui/menu.d/mudimodem.json          0644
 cp_install src/menu/mudimodem-tracking.json /usr/share/oui/menu.d/mudimodem-tracking.json 0644
@@ -92,6 +94,12 @@ if [ ! -f /etc/mudimodem/battlimit.json ]; then
   chmod 0644 /etc/mudimodem/battlimit.json
   echo "  /etc/mudimodem/battlimit.json (default disabled)"
 fi
+# History eMMC backup policy — off by default; never clobber user choice.
+if [ ! -f /etc/mudimodem/history.json ]; then
+  echo '{"enabled":false}' > /etc/mudimodem/history.json
+  chmod 0644 /etc/mudimodem/history.json
+  echo "  /etc/mudimodem/history.json (default disabled)"
+fi
 /etc/init.d/glbattlimit enable 2>/dev/null || true
 # Do NOT start a limit on install (default disabled; start would no-op anyway).
 echo "  battery charge limit stack installed"
@@ -140,6 +148,7 @@ for p in \
   /www/views/gl-sdk4-ui-mudimodem-tracking.common.js.gz \
   /www/views/gl-sdk4-ui-mudimodem-console.common.js.gz \
   /www/views/gl-sdk4-ui-mudimodem-speedtest.common.js.gz \
+  /www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz \
   /www/mudimodem/at-library.json.gz \
   /usr/share/oui/menu.d/mudimodem.json \
   /usr/share/oui/menu.d/mudimodem-tracking.json \
@@ -160,6 +169,8 @@ for p in \
   /etc/hotplug.d/i2c/20-glbattlimit \
   /etc/init.d/glbattlimit \
   /etc/mudimodem/battlimit.json \
+  /etc/mudimodem/history.json \
+  /etc/mudimodem/history \
   /usr/bin/mudi.py \
   /usr/bin/mudi-watch.py \
   /etc/init.d/mudi \

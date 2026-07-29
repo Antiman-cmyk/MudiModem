@@ -35,6 +35,11 @@ grep -q '/www/views/gl-sdk4-ui-mudimodem-speedtest.common.js.gz' uninstall.sh ||
 grep -q '/usr/sbin/mudimodem-speedtestd' uninstall.sh || fail "uninstall must remove speedtestd"
 grep -q 'mudimodem-speedtestd stop' uninstall.sh || fail "uninstall must stop speedtestd before remove"
 
+# --- battery tab (lazy chunk; parity with deploy.sh — was missing, broke curl install) ---
+grep -q 'src/views/mudimodem-battery.js' install.sh || fail "install.sh must install battery chunk"
+grep -q '/www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz' install.sh || fail "install.sh must register battery chunk in sysupgrade"
+grep -q '/www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz' uninstall.sh || fail "uninstall must remove battery chunk"
+
 # --- install destinations must exist as sources ---
 # shellcheck disable=SC2016
 srcs=$(grep -E '^\s*(gz_install|cp_install)\s+' install.sh | awk '{print $2}')
