@@ -206,6 +206,23 @@ test('temperature lane enforces a minimum span', () => {
   assert.ok(hi - lo >= 5, 'a 0.2 C wobble must not fill the lane');
 });
 
+test('yIn keeps domain min/max at least PLOT_INSET px inside the plot frame', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  const lane = c.LANES.find((l) => l.key === 'capGui'); // fixed [0, 100], h 96
+  const inset = c.PLOT_INSET;
+  assert.ok(inset >= 5, 'inset is at least 5 px');
+  const yMax = vm.yIn(lane, 0, 100, [0, 100]); // domain max → near top
+  const yMin = vm.yIn(lane, 0, 0, [0, 100]);   // domain min → near bottom
+  assert.ok(yMax >= inset, '100 % is at least ' + inset + ' px below the top border, got ' + yMax);
+  assert.ok(yMin <= lane.h - inset,
+    '0 % is at least ' + inset + ' px above the bottom border, got ' + yMin);
+  assert.ok(yMax < yMin, 'max plots above min');
+  // Midpoint still centres in the usable band.
+  const yMid = vm.yIn(lane, 0, 50, [0, 100]);
+  assert.ok(Math.abs(yMid - lane.h / 2) < 1, '50 % stays near vertical centre');
+});
+
 test('voltage lane is fixed to the Li-ion range but expands rather than clipping', () => {
   const c = loadChunk();
   const now = Date.now();
@@ -543,18 +560,15 @@ test('renders all four lane labels once samples exist', () => {
     loading: false, bl: { available: true, enabled: true, limit_gui: 80, gui_m: 13867, gui_b: 189300 }
   });
   const tree = render(vm, c);
-  // Assert against renderLanes' OWN svg subtree, not the whole component: the
-  // bare words 'Charge'/'Current'/'Voltage' are also emitted unconditionally
-  // by renderStatusRow's stat captions and renderLimitCard's heading, so a
-  // whole-page text check on those words would pass even if renderLanes never
-  // drew a label. Scoping to the '.mmb-lanes' svg, plus asserting the FULL
-  // label strings with units (which appear nowhere else), makes this
-  // discriminating for all four lanes, not just Temperature/Temp.
-  const svg = walk(tree).find((n) => n.data && n.data.staticClass === 'mmb-lanes');
-  assert.ok(svg, 'lanes svg missing');
-  const out = textOf(svg);
+  // Labels live in HTML lane heads (not the SVG). Scope to .mmb-chart so we
+  // don't pass on status-row captions that reuse bare words like "Current".
+  const chart = walk(tree).find((n) => n.data && n.data.staticClass === 'mmb-chart');
+  assert.ok(chart, 'chart wrapper missing');
+  const out = textOf(chart);
   for (const label of ['Charge · %', 'Current · mA', 'Voltage · V', 'Temperature · °C'])
     assert.ok(out.includes(label), 'missing lane: ' + label);
+  // Bold current values must be present in the heads.
+  assert.match(out, /Range /, 'each lane head shows a Range line');
 });
 
 test('draws the target line only when the limit is enabled', () => {
@@ -579,12 +593,11 @@ test('the chart still renders when glbattlimit is unavailable', () => {
     bl: { available: false, error: 'glbattlimit not installed' }
   });
   const tree = render(vm, c);
-  // Same fix as the lane-labels test above: check the actual '.mmb-lanes' svg
-  // (and a full, unit-bearing label) rather than a bare word ('Charge') that
-  // renderStatusRow/renderLimitCard emit regardless of whether the chart drew.
-  const svg = walk(tree).find((n) => n.data && n.data.staticClass === 'mmb-lanes');
-  assert.ok(svg, 'chart must not depend on the charge-limit tool');
-  assert.ok(textOf(svg).includes('Charge · %'),
+  // Chart heads are HTML; scope to .mmb-chart so a bare "Charge" from the
+  // status row can't make this pass if the chart never drew.
+  const chart = walk(tree).find((n) => n.data && n.data.staticClass === 'mmb-chart');
+  assert.ok(chart, 'chart must not depend on the charge-limit tool');
+  assert.ok(textOf(chart).includes('Charge · %'),
     'lane label missing - the chart must still draw when glbattlimit is unavailable');
   assert.match(textOf(tree), /not available/i);
 });
@@ -1247,8 +1260,15 @@ test('avgCurrent takes the window as an argument (no requadratic)', () => {
 // pixel width and preserveAspectRatio is "none", so the scale is ~1:1).
 // ---------------------------------------------------------------------------
 
-function lanesSvg(vm, ss) {
+// renderLanes returns a .mmb-chart wrapper (HTML heads + per-lane SVGs + foot).
+function lanesChart(vm, ss) {
   return vm.renderLanes(h, ss);
+}
+function chartSvgs(tree) {
+  return walk(tree).filter((n) => n.tag === 'svg');
+}
+function footSvg(tree) {
+  return walk(tree).find((n) => n.data && /mmb-lanes-foot/.test(n.data.staticClass || ''));
 }
 
 test('no chart text is smaller than 10 units', () => {
@@ -1258,7 +1278,7 @@ test('no chart text is smaller than 10 units', () => {
     .map((s) => Object.assign(s, { capGui: 78.1, voltV: 4.01, m: 0 }));
   const vm = makeVm(c, { samples: ss, serverNow: now, serverNowAt: now, winW: 60,
     bl: { enabled: true, limit_gui: 80, gui_m: 13867, gui_b: 189300 }, cursor: -5 });
-  const sizes = walk(lanesSvg(vm, vm.winSamples()))
+  const sizes = walk(lanesChart(vm, vm.winSamples()))
     .filter((n) => n.tag === 'text' && n.data.attrs && n.data.attrs['font-size'] != null)
     .map((n) => Number(n.data.attrs['font-size']));
   assert.ok(sizes.length >= 5, 'found the chart text nodes, got ' + sizes.length);
@@ -1273,11 +1293,12 @@ test('the hover readout fits inside the svg height', () => {
     .map((s) => Object.assign(s, { capGui: 78.1, voltV: 4.01, m: 0 }));
   const vm = makeVm(c, { samples: ss, serverNow: now, serverNowAt: now, winW: 60,
     bl: {}, cursor: -5 });
-  const svg = lanesSvg(vm, vm.winSamples());
-  const height = Number(svg.data.attrs.height);
+  const foot = footSvg(lanesChart(vm, vm.winSamples()));
+  assert.ok(foot, 'footer svg (axis + readout) present');
+  const height = Number(foot.data.attrs.height);
   // Every text baseline, plus its descender, must sit inside the viewBox —
   // otherwise the readout is silently clipped at the bottom of the chart.
-  walk(svg).filter((n) => n.tag === 'text' && n.data.attrs).forEach((n) => {
+  walk(foot).filter((n) => n.tag === 'text' && n.data.attrs).forEach((n) => {
     const y = Number(n.data.attrs.y), fs = Number(n.data.attrs['font-size'] || 10);
     assert.ok(y + fs * 0.3 <= height,
       'text at y=' + y + ' (size ' + fs + ') overflows svg height ' + height);
@@ -1343,17 +1364,38 @@ test('nearestSampleIn binary-searches by time and matches the closest sample', (
   assert.ok(near2 && Math.abs(near2.t - mid.t) <= 20000 * 2);
 });
 
-test('lane labels carry the focus value and the observed range', () => {
+test('lane labels put name, bold value, and Range on one head line', () => {
   const c = loadChunk();
   const now = Date.now();
   const samples = seed(now, 30, 20000, (i) => ({
     cap: 70 + (i % 5), cur: -300 - i, temp: 30 + (i % 3)
   }));
   const vm = makeVm(c, { samples, serverNow: now, serverNowAt: now, winW: 15, bl: {} });
-  const txt = textOf(lanesSvg(vm, vm.winSamples()));
-  // Observed range fragment uses an en-dash between two numbers.
-  assert.match(txt, /\d+(?:\.\d+)?–\d+(?:\.\d+)?/, 'observed min–max appears in a lane label');
-  assert.match(txt, /mA/, 'current unit is present');
+  const chart = lanesChart(vm, vm.winSamples());
+  // One head per lane: name + <b>value</b> + <small>Range …</small> as siblings.
+  const heads = walk(chart).filter((n) => n.data && n.data.staticClass === 'mmb-lane-head');
+  assert.equal(heads.length, 4, 'one HTML head per lane');
+  heads.forEach((head) => {
+    const kids = (head.children || []).filter((n) => n && typeof n === 'object');
+    assert.ok(kids.some((n) => n.data && n.data.staticClass === 'mmb-lane-name'),
+      'metric name present');
+    const bold = kids.filter((n) => n.tag === 'b');
+    const small = kids.filter((n) => n.tag === 'small');
+    assert.equal(bold.length, 1, 'one bold current value');
+    assert.equal(small.length, 1, 'one Range fragment');
+    assert.match(textOf(small[0]), /^Range /, 'Range names itself and is not bold');
+    assert.ok(textOf(bold[0]).length > 0, 'bold value is non-empty');
+    // Direct children of the head (single line), not nested under mmb-lane-nums.
+    assert.ok(!walk(head).some((n) => n.data && n.data.staticClass === 'mmb-lane-nums'),
+      'no multi-line nums wrapper');
+  });
+  const rows = walk(chart).filter((n) => n.data && n.data.staticClass === 'mmb-lane-row');
+  assert.equal(rows.length, 4);
+  rows.forEach((row) => {
+    const kids = row.children || [];
+    assert.equal(kids[0].data.staticClass, 'mmb-lane-head', 'head first');
+    assert.equal(kids[1].tag, 'svg', 'plot strip second');
+  });
 });
 
 test('hover readout includes relative time and sample dots land on the svg', () => {
@@ -1365,10 +1407,10 @@ test('hover readout includes relative time and sample dots land on the svg', () 
     samples, serverNow: now, serverNowAt: now, winW: 15, bl: {}, cursor: -5
   });
   const ss = vm.winSamples();
-  const svg = lanesSvg(vm, ss);
-  const txt = textOf(svg);
+  const chart = lanesChart(vm, ss);
+  const txt = textOf(chart);
   assert.match(txt, /\d+\s*(s|min|h)\s+ago/, 'relative-time fragment in the hover readout');
-  const dots = walk(svg).filter((n) => n.tag === 'circle');
+  const dots = walk(chart).filter((n) => n.tag === 'circle');
   assert.ok(dots.length >= 1, 'at least one sample dot is drawn while hovering');
 });
 

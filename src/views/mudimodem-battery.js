@@ -48,13 +48,18 @@ module.exports = (function () {
   // poll on a travel router's cellular link is normal and must not alarm;
   // three in a row (~30 s) means the chart is stale and the user should know.
   var FAIL_NOTE_AFTER = 3;
-  // TOP is the headroom above the first lane; the plug/unplug tick labels hang
-  // in it, so it has to clear FS_TICK's ascender or they clip off the top.
-  var PADL = 42, PADR = 12, LANE_GAP = 16, BAND_H = 9, TOP = 24;
+  // TOP is headroom for plug/unplug tick labels. Lane value/range headers live
+  // in HTML above the SVG (jayck88 layout) so they are never clipped by the
+  // outermost-svg overflow:hidden default or lost in preserveAspectRatio stretch.
+  // Plot gutters: y-scale labels sit on the RIGHT (PADR), so the left edge only
+  // needs a thin pad. Heads (name / current / Range) are HTML above the strip.
+  // PLOT_INSET keeps a domain-max reading (e.g. 100 %) from sitting on the
+  // top border pixel — same for domain-min at the bottom.
+  var PADL = 8, PADR = 42, LANE_GAP = 16, BAND_H = 9, TOP = 24, PLOT_INSET = 5;
   // SVG type sizes, in viewBox units — and since the viewBox width is set to the
   // measured pixel width with preserveAspectRatio="none", these are ~CSS px.
   // Raised from 8.5–10, which was too small to read comfortably.
-  var FS_LANE = 11.5,      // lane titles
+  var FS_LANE = 11.5,      // (unused for headers now — kept for any SVG labels)
       FS_SCALE = 10.5,     // y-domain bounds
       FS_TICK = 10.5,      // target line + plug/unplug labels
       FS_AXIS = 11,        // x-axis times
@@ -113,7 +118,7 @@ module.exports = (function () {
         // repaint the short window (jayck88 requestSeq pattern).
         histRequestSeq: 0,
         pendingWindow: null, poll: null, tick: 0, live: true,
-        width: 900, styleId: "mmb-css", cursor: null, pinnedM: null,
+        width: 900, styleId: "mmb-css-v4", cursor: null, pinnedM: null,
         // charge-limit form state (moved here from the Config tab)
         bl: null, blBusy: false, blErr: "", blDraft: 80
       };
@@ -517,8 +522,12 @@ module.exports = (function () {
       // one-off callers outside a render pass only.
       yIn: function (lane, top, v, dom) {
         var d = dom || this.domainFor(lane), d0 = d[0], d1 = d[1];
-        if (d1 === d0) return top + lane.h / 2;
-        return top + lane.h - (Math.max(d0, Math.min(d1, v)) - d0) / (d1 - d0) * lane.h;
+        // Usable height is inset from the plot frame so a 100 % / domain-max
+        // sample lands PLOT_INSET px below the top border, never on it.
+        var h = Math.max(1, lane.h - 2 * PLOT_INSET);
+        if (d1 === d0) return top + PLOT_INSET + h / 2;
+        var t = (Math.max(d0, Math.min(d1, v)) - d0) / (d1 - d0);
+        return top + PLOT_INSET + h - t * h;
       },
       // Is the charge limiter itself holding this sample's charge off?
       //
@@ -774,7 +783,21 @@ module.exports = (function () {
           ".mmb-seg button{border:0;background:var(--bg-body);color:var(--text-badge);",
           "padding:3px 10px;font-size:12px;border-radius:4px;cursor:pointer}",
           ".mmb-seg button.on{background:var(--primary);color:#fff}",
-          ".mmb-lanes{width:100%;display:block;cursor:crosshair}",
+          // Chart: HTML lane headers (value + Range) sit above the shared SVG so
+          // bold/small render as real text, not as SVG presentation attributes
+          // that some WebKits drop when fill=var(--token).
+          ".mmb-chart{display:flex;flex-direction:column;gap:10px;width:100%}",
+          ".mmb-lane-row{display:flex;flex-direction:column;gap:2px;width:100%}",
+          // Single line, left-aligned: name · bold current · Range a–b
+          ".mmb-lane-head{display:flex;flex-direction:row;flex-wrap:wrap;",
+          "align-items:baseline;gap:8px;padding:0 0 4px;line-height:1.3}",
+          ".mmb-lane-name{font-size:12px;color:var(--text-badge)}",
+          ".mmb-lane-head b{font-size:14px;font-weight:700;color:var(--text-primary);",
+          "font-variant-numeric:tabular-nums}",
+          ".mmb-lane-head small{font-size:12px;font-weight:400;color:var(--text-hint);",
+          "font-variant-numeric:tabular-nums}",
+          ".mmb-lanes{width:100%;display:block;cursor:crosshair;overflow:visible}",
+          ".mmb-lanes-foot{margin-top:2px}",
           ".mmb-note{font-size:12px;color:var(--text-badge);margin-top:6px}",
           ".mmb-kv{display:flex;align-items:center;gap:10px;margin:6px 0}",
           ".mmb-k{font-size:13px;color:var(--text-badge);min-width:92px}",
@@ -861,13 +884,40 @@ module.exports = (function () {
         ]);
       },
 
+      // Format a focus reading for a lane header: "−360 mA", "80 %", …
+      // Leading space before the unit so the bold figure doesn't run into it.
+      fmtLaneValue: function (L, sample) {
+        if (!sample) return "—";
+        var fv = sample[L.key];
+        if (fv == null || !isFinite(Number(fv))) return "—";
+        return Number(fv).toFixed(L.dec) + " " + L.unit;
+      },
+
+      // HTML lane header — one left-aligned line:
+      //   Metric name   <bold current>   Range a–b unit
+      // Real HTML <b>/<small> so weight and colour are not fighting SVG
+      // presentation-attribute rules.
+      renderLaneHead: function (h, L, focus, ss) {
+        var valueStr = this.fmtLaneValue(L, focus);
+        var rangeStr = "Range " + this.observedRange(ss, L.key, L.dec) + " " + L.unit;
+        return h("div", { staticClass: "mmb-lane-head" }, [
+          h("span", { staticClass: "mmb-lane-name" }, L.label),
+          h("b", valueStr),
+          h("small", rangeStr)
+        ]);
+      },
+
       // `ss` is the sample window, computed ONCE by render() and threaded
       // through everything below. Nothing in here may call winSamples(),
       // segments(), domainFor() or stateRuns() — their zero-argument forms
       // recompute the whole window, and doing that per lane (or worse, per
       // plotted point) is what made 6 h/24 h renders take seconds.
+      //
+      // Layout (jayck88): each lane is HTML head (name + bold value + Range)
+      // immediately above its own plot strip. Cursor state is shared so a
+      // hover on any strip updates every head and every crosshair together.
       renderLanes: function (h, ss) {
-        var self = this, W = this.width, kids = [];
+        var self = this, W = this.width;
         ss = ss || this.winSamples();
         var bounds = this.chartBounds(ss);
         // Stash for mousemove handlers — avoid re-running winSamples per pixel.
@@ -876,99 +926,107 @@ module.exports = (function () {
         var spanM = this.spanMin(bounds);
         var partial = spanM < this.winW - 1;
         var cols = Math.max(40, Math.round((W - PADL - PADR) / 2));
-        var top = TOP;
         var focusM = this.cursor;
         var near = (focusM != null) ? this.nearestSampleIn(ss, focusM) : null;
-        // When not hovering, lane labels still show the latest sample's value.
         var focus = near || (ss.length ? ss[ss.length - 1] : null);
-        // Lane geometry kept so the hover dots can reuse the same domains.
-        var laneGeom = [];
+        var rows = [];
+
+        // Width is measured from the first lane strip (ref=lanes).
+        var measureRefSet = false;
 
         LANES.forEach(function (L) {
-          // ONE domain resolution per lane per render; every y-mapping below
-          // reuses it, so all marks in a lane share one scale by construction.
           var d = self.domainFrom(ss, L), d0 = d[0], d1 = d[1];
-          var laneTop = top;
-          laneGeom.push({ L: L, d: d, top: laneTop });
+          var H = L.h;
+          var strip = [];
 
-          // frame + label + the two domain bounds (each lane has its own scale,
-          // so a single shared y-axis could not label them)
-          [laneTop, laneTop + L.h].forEach(function (yy) {
-            kids.push(h("line", { attrs: { x1: PADL, x2: W - PADR, y1: yy, y2: yy,
-              stroke: "var(--divider)", "stroke-width": 1 } }));
-          });
-          // Per-lane live value + observed window range (jayck88 scannability).
-          var fv = focus && focus[L.key];
-          var focusStr = (fv == null || !isFinite(Number(fv)))
-            ? "—" : Number(fv).toFixed(L.dec) + L.unit;
-          var rangeStr = self.observedRange(ss, L.key, L.dec) + L.unit;
-          kids.push(h("text", { attrs: { x: PADL, y: laneTop - 6, "font-size": FS_LANE,
-            fill: "var(--text-badge)" } },
-            L.label + "  " + focusStr + "  ·  " + rangeStr));
-          [[d1, laneTop + 10], [d0, laneTop + L.h - 3]].forEach(function (p) {
-            kids.push(h("text", { attrs: { x: PADL - 5, y: p[1], "font-size": FS_SCALE,
-              "text-anchor": "end", fill: "var(--text-hint)" } },
+          // Solid plot frame — full rectangle, not just top/bottom rules.
+          // Stroke is a fixed 40% grey (#999 ≈ 40% black). Theme --border is
+          // too soft here. Drawn first so curves/dots sit on top.
+          var plotW = W - PADL - PADR;
+          strip.push(h("rect", { attrs: {
+            x: PADL, y: 0.5, width: Math.max(1, plotW), height: Math.max(1, H - 1),
+            fill: "var(--bg-body, var(--background-body, transparent))",
+            stroke: "#999999", "stroke-width": 1.5, rx: 2
+          } }));
+          // Domain bounds on the RIGHT y-axis (left is free for the HTML
+          // current/Range stack)
+          [[d1, 10], [d0, H - 3]].forEach(function (p) {
+            strip.push(h("text", { attrs: { x: W - PADR + 5, y: p[1], "font-size": FS_SCALE,
+              "text-anchor": "start", fill: "var(--text-hint)" } },
               Number(p[0]).toFixed(L.dec)));
           });
 
-          // zero rule where zero is meaningful — the Current lane's 0 is the
-          // "charging blocked" line, so it gets drawn, not implied.
           if (L.zero && d0 < 0 && d1 > 0) {
-            var yz = self.yIn(L, laneTop, 0, d);
-            kids.push(h("line", { attrs: { x1: PADL, x2: W - PADR, y1: yz, y2: yz,
+            var yz = self.yIn(L, 0, 0, d);
+            strip.push(h("line", { attrs: { x1: PADL, x2: W - PADR, y1: yz, y2: yz,
               stroke: "var(--divider)", "stroke-width": 1, "stroke-dasharray": "2 3" } }));
           }
 
-          // the target line lives on the Charge lane only, and only when armed
           if (L.key === "capGui" && self.bl && self.bl.enabled
               && typeof self.bl.limit_gui === "number") {
-            var yt = self.yIn(L, laneTop, self.bl.limit_gui, d);
-            kids.push(h("line", { attrs: { class: "mmb-target",
+            var yt = self.yIn(L, 0, self.bl.limit_gui, d);
+            strip.push(h("line", { attrs: { class: "mmb-target",
               x1: PADL, x2: W - PADR, y1: yt, y2: yt, stroke: "var(--warning)",
               "stroke-width": 1.25, "stroke-dasharray": "5 3" } }));
-            kids.push(h("text", { attrs: { x: W - PADR, y: yt - 3, "font-size": FS_TICK,
-              "text-anchor": "end", fill: "var(--warning)" } },
+            strip.push(h("text", { attrs: { x: W - PADR, y: Math.max(10, yt - 3),
+              "font-size": FS_TICK, "text-anchor": "end", fill: "var(--warning)" } },
               "target " + self.bl.limit_gui + "%"));
           }
 
-          // one path per contiguous segment: a break is an outage, never bridged
           self.segmentsFrom(ss, L.key).forEach(function (seg) {
             var pts = self.reduce(seg, cols), dstr = "";
             pts.forEach(function (p, i) {
-              // x from absolute sample time so partial-window stretch stays honest.
               dstr += (i ? "L" : "M") + self.xOfT(p.t, bounds).toFixed(1) + " "
-                + self.yIn(L, laneTop, p.v, d).toFixed(1) + " ";
+                + self.yIn(L, 0, p.v, d).toFixed(1) + " ";
             });
-            if (dstr) kids.push(h("path", { attrs: { fill: "none", stroke: L.color,
+            if (dstr) strip.push(h("path", { attrs: { fill: "none", stroke: L.color,
               "stroke-width": 1.75, "stroke-linejoin": "round", "stroke-linecap": "round",
               d: dstr.trim() } }));
           });
 
-          top = laneTop + L.h + LANE_GAP;
+          // Shared cursor: same x on every strip; sample dot on this lane only.
+          if (focusM != null) {
+            var cx = self.xOf(focusM, bounds);
+            strip.push(h("line", { attrs: { x1: cx, x2: cx, y1: 0, y2: H,
+              stroke: "var(--text-hint)", "stroke-width": 1 } }));
+            if (near && near[L.key] != null && isFinite(Number(near[L.key]))) {
+              strip.push(h("circle", { attrs: {
+                cx: self.xOfT(near.t, bounds).toFixed(1),
+                cy: self.yIn(L, 0, near[L.key], d).toFixed(1), r: 3.5,
+                fill: L.color,
+                stroke: "var(--background-card, var(--bg-content))",
+                "stroke-width": 1.5
+              } }));
+            }
+          }
+
+          var svgAttrs = { viewBox: "0 0 " + W + " " + H, height: H,
+            preserveAspectRatio: "none" };
+          var svgData = {
+            staticClass: "mmb-lanes",
+            attrs: svgAttrs,
+            on: { mousemove: self.onMove, mouseleave: self.onLeave, click: self.onClick }
+          };
+          // First strip owns the measure ref (width of the plot area).
+          if (!measureRefSet) { svgData.ref = "lanes"; measureRefSet = true; }
+
+          rows.push(h("div", { staticClass: "mmb-lane-row", key: L.key }, [
+            self.renderLaneHead(h, L, focus, ss),
+            h("svg", svgData, strip)
+          ]));
         });
 
-        // ---- charger-state band + plug/unplug ticks, under the lanes
-        var bandY = top - LANE_GAP + 6;
+        // Footer: charger-state band + x-axis + hover readout (shared time axis).
+        var foot = [];
+        var bandY = 4;
         var runs = this.stateRunsFrom(ss);
         runs.forEach(function (r) {
           var x0 = self.xOf(r.m0, bounds), x1 = self.xOf(r.m1, bounds);
-          kids.push(h("rect", { attrs: { x: x0, y: bandY, width: Math.max(1, x1 - x0),
+          foot.push(h("rect", { attrs: { x: x0, y: bandY, width: Math.max(1, x1 - x0),
             height: BAND_H, fill: STATE_COLOR[r.v], "fill-opacity": 0.55 } }));
         });
-        for (var i = 1; i < runs.length; i++) {
-          var wasOn = runs[i - 1].v !== "discharging", isOn = runs[i].v !== "discharging";
-          if (wasOn === isOn) continue;                 // not a plug/unplug edge
-          var xe = self.xOf(runs[i].m0, bounds);
-          kids.push(h("line", { attrs: { x1: xe, x2: xe, y1: TOP - 10, y2: bandY + BAND_H,
-            stroke: "var(--text-hint)", "stroke-width": 1, "stroke-dasharray": "1 3" } }));
-          kids.push(h("text", { attrs: { x: xe + 3, y: TOP - 13, "font-size": FS_TICK,
-            fill: "var(--text-hint)" } }, isOn ? "plugged" : "unplugged"));
-        }
-
-        // ---- x axis (ticks follow the *plotted* span, not the selected winW)
         var axisY = bandY + BAND_H + 13;
         var step = spanM <= 15 ? 2 : spanM <= 60 ? 10 : spanM <= 360 ? 60 : 240;
-        // Always include the left edge so a partial window is labelled "~N m".
         var ticks = [];
         for (var m = -spanM; m < -0.001; m += step) ticks.push(m);
         ticks.push(0);
@@ -978,59 +1036,38 @@ module.exports = (function () {
           var label;
           if (tm === 0) label = "now";
           else if (Math.abs(tm + spanM) < 0.01 && partial) {
-            // Left edge of a short history: say what we actually have.
             label = spanM >= 60
               ? ("~" + Math.max(1, Math.round(spanM / 60)) + " h")
               : ("~" + Math.max(1, Math.round(spanM)) + " m");
           } else {
             label = (Math.round(tm * 10) / 10) + " m";
           }
-          kids.push(h("text", { attrs: { x: tx, y: axisY, "font-size": FS_AXIS,
+          foot.push(h("text", { attrs: { x: tx, y: axisY, "font-size": FS_AXIS,
             "text-anchor": "middle", fill: "var(--text-hint)" } }, label));
         }
-
-        // ---- hover cursor + sample dots + readout
-        if (focusM != null) {
-          var cx = this.xOf(focusM, bounds);
-          kids.push(h("line", { attrs: { x1: cx, x2: cx, y1: TOP, y2: bandY + BAND_H,
-            stroke: "var(--text-hint)", "stroke-width": 1 } }));
-          if (near) {
-            // Dot on each lane at the nearest sample — makes the shared cursor
-            // read as "this moment" rather than an abstract vertical rule.
-            for (var gi = 0; gi < laneGeom.length; gi++) {
-              var g = laneGeom[gi], gv = near[g.L.key];
-              if (gv == null || !isFinite(Number(gv))) continue;
-              var gy = self.yIn(g.L, g.top, gv, g.d);
-              kids.push(h("circle", { attrs: {
-                cx: self.xOfT(near.t, bounds).toFixed(1),
-                cy: gy.toFixed(1), r: 3.5,
-                fill: g.L.color,
-                stroke: "var(--background-card, var(--bg-content))",
-                "stroke-width": 1.5
-              } }));
-            }
-            var bits = [
-              this.fmtAgo(near.t),
-              this.clockFull(near.t),
-              (near.capGui == null ? "—" : near.capGui.toFixed(1) + "%")
-                + (near.cap == null ? "" : " (IC " + near.cap + "%)"),
-              (near.cur == null ? "—" : near.cur + " mA"),
-              (near.voltV == null ? "—" : near.voltV.toFixed(2) + " V"),
-              (near.temp == null ? "—" : near.temp.toFixed(1) + " °C"),
-              STATE_LABEL[this.chargeState(near)]
-            ];
-            kids.push(h("text", { attrs: { x: PADL, y: axisY + 16, "font-size": FS_READOUT,
-              fill: "var(--text-primary)" } }, bits.join("  ·  ")));
-          }
+        if (focusM != null && near) {
+          var bits = [
+            this.fmtAgo(near.t),
+            this.clockFull(near.t),
+            (near.capGui == null ? "—" : near.capGui.toFixed(1) + "%")
+              + (near.cap == null ? "" : " (IC " + near.cap + "%)"),
+            (near.cur == null ? "—" : near.cur + " mA"),
+            (near.voltV == null ? "—" : near.voltV.toFixed(2) + " V"),
+            (near.temp == null ? "—" : near.temp.toFixed(1) + " °C"),
+            STATE_LABEL[this.chargeState(near)]
+          ];
+          foot.push(h("text", { attrs: { x: PADL, y: axisY + 16, "font-size": FS_READOUT,
+            fill: "var(--text-primary)" } }, bits.join("  ·  ")));
         }
-
-        var H = axisY + 24;
-        return h("svg", {
-          ref: "lanes", staticClass: "mmb-lanes",
-          attrs: { viewBox: "0 0 " + W + " " + H, height: H,
+        var footH = axisY + 24;
+        rows.push(h("svg", {
+          staticClass: "mmb-lanes mmb-lanes-foot",
+          attrs: { viewBox: "0 0 " + W + " " + footH, height: footH,
             preserveAspectRatio: "none" },
           on: { mousemove: this.onMove, mouseleave: this.onLeave, click: this.onClick }
-        }, kids);
+        }, foot));
+
+        return h("div", { staticClass: "mmb-chart" }, rows);
       },
 
       renderLimitCard: function (h) {
@@ -1176,6 +1213,7 @@ module.exports = (function () {
   component.RANGES = RANGES;
   component.TICKSTEP = TICKSTEP;
   component.GAP_MS = GAP_MS;
+  component.PLOT_INSET = PLOT_INSET;
   component.FAIL_NOTE_AFTER = FAIL_NOTE_AFTER;
   component.STATE_LABEL = STATE_LABEL;
   return component;
