@@ -5,6 +5,9 @@ cd "$(dirname "$0")/.."
 fail() { echo "FAIL: $1" >&2; exit 1; }
 
 # --- LCD (default off) ---
+# pillow is installed --nodeps (libfreetype clash with gl-sdk4-screen-large), so
+# the shared libs it needs must be listed explicitly. Missing libtiff6 is issue #3.
+grep -q 'libtiff6' install.sh                   || fail "install.sh must install libtiff6 (pillow --nodeps dep; issue #3)"
 grep -q 'src/lcd/mudi.py' install.sh            || fail "install.sh does not deploy mudi.py"
 grep -q 'src/lcd/mudi-watch.py' install.sh      || fail "install.sh does not deploy mudi-watch.py"
 grep -q 'src/lcd/mudi.init' install.sh          || fail "install.sh does not deploy mudi.init"

@@ -2,9 +2,45 @@
 # tools/verify.sh - assert Phase 0 landed correctly on the device.
 set -eu
 HOST="${MUDI_HOST:-mudi}"
-# MM_PW: admin password, required only for step 9b's /rpc round-trip login.
-# Unset => 9b is skipped (every other check still runs).
+# MM_PW: admin password, required only for /rpc round-trip steps (7c, 9b, 14b).
+# Unset => those steps are skipped (every other check still runs).
+# GL admin login is challenge-response (not a plaintext password field):
+#   hash = sha256(username:openssl_passwd(alg,salt,pw):nonce)
 fail() { echo "FAIL: $1" >&2; exit 1; }
+
+# Authenticate to /rpc on the box; print the sid on stdout. Fails if login fails.
+rpc_login() {
+  # Password is exported into the remote env so shell-metacharacters in MM_PW
+  # cannot break the remote python string (still keep MM_PW free of newlines).
+  ssh -o BatchMode=yes "root@$HOST" "MM_PW=$(printf %s "$MM_PW" | sed "s/'/'\\\\''/g")" \
+    'python3 - <<'"'"'PY'"'"'
+import hashlib, json, os, subprocess, urllib.request, ssl
+ctx = ssl._create_unverified_context()
+def post(obj):
+    req = urllib.request.Request(
+        "https://127.0.0.1/rpc",
+        data=json.dumps(obj).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    return json.loads(urllib.request.urlopen(req, context=ctx, timeout=30).read())
+pw = os.environ["MM_PW"]
+user = "root"
+chal = post({"jsonrpc":"2.0","id":1,"method":"challenge","params":{"username":user}})
+r = chal.get("result") or {}
+if not r.get("salt") or not r.get("nonce"):
+    raise SystemExit("challenge failed: " + json.dumps(chal))
+alg = int(r.get("alg") or 5)
+crypt = subprocess.check_output(
+    ["openssl", "passwd", "-%d" % alg, "-salt", r["salt"], pw], text=True
+).strip()
+h = hashlib.sha256(("%s:%s:%s" % (user, crypt, r["nonce"])).encode()).hexdigest()
+res = post({"jsonrpc":"2.0","id":1,"method":"login","params":{"username":user,"hash":h}})
+sid = (res.get("result") or {}).get("sid")
+if not sid:
+    raise SystemExit("login failed: " + json.dumps(res))
+print(sid)
+PY'
+}
 
 echo "1. files present"
 ssh -o BatchMode=yes "root@$HOST" 'test -s /www/views/gl-sdk4-ui-mudimodem.common.js.gz' \
@@ -163,10 +199,7 @@ fi
 # so it runs only when MM_PW is set (mirrors step 9b).
 if [ -n "${MM_PW:-}" ]; then
   echo "7c. get_battery_history over /rpc (validation layer)"
-  SID=$(ssh -o BatchMode=yes "root@$HOST" \
-    'curl -sk -X POST https://127.0.0.1/rpc -H "Content-Type: application/json" \
-       -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"login\",\"params\":{\"username\":\"root\",\"password\":\"'"$MM_PW"'\"}}" \
-     | sed -n "s/.*\"sid\":\"\([^\"]*\)\".*/\1/p"')
+  SID=$(rpc_login) || fail "login for /rpc round trip failed (is MM_PW correct?)"
   [ -n "$SID" ] || fail "login for /rpc round trip failed"
   RESP=$(ssh -o BatchMode=yes "root@$HOST" \
     'curl -sk -X POST https://127.0.0.1/rpc -H "Content-Type: application/json" \
@@ -254,10 +287,7 @@ ssh -o BatchMode=yes "root@$HOST" 'lua /tmp/mm-validator.test.lua; rc=$?; rm -f 
 #     Needs an authenticated sid, so it runs only when MM_PW is provided.
 if [ -n "${MM_PW:-}" ]; then
   echo "9b. multi-line cmd survives /rpc and runs both steps"
-  SID=$(ssh -o BatchMode=yes "root@$HOST" \
-    'curl -sk -X POST https://127.0.0.1/rpc -H "Content-Type: application/json" \
-       -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"login\",\"params\":{\"username\":\"root\",\"password\":\"'"$MM_PW"'\"}}" \
-     | sed -n "s/.*\"sid\":\"\([^\"]*\)\".*/\1/p"')
+  SID=$(rpc_login) || fail "login for /rpc round-trip failed (is MM_PW correct?)"
   [ -n "$SID" ] || fail "login for /rpc round-trip failed (is MM_PW correct?)"
   RESP=$(ssh -o BatchMode=yes "root@$HOST" \
     'curl -sk -X POST https://127.0.0.1/rpc -H "Content-Type: application/json" \
@@ -413,10 +443,7 @@ ssh -o BatchMode=yes "root@$HOST" \
 #      MM_PW is provided (mirrors step 9b).
 if [ -n "${MM_PW:-}" ]; then
   echo "14b. get_lcd survives the /rpc validator and returns availability"
-  SID=$(ssh -o BatchMode=yes "root@$HOST" \
-    'curl -sk -X POST https://127.0.0.1/rpc -H "Content-Type: application/json" \
-       -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"login\",\"params\":{\"username\":\"root\",\"password\":\"'"$MM_PW"'\"}}" \
-     | sed -n "s/.*\"sid\":\"\([^\"]*\)\".*/\1/p"')
+  SID=$(rpc_login) || fail "login for /rpc round-trip failed (is MM_PW correct?)"
   [ -n "$SID" ] || fail "login for /rpc round-trip failed (is MM_PW correct?)"
   RESP=$(ssh -o BatchMode=yes "root@$HOST" \
     'curl -sk -X POST https://127.0.0.1/rpc -H "Content-Type: application/json" \

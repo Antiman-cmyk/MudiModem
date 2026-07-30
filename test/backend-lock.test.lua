@@ -100,6 +100,44 @@ assert(r.lock.l4g.mode == 1, "4g mode wrong")
 assert(r.lock.l4g.freq == 900, "4g freq wrong")
 assert(r.lock.l4g.pci == 42, "4g pci wrong")
 
+-- 4b. ChiliApple #2: NSA multi-line QENG — header has no cell fields; real data
+--     is on the LTE / NR5G-NSA lines. Prefer NR5G-NSA for the serving summary.
+package.loaded["oui.ubus"].call = (function(orig)
+  return function(o, m, p)
+    if o == "modem.CPU.AT" and p and p.cmd == 'AT+QENG="servingcell"' then
+      return { data = '\r\n+QENG: "servingcell","NOCONN"\r\n'
+        .. '+QENG: "LTE","FDD",232,01,DF30C,61,1700,3,5,5,41,-97,-7,-69,18,12,150,-\r\n'
+        .. '+QENG: "NR5G-NSA",232,01,61,-96,24,-10,425090,1,4,0\r\n\r\nOK\r\n' }
+    end
+    return orig(o, m, p)
+  end
+end)(base_ubus_call)
+glc_body = '0 {"slot1":{},"slot2":{}}'
+at_replies = {}
+r = M.get_lock({})
+assert(r.serving and r.serving.rat == "NR5G-NSA",
+       "NSA multi-line must pick NR5G-NSA, got " .. tostring(r.serving and r.serving.rat))
+assert(r.serving.pci == 61 and r.serving.arfcn == 425090 and r.serving.band == 1,
+       "NSA pci/arfcn/band wrong")
+
+-- 4c. Multi-line LTE-only (no NR line) falls back to the LTE row.
+package.loaded["oui.ubus"].call = (function(orig)
+  return function(o, m, p)
+    if o == "modem.CPU.AT" and p and p.cmd == 'AT+QENG="servingcell"' then
+      return { data = '\r\n+QENG: "servingcell","NOCONN"\r\n'
+        .. '+QENG: "LTE","FDD",232,01,DF30C,61,1700,3,5,5,41,-97,-7,-69,18,12,150,-\r\n'
+        .. '\r\nOK\r\n' }
+    end
+    return orig(o, m, p)
+  end
+end)(base_ubus_call)
+at_replies = {}
+r = M.get_lock({})
+assert(r.serving and r.serving.rat == "LTE",
+       "LTE multi-line fallback wrong: " .. tostring(r.serving and r.serving.rat))
+assert(r.serving.pci == 61 and r.serving.arfcn == 1700 and r.serving.band == 3,
+       "LTE multi-line pci/arfcn/band wrong")
+
 -- 5. at_expect retry exhaustion: three consecutive crossed replies for one
 --    query must degrade that field to nil, not throw. Note: get_lock also
 --    resolves the active sub_id via QSPN before the QNWLOCK reads, so a

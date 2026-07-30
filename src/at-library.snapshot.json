@@ -357,53 +357,59 @@
    "verified": [
     "RG650V-NA"
    ],
-   "summary": "Everything about the cell you're camped on \u2014 PCI, ARFCN, band, and the three numbers that matter (RSRP, RSRQ, SINR).",
-   "source": "RG50xQ&RM5xxQ manual \u00a75.11 format; NR5G-SA field order verified on box 2026-07-17",
+   "summary": "Everything about the cell you're camped on \u2014 PCI, ARFCN, band, and the three numbers that matter (RSRP, RSRQ, SINR). SA is one line; NSA (EN-DC) returns a header plus separate LTE and NR5G-NSA lines.",
+   "source": "RG50xQ&RM5xxQ manual \u00a75.11; NR5G-SA field order verified on box 2026-07-17; NSA multi-line shape from RG650V-EU (issue #2)",
    "by": "kevin",
-   "decode": {
-    "prefix": "+QENG: \"servingcell\"",
-    "fields": [
-     "state",
-     "rat",
-     "duplex",
-     "mcc",
-     "mnc",
-     "cell_id",
-     "pci",
-     "tac",
-     "arfcn",
-     "band",
-     "dl_bandwidth",
-     "rsrp",
-     "rsrq",
-     "sinr",
-     "tx_power",
-     "srxlev"
-    ],
-    "hi": [
-     "rsrp",
-     "rsrq",
-     "sinr"
-    ],
-    "enums": {
-     "dl_bandwidth": {
-      "0": "5 MHz",
-      "1": "10 MHz",
-      "2": "15 MHz",
-      "3": "20 MHz",
-      "4": "25 MHz",
-      "5": "30 MHz",
-      "6": "40 MHz",
-      "7": "50 MHz",
-      "8": "60 MHz",
-      "9": "80 MHz",
-      "10": "90 MHz",
-      "11": "100 MHz",
-      "12": "200 MHz",
-      "13": "400 MHz"
+   "decode": [
+    {
+     "prefix": "+QENG: \"servingcell\"",
+     "min_fields": 2,
+     "fields": [
+      "state",
+      "rat",
+      "duplex",
+      "mcc",
+      "mnc",
+      "cell_id",
+      "pci",
+      "tac",
+      "arfcn",
+      "band",
+      "dl_bandwidth",
+      "rsrp",
+      "rsrq",
+      "sinr",
+      "tx_power",
+      "srxlev"
+     ],
+     "hi": ["rsrp", "rsrq", "sinr"],
+     "enums": {
+      "dl_bandwidth": {
+       "0": "5 MHz", "1": "10 MHz", "2": "15 MHz", "3": "20 MHz",
+       "4": "25 MHz", "5": "30 MHz", "6": "40 MHz", "7": "50 MHz",
+       "8": "60 MHz", "9": "80 MHz", "10": "90 MHz", "11": "100 MHz",
+       "12": "200 MHz", "13": "400 MHz"
+      }
      }
+    },
+    {
+     "prefix": "+QENG: \"LTE\"",
+     "fields": [
+      "duplex", "mcc", "mnc", "cell_id", "pci", "arfcn", "band",
+      "ul_bandwidth", "dl_bandwidth", "tac", "rsrp", "rsrq", "rssi",
+      "sinr", "cqi", "tx_power", "srxlev"
+     ],
+     "hi": ["rsrp", "rsrq", "sinr"]
+    },
+    {
+     "prefix": "+QENG: \"NR5G-NSA\"",
+     "fields": [
+      "mcc", "mnc", "pci", "rsrp", "sinr", "rsrq", "arfcn", "band",
+      "dl_bandwidth", "scs"
+     ],
+     "hi": ["rsrp", "rsrq", "sinr"]
     }
-   }
+   ]
   },
   {
    "id": "3gpp.signal",

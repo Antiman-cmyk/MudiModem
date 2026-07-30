@@ -117,7 +117,10 @@ if [ "$lcd_geom" = "240,320" ]; then
   fi
   # renderer python deps: install only what's missing; pillow --nodeps avoids the
   # libfreetype clash with gl-sdk4-screen-large. Offline-tolerant.
-  LCD_DEPS="python3-light python3-numpy python3-urllib python3-logging python3-ctypes python3-cffi python3-evdev"
+  # ⚠️ Because pillow is --nodeps, its shared-lib deps are NOT pulled automatically.
+  # libtiff6 is required by PIL/_imaging.so — without it mudi.py crash-loops
+  # (issue #3: "No module named luma" was an older stack; current fail is libtiff).
+  LCD_DEPS="python3-light python3-numpy python3-urllib python3-logging python3-ctypes python3-cffi python3-evdev libtiff6"
   lcd_missing=""
   for p in $LCD_DEPS; do
     opkg list-installed 2>/dev/null | grep -q "^$p " || lcd_missing="$lcd_missing $p"

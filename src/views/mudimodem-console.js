@@ -252,25 +252,40 @@ module.exports = {
     },
     // Label matched response lines with the entry's decode fields. `entry` may
     // be null (free-typed): fall back to an exact cmd match in the library.
+    //
+    // `decode` is either one schema `{prefix, fields, …}` or an **array** of
+    // schemas (issue #2: NSA QENG returns a header line + separate LTE /
+    // NR5G-NSA lines, each with its own prefix and field map). Optional
+    // `min_fields` skips a match whose value list is shorter (header-only
+    // `+QENG: "servingcell","NOCONN"` has one field after the prefix).
     applyDecode(entry, cmd, resp) {
       var e = (entry && entry.cmd === cmd) ? entry : null;
       if (!e) {
         e = (this.lib || []).filter(function (x) { return x.cmd === cmd; })[0] || null;
       }
       if (!e || !e.decode) { this.decodeRows = null; this.decodeSrc = ""; return; }
-      var d = e.decode, self = this, rows = [];
+      var schemas = Array.isArray(e.decode) ? e.decode : [e.decode];
+      var self = this, rows = [];
       resp.replace(/\r/g, "\n").split("\n").forEach(function (line) {
         line = line.trim();
-        if (!line || line.indexOf(d.prefix) !== 0) return;
-        var rest = line.slice(d.prefix.length).replace(/^[,\s]+/, "");
-        var parts = self.splitFields(rest);
-        rows.push(d.fields.map(function (f, i) {
-          var v = (parts[i] !== undefined && parts[i] !== "") ? parts[i] : "—";
-          var en = (d.enums || {})[f];
-          // An enum field is NOT its own value — raw 2 means 15 MHz, not 2 MHz.
-          if (en && en[v] !== undefined) v = en[v];
-          return { f: f, v: v, hi: (d.hi || []).indexOf(f) !== -1 };
-        }));
+        if (!line) return;
+        for (var si = 0; si < schemas.length; si++) {
+          var d = schemas[si];
+          if (!d || !d.prefix || line.indexOf(d.prefix) !== 0) continue;
+          var rest = line.slice(d.prefix.length).replace(/^[,\s]+/, "");
+          var parts = self.splitFields(rest);
+          // Empty rest → splitFields returns [""] — treat as zero real fields.
+          var n = (parts.length === 1 && parts[0] === "") ? 0 : parts.length;
+          if (d.min_fields != null && n < d.min_fields) continue;
+          rows.push(d.fields.map(function (f, i) {
+            var v = (parts[i] !== undefined && parts[i] !== "") ? parts[i] : "—";
+            var en = (d.enums || {})[f];
+            // An enum field is NOT its own value — raw 2 means 15 MHz, not 2 MHz.
+            if (en && en[v] !== undefined) v = en[v];
+            return { f: f, v: v, hi: (d.hi || []).indexOf(f) !== -1 };
+          }));
+          break; // one schema per line
+        }
       });
       this.decodeRows = rows.length ? rows : null;
       this.decodeSrc = e.id;

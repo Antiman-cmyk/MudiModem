@@ -228,26 +228,55 @@ local function parse_savectrl(blob)
   return { raw = n[1] .. "," .. n[2], s4g = n[1], s5g = n[2] }
 end
 
--- Serving cell from QENG. SA field order verified on-box (reference §8):
--- "servingcell",<state>,"NR5G-SA",<duplex>,<mcc>,<mnc>,<cell_id>,<pci>,<tac>,<arfcn>,<band>,…
--- LTE order is from the 5-series manual (📘 — re-verify at the Task 7 milestone):
--- "servingcell",<state>,"LTE",<is_tdd>,<mcc>,<mnc>,<cell_id>,<pci>,<earfcn>,<band>,…
+-- Serving cell from QENG.
+-- SA (single line, verified on-box — reference §4.1 / §8):
+--   +QENG: "servingcell",<state>,"NR5G-SA",<duplex>,<mcc>,<mnc>,<cell_id>,<pci>,
+--          <tac>,<arfcn>,<band>,…
+-- NSA multi-line (ChiliApple #2 / RG650V-EU EN-DC) — the header carries NO cell
+-- fields; LTE and NR ride on their own lines:
+--   +QENG: "servingcell",<state>
+--   +QENG: "LTE",<is_tdd>,<mcc>,<mnc>,<cell_id>,<pci>,<earfcn>,<band>,…
+--   +QENG: "NR5G-NSA",<mcc>,<mnc>,<pci>,<rsrp>,<sinr>,<rsrq>,<arfcn>,<band>,…
+-- Prefer SA, then NR5G-NSA, then LTE. Never return the header-only line.
+local function qeng_csv(line)
+  local f = {}
+  for tok in line:gmatch('[^,]+') do
+    f[#f + 1] = (tok:gsub('^%s*"?', ''):gsub('"?%s*$', ''))
+  end
+  return f
+end
+
 local function parse_serving(blob)
   if not blob then return nil end
-  local line = blob:match('%+QENG: "servingcell"[^\r\n]*')
-  if not line then return nil end
-  local f = {}
-  for tok in line:gmatch('[^,]+') do f[#f + 1] = (tok:gsub('^%s*"?', ''):gsub('"?%s*$', '')) end
-  -- f[1]='+QENG: servingcell', f[2]=state, f[3]=rat
-  local rat = f[3]
-  if rat == "NR5G-SA" then
-    return { rat = rat, cell_id = f[7], pci = tonumber(f[8]),
-             arfcn = tonumber(f[10]), band = tonumber(f[11]) }
-  elseif rat == "LTE" then
-    return { rat = rat, cell_id = f[7], pci = tonumber(f[8]),
-             arfcn = tonumber(f[9]), band = tonumber(f[10]) }
+  local sa, nsa, lte
+  for line in blob:gmatch('[^\r\n]+') do
+    if line:find('%+QENG: "servingcell"') then
+      local f = qeng_csv(line)
+      -- f[1]='+QENG: servingcell', f[2]=state, f[3]=rat (absent on NSA header)
+      local rat = f[3]
+      if rat == "NR5G-SA" then
+        sa = { rat = rat, cell_id = f[7], pci = tonumber(f[8]),
+               arfcn = tonumber(f[10]), band = tonumber(f[11]) }
+      elseif rat == "LTE" then
+        -- Single-line LTE form (state + rat still on the servingcell line)
+        lte = lte or { rat = rat, cell_id = f[7], pci = tonumber(f[8]),
+                       arfcn = tonumber(f[9]), band = tonumber(f[10]) }
+      end
+    elseif line:find('%+QENG: "NR5G%-NSA"') then
+      local f = qeng_csv(line)
+      -- f[1]=+QENG: NR5G-NSA, f[2]=mcc, f[3]=mnc, f[4]=pci, f[5]=rsrp,
+      -- f[6]=sinr, f[7]=rsrq, f[8]=arfcn, f[9]=band
+      nsa = { rat = "NR5G-NSA", pci = tonumber(f[4]),
+              arfcn = tonumber(f[8]), band = tonumber(f[9]) }
+    elseif line:find('%+QENG: "LTE"') then
+      local f = qeng_csv(line)
+      -- f[1]=+QENG: LTE, f[2]=duplex, f[3]=mcc, f[4]=mnc, f[5]=cell_id,
+      -- f[6]=pci, f[7]=earfcn, f[8]=band
+      lte = lte or { rat = "LTE", cell_id = f[5], pci = tonumber(f[6]),
+                     arfcn = tonumber(f[7]), band = tonumber(f[8]) }
+    end
   end
-  return { rat = rat }
+  return sa or nsa or lte
 end
 
 -- READ: the three-layer band picture for the active subscription.
@@ -832,8 +861,9 @@ function M.at_console(args)
   -- Split into steps on newlines; trim each, drop blanks. (Was: collapse to a
   -- space. Now each line is its own AT command in one held channel window.)
   local steps = {}
-  for line in (raw .. "\n"):gmatch("(.-)\n") do
-    line = line:gsub("[\r]+", ""):match("^%s*(.-)%s*$")
+  -- Don't reassign the for-loop control var (Lua 5.4+ treats it as <const>).
+  for rawline in (raw .. "\n"):gmatch("(.-)\n") do
+    local line = rawline:gsub("[\r]+", ""):match("^%s*(.-)%s*$")
     if line ~= "" then steps[#steps + 1] = line end
   end
   if #steps == 0 then return { error = "cmd required" } end

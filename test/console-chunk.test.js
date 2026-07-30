@@ -201,6 +201,68 @@ test('decode also matches a free-typed command against the library', () => {
   assert.strictEqual(vm.decodeSrc, 'quectel.serving-cell');
 });
 
+// ChiliApple #2: NSA multi-line QENG — header line has no cell fields; LTE and
+// NR5G-NSA ride on their own +QENG lines. decode may be an array of schemas.
+const NSA_CAPTURED =
+  '+QENG: "servingcell","NOCONN"\r\n' +
+  '+QENG: "LTE","FDD",232,01,DF30C,61,1700,3,5,5,41,-97,-7,-69,18,12,150,-\r\n' +
+  '+QENG: "NR5G-NSA",232,01,61,-96,24,-10,425090,1,4,0\r\n' +
+  'OK\r\n';
+
+const LIB_NSA = [{
+  id: 'quectel.serving-cell', cat: 'Diagnostics', title: 'Serving cell details',
+  cmd: 'AT+QENG="servingcell"', risk: 'read', vendor: 'quectel', verified: [],
+  summary: 'sum', source: 'src', by: 'kevin',
+  decode: [
+    { prefix: '+QENG: "servingcell"', min_fields: 2,
+      fields: ['state', 'rat', 'duplex', 'mcc', 'mnc', 'cell_id', 'pci', 'tac',
+               'arfcn', 'band', 'dl_bandwidth', 'rsrp', 'rsrq', 'sinr', 'tx_power', 'srxlev'],
+      hi: ['rsrp', 'rsrq', 'sinr'],
+      enums: { dl_bandwidth: { 2: '15 MHz', 11: '100 MHz' } } },
+    { prefix: '+QENG: "LTE"',
+      fields: ['duplex', 'mcc', 'mnc', 'cell_id', 'pci', 'arfcn', 'band',
+               'ul_bandwidth', 'dl_bandwidth', 'tac', 'rsrp', 'rsrq', 'rssi',
+               'sinr', 'cqi', 'tx_power', 'srxlev'],
+      hi: ['rsrp', 'rsrq', 'sinr'] },
+    { prefix: '+QENG: "NR5G-NSA"',
+      fields: ['mcc', 'mnc', 'pci', 'rsrp', 'sinr', 'rsrq', 'arfcn', 'band',
+               'dl_bandwidth', 'scs'],
+      hi: ['rsrp', 'rsrq', 'sinr'] }
+  ]
+}];
+
+test('decode: NSA multi-line QENG yields LTE + NR5G-NSA rows, not all dashes', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  vm.lib = LIB_NSA;
+  // Old single-prefix schema would match only the header → all dashes (#2).
+  vm.applyDecode(LIB_NSA[0], 'AT+QENG="servingcell"', NSA_CAPTURED);
+  assert.ok(vm.decodeRows && vm.decodeRows.length === 2,
+    'LTE + NR5G-NSA rows (header-only line skipped via min_fields)');
+  const lte = vm.decodeRows[0];
+  const nsa = vm.decodeRows[1];
+  const get = (row, f) => row.find((x) => x.f === f);
+  assert.strictEqual(get(lte, 'duplex').v, 'FDD');
+  assert.strictEqual(get(lte, 'pci').v, '61');
+  assert.strictEqual(get(lte, 'rsrp').v, '-97');
+  assert.strictEqual(get(nsa, 'pci').v, '61');
+  assert.strictEqual(get(nsa, 'rsrp').v, '-96');
+  assert.strictEqual(get(nsa, 'arfcn').v, '425090');
+  assert.strictEqual(get(nsa, 'band').v, '1');
+});
+
+test('decode: SA single-line still works with array schema + min_fields', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  vm.lib = LIB_NSA;
+  vm.applyDecode(LIB_NSA[0], 'AT+QENG="servingcell"', CAPTURED + '\r\nOK\r\n');
+  assert.ok(vm.decodeRows && vm.decodeRows.length === 1, 'one SA row');
+  const get = (f) => vm.decodeRows[0].find((x) => x.f === f);
+  assert.strictEqual(get('rat').v, 'NR5G-SA');
+  assert.strictEqual(get('band').v, '71');
+  assert.strictEqual(get('rsrp').v, '-99');
+});
+
 test('library rail renders categories, titles, risk badges; search filters', () => {
   const c = loadChunk();
   const vm = makeVm(c, {});
