@@ -30,6 +30,36 @@ SIMS = {"sims": [
     {"slot": "2", "bus": "cpu", "carrier": "AT&T"}]}
 
 
+# Firmware 4.10 shapes from issue #5 (ChiliApple / will.qiu).
+# cellular.modem status is flat (no modems[]); signal moved to
+# cellular.network cell_info {bus,slot} → signal[], with cell_id/tac
+# on the parent, not inside signal[0].
+MODEM_410 = {
+    "bus": "cpu",
+    "current_sim_slot": 1,
+    "slot_switch_enable": True,
+}
+NET_410 = {
+    "bus": "cpu",
+    "slot": 1,
+    "network_type": 51,
+    "tac": "41",
+    "cell_id": "DF30C",
+    "signal": [{
+        "band": 3,
+        "earfcn": 1700,
+        "rsrp": -97,
+        "rsrq": -9,
+        "rssi": -67,
+        "sinr": 17,
+        "rsrp_level": 4,
+        "strength": 4,
+    }],
+    "ret": 0,
+    "resp": "Success",
+}
+
+
 class BuildSample(unittest.TestCase):
     def test_active_slot_cell_and_carrier(self):
         s = collectd.build_sample(MODEM, NET, SIMS, t=1000)
@@ -60,6 +90,142 @@ class BuildSample(unittest.TestCase):
     def test_no_active_slot_returns_none(self):
         self.assertIsNone(collectd.build_sample({"modems": [{}]}, NET, SIMS))
         self.assertIsNone(collectd.build_sample({}, NET, SIMS))
+
+    def test_firmware_410_flat_modem_and_cell_info_signal(self):
+        # Issue #5: 4.10 drops the modems[] wrapper and moves metrics into
+        # cell_info.signal[0]. cell_id lives on the parent, not the signal
+        # entry. earfcn is the 4.10 name for tx_channel. mode falls back to
+        # the parent network_type.
+        s = collectd.build_sample(MODEM_410, NET_410, SIMS, t=1000)
+        self.assertIsNotNone(s, "flat modem must still resolve the active slot")
+        self.assertEqual(int(s["slot"]), 1)
+        self.assertEqual(s["id"], "DF30C")
+        self.assertEqual(s["carrier"], "T-Mobile")
+        self.assertEqual(s["band"], 3)
+        self.assertEqual(s["rsrp"], -97)
+        self.assertEqual(s["sinr"], 17)
+        self.assertEqual(s["rsrq"], -9)
+        self.assertEqual(s["rssi"], -67)
+        self.assertEqual(s["rsrp_level"], 4)
+        self.assertEqual(s["tx_channel"], 1700)
+        self.assertEqual(str(s["mode"]), "51")
+
+    def test_firmware_410_id_comes_from_cell_info_not_signal(self):
+        # Follow-up on #5: a consumer that takes id from signal[0] gets null
+        # (or, if signal happens to carry an id, the wrong one).
+        net = dict(NET_410)
+        net["signal"] = [dict(NET_410["signal"][0], id="WRONG")]
+        s = collectd.build_sample(MODEM_410, net, SIMS, t=1000)
+        self.assertEqual(s["id"], "DF30C")
+
+    def test_firmware_410_empty_signal_is_a_gap_sample(self):
+        net = dict(NET_410, signal=[], cell_id=None)
+        s = collectd.build_sample(MODEM_410, net, SIMS, t=1000)
+        self.assertIsNotNone(s, "still a sample (gap), not dropped")
+        self.assertIsNone(s["rsrp"])
+        self.assertEqual(int(s["slot"]), 1)
+
+    def test_flat_modem_still_reads_legacy_networks(self):
+        # 4.10-flat modem + 4.8 networks[] (cell_info method missing → fallback).
+        s = collectd.build_sample(MODEM_410, NET, SIMS, t=1000)
+        self.assertEqual(s["id"], "D43B70D")
+        self.assertEqual(s["rsrp"], -118)
+        self.assertEqual(s["mode"], "LTE FDD")
+
+
+class UbusCall(unittest.TestCase):
+    def test_passes_optional_json_arg(self):
+        seen = {}
+
+        def fake_run(cmd, **_kw):
+            seen["cmd"] = cmd
+
+            class R:
+                returncode = 0
+                stdout = '{"ok":1}'
+            return R()
+
+        old = collectd.subprocess.run
+        collectd.subprocess.run = fake_run
+        try:
+            r = collectd.ubus_call("cellular.network", "cell_info",
+                                   {"bus": "cpu", "slot": 1})
+        finally:
+            collectd.subprocess.run = old
+        self.assertEqual(r, {"ok": 1})
+        self.assertEqual(seen["cmd"][:4],
+                         ["ubus", "call", "cellular.network", "cell_info"])
+        self.assertEqual(json.loads(seen["cmd"][4]), {"bus": "cpu", "slot": 1})
+
+    def test_omitted_args_still_sends_empty_object(self):
+        seen = {}
+
+        def fake_run(cmd, **_kw):
+            seen["cmd"] = cmd
+
+            class R:
+                returncode = 0
+                stdout = '{}'
+            return R()
+
+        old = collectd.subprocess.run
+        collectd.subprocess.run = fake_run
+        try:
+            collectd.ubus_call("cellular.modem", "status")
+        finally:
+            collectd.subprocess.run = old
+        self.assertEqual(json.loads(seen["cmd"][4]), {})
+
+
+class CollectSample(unittest.TestCase):
+    def _swap(self, fake):
+        old = collectd.ubus_call
+        collectd.ubus_call = fake
+        return old
+
+    def test_prefers_cell_info_when_firmware_has_it(self):
+        calls = []
+
+        def fake(obj, method, args=None):
+            calls.append((obj, method, args))
+            table = {
+                ("cellular.modem", "status"): MODEM_410,
+                ("cellular.network", "cell_info"): NET_410,
+                ("cellular.sim", "status"): SIMS,
+            }
+            return table.get((obj, method))
+
+        old = self._swap(fake)
+        try:
+            s = collectd.collect_sample()
+        finally:
+            collectd.ubus_call = old
+        self.assertEqual(s["id"], "DF30C")
+        self.assertEqual(s["rsrp"], -97)
+        cell_calls = [c for c in calls if c[1] == "cell_info"]
+        self.assertEqual(len(cell_calls), 1)
+        self.assertEqual(cell_calls[0][2]["bus"], "cpu")
+        self.assertEqual(int(cell_calls[0][2]["slot"]), 1)
+        self.assertFalse(any(c[1] == "info" for c in calls),
+                         "must not fall back when cell_info worked")
+
+    def test_falls_back_to_network_info_when_cell_info_missing(self):
+        def fake(obj, method, args=None):
+            table = {
+                ("cellular.modem", "status"): MODEM,
+                ("cellular.network", "cell_info"): None,   # 4.8: no such method
+                ("cellular.network", "info"): NET,
+                ("cellular.sim", "status"): SIMS,
+            }
+            return table.get((obj, method))
+
+        old = self._swap(fake)
+        try:
+            s = collectd.collect_sample()
+        finally:
+            collectd.ubus_call = old
+        self.assertEqual(s["id"], "D43B70D")
+        self.assertEqual(s["rsrp"], -118)
 
 
 class Trim(unittest.TestCase):

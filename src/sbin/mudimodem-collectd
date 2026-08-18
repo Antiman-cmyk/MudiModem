@@ -159,10 +159,15 @@ class Broadcaster:
             pass
 
 
-def ubus_call(obj, method):
-    """Return the parsed ubus result dict, or None on any failure."""
+def ubus_call(obj, method, args=None):
+    """Return the parsed ubus result dict, or None on any failure.
+
+    `args` is an optional JSON-able dict (firmware 4.10 cell_info needs
+    {bus, slot}). Omitted / None still sends `{}` so older callers are
+    unchanged.
+    """
     try:
-        out = subprocess.run(["ubus", "call", obj, method, "{}"],
+        out = subprocess.run(["ubus", "call", obj, method, json.dumps(args or {})],
                              capture_output=True, timeout=8, text=True)
         if out.returncode != 0 or not out.stdout:
             return None
@@ -181,22 +186,87 @@ def _num(v):
     return int(f) if f == int(f) else f
 
 
+def _first(*vals):
+    for v in vals:
+        if v is not None and v != "":
+            return v
+    return None
+
+
+def _as_slot(slot):
+    """Coerce a slot to int when the firmware gave us a numeric string.
+    4.10 cell_info wants {slot: 1}; 4.8 status returns '1'."""
+    try:
+        return int(slot)
+    except (TypeError, ValueError):
+        return slot
+
+
+def _modem_obj(modem):
+    """Unwrap 4.8 {modems:[...]} or return 4.10's already-flat object."""
+    if not isinstance(modem, dict):
+        return {}
+    if "modems" in modem:
+        mods = modem.get("modems") or []
+        return mods[0] if mods else {}
+    return modem
+
+
+def _is_cell_info_payload(net):
+    """True when `net` is a 4.10 cellular.network cell_info result.
+
+    Unregistered 4.10 still returns signal:[] (and maybe no cell_id) —
+    that is a valid payload and must NOT fall back to network info.
+    """
+    return isinstance(net, dict) and ("signal" in net or "cell_id" in net)
+
+
+def _cell_from_net(net, slot, bus):
+    """Pick the serving-cell dict out of either firmware shape.
+
+    Returns (cell, extras) where extras overrides id / mode / tx_channel
+    for the 4.10 layout (cell_id and network_type live on the parent;
+    earfcn is the 4.10 name for tx_channel). extras is {} on 4.8.
+    """
+    net = net or {}
+    if _is_cell_info_payload(net):
+        sigs = net.get("signal") or []
+        cell = sigs[0] if sigs else {}
+        extras = {
+            "id": _first(net.get("cell_id"), cell.get("id")),
+            "mode": _first(cell.get("mode"), cell.get("network_type"),
+                           net.get("network_type")),
+            "tx_channel": _first(cell.get("tx_channel"), cell.get("earfcn"),
+                                 net.get("earfcn")),
+        }
+        return cell, extras
+    for n in net.get("networks") or []:
+        if str(n.get("slot")) == str(slot) and (bus is None or n.get("bus") == bus):
+            return (n.get("cell_info") or {}), {}
+    return {}, {}
+
+
 def build_sample(modem, net, sims, t=None):
     """Pure: assemble one sample from the three ubus payloads (or None if the
     active slot can't be resolved). Anchors on the ACTIVE slot (current_sim_slot)
     exactly as the UI does; an unregistered active slot yields a sample with null
-    metrics so the trace shows an honest gap."""
-    m = ((modem or {}).get("modems") or [{}])
-    m = m[0] if m else {}
+    metrics so the trace shows an honest gap.
+
+    Accepts both firmware 4.8 (modems[] + networks[].cell_info) and 4.10
+    (flat modem + cell_info.signal[]) shapes — issue #5.
+    """
+    m = _modem_obj(modem)
     bus = m.get("bus")
     slot = m.get("current_sim_slot")
     if slot is None:
         return None
-    cell = {}
-    for n in (net or {}).get("networks") or []:
-        if str(n.get("slot")) == str(slot) and (bus is None or n.get("bus") == bus):
-            cell = n.get("cell_info") or {}
-            break
+    cell, extras = _cell_from_net(net, slot, bus)
+    mode = extras.get("mode", cell.get("mode"))
+    # LCD does mode.split(); stringify a 4.10 numeric network_type so it
+    # cannot AttributeError. The 4/51 enum is unverified, so we do not
+    # invent "NR5G"/"LTE" labels here.
+    if mode is not None and not isinstance(mode, str):
+        mode = str(mode)
     carrier = ""
     for s in (sims or {}).get("sims") or []:
         if str(s.get("slot")) == str(slot):
@@ -205,15 +275,15 @@ def build_sample(modem, net, sims, t=None):
     return {
         "t": now_ms() if t is None else t,
         "slot": slot,
-        "id": cell.get("id"),
+        "id": extras.get("id", cell.get("id")),
         "band": cell.get("band"),
-        "mode": cell.get("mode"),
+        "mode": mode,
         "rsrp": _num(cell.get("rsrp")),
         "sinr": _num(cell.get("sinr")),
         "rsrq": _num(cell.get("rsrq")),
         "rssi": _num(cell.get("rssi")),
         "dl_bandwidth": cell.get("dl_bandwidth"),
-        "tx_channel": cell.get("tx_channel"),
+        "tx_channel": extras.get("tx_channel", cell.get("tx_channel")),
         "rsrp_level": cell.get("rsrp_level"),
         "sinr_level": cell.get("sinr_level"),
         "rsrq_level": cell.get("rsrq_level"),
@@ -320,9 +390,22 @@ def collect_sample():
     modem = ubus_call("cellular.modem", "status")
     if not modem:
         return None
-    return build_sample(modem,
-                        ubus_call("cellular.network", "info"),
-                        ubus_call("cellular.sim", "status"))
+    m = _modem_obj(modem)
+    bus = m.get("bus")
+    slot = m.get("current_sim_slot")
+    # Firmware 4.10: metrics live on cellular.network cell_info {bus,slot}.
+    # Firmware 4.8: that method does not exist (ubus_call → None) and we
+    # fall back to the wrapped networks[] payload. Prefer cell_info when
+    # it actually answered so we don't mix the two shapes.
+    net = None
+    if slot is not None:
+        args = {"slot": _as_slot(slot)}
+        if bus is not None:
+            args["bus"] = bus
+        net = ubus_call("cellular.network", "cell_info", args)
+    if not _is_cell_info_payload(net):
+        net = ubus_call("cellular.network", "info")
+    return build_sample(modem, net, ubus_call("cellular.sim", "status"))
 
 
 def trim(path, max_age_ms, max_lines, ref_ms=None):

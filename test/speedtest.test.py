@@ -119,6 +119,77 @@ class BuildSnapshot(unittest.TestCase):
     def test_no_active_slot_is_empty_dict(self):
         self.assertEqual(st.build_snapshot({"modems": [{}]}, self.NET, self.SIMS), {})
 
+    # Firmware 4.10 shapes from issue #5 — same unwrap as collectd.
+    MODEM_410 = {"bus": "cpu", "current_sim_slot": 1}
+    NET_410 = {
+        "bus": "cpu", "slot": 1, "network_type": 51, "cell_id": "DF30C",
+        "signal": [{"band": 3, "rsrp": -97, "sinr": 17, "rsrq": -9}],
+    }
+
+    def test_firmware_410_flat_modem_and_cell_info_signal(self):
+        snap = st.build_snapshot(self.MODEM_410, self.NET_410, self.SIMS)
+        self.assertEqual(int(snap["slot"]), 1)
+        self.assertEqual(snap["cell_id"], "DF30C")
+        self.assertEqual(snap["rsrp"], -97)
+        self.assertEqual(snap["sinr"], 17)
+        self.assertEqual(snap["band"], 3)
+        self.assertEqual(snap["carrier"], "T-Mobile")
+        self.assertEqual(str(snap["mode"]), "51")
+
+    def test_firmware_410_id_comes_from_cell_info_not_signal(self):
+        net = dict(self.NET_410)
+        net["signal"] = [dict(self.NET_410["signal"][0], id="WRONG")]
+        snap = st.build_snapshot(self.MODEM_410, net, self.SIMS)
+        self.assertEqual(snap["cell_id"], "DF30C")
+
+
+class LoadSnapshot(unittest.TestCase):
+    def test_prefers_cell_info_when_firmware_has_it(self):
+        modem = {"bus": "cpu", "current_sim_slot": 1}
+        net410 = {
+            "bus": "cpu", "slot": 1, "cell_id": "DF30C", "network_type": 51,
+            "signal": [{"band": 3, "rsrp": -97}],
+        }
+        sims = {"sims": [{"slot": "1", "carrier": "T-Mobile"}]}
+        calls = []
+
+        def fake(obj, method, args=None):
+            calls.append((obj, method, args))
+            return {
+                ("cellular.modem", "status"): modem,
+                ("cellular.network", "cell_info"): net410,
+                ("cellular.sim", "status"): sims,
+            }.get((obj, method))
+
+        old = st.ubus_call
+        st.ubus_call = fake
+        try:
+            snap = st.load_snapshot()
+        finally:
+            st.ubus_call = old
+        self.assertEqual(snap["cell_id"], "DF30C")
+        self.assertEqual(snap["rsrp"], -97)
+        self.assertTrue(any(c[1] == "cell_info" for c in calls))
+        self.assertFalse(any(c[1] == "info" for c in calls))
+
+    def test_falls_back_to_network_info_when_cell_info_missing(self):
+        def fake(obj, method, args=None):
+            return {
+                ("cellular.modem", "status"): BuildSnapshot.MODEM,
+                ("cellular.network", "cell_info"): None,
+                ("cellular.network", "info"): BuildSnapshot.NET,
+                ("cellular.sim", "status"): BuildSnapshot.SIMS,
+            }.get((obj, method))
+
+        old = st.ubus_call
+        st.ubus_call = fake
+        try:
+            snap = st.load_snapshot()
+        finally:
+            st.ubus_call = old
+        self.assertEqual(snap["cell_id"], "D43B70D")
+        self.assertEqual(snap["rsrp"], -98)
+
 
 import http.server
 import threading

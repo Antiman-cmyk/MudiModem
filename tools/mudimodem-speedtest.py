@@ -76,23 +76,64 @@ def latency_stats(samples):
     return round(median * 1000), round((vals[-1] - vals[0]) * 1000)
 
 
+def _first(*vals):
+    for v in vals:
+        if v is not None and v != "":
+            return v
+    return None
+
+
+def _as_slot(slot):
+    try:
+        return int(slot)
+    except (TypeError, ValueError):
+        return slot
+
+
+def _modem_obj(modem):
+    """Unwrap 4.8 {modems:[...]} or return 4.10's already-flat object."""
+    if not isinstance(modem, dict):
+        return {}
+    if "modems" in modem:
+        mods = modem.get("modems") or []
+        return mods[0] if mods else {}
+    return modem
+
+
+def _is_cell_info_payload(net):
+    return isinstance(net, dict) and ("signal" in net or "cell_id" in net)
+
+
 def build_snapshot(modem, net, sims):
     """Signal/carrier/tower snapshot for the active slot -- the same three
     ubus reads mudimodem-collectd uses (cellular.modem status / cellular.
-    network info / cellular.sim status), independently implemented here since
-    each deployed MudiModem script is self-contained (mirrors mudimodem-at.py
-    / mudimodem-collectd, neither of which share code either). {} if the
-    active slot can't be resolved."""
-    m = ((modem or {}).get("modems") or [{}])
-    m = m[0] if m else {}
+    network info-or-cell_info / cellular.sim status), independently
+    implemented here since each deployed MudiModem script is self-contained
+    (mirrors mudimodem-at.py / mudimodem-collectd, neither of which share
+    code either). {} if the active slot can't be resolved.
+
+    Accepts both firmware 4.8 (modems[] + networks[].cell_info) and 4.10
+    (flat modem + cell_info.signal[]) shapes — issue #5.
+    """
+    m = _modem_obj(modem)
     slot = m.get("current_sim_slot")
     if slot is None:
         return {}
-    cell = {}
-    for n in (net or {}).get("networks") or []:
-        if str(n.get("slot")) == str(slot):
-            cell = n.get("cell_info") or {}
-            break
+    cell, extras = {}, {}
+    net = net or {}
+    if _is_cell_info_payload(net):
+        sigs = net.get("signal") or []
+        cell = sigs[0] if sigs else {}
+        extras = {
+            "id": _first(net.get("cell_id"), cell.get("id")),
+            "mode": _first(cell.get("mode"), cell.get("network_type"),
+                           net.get("network_type")),
+        }
+    else:
+        for n in net.get("networks") or []:
+            if str(n.get("slot")) == str(slot):
+                cell = n.get("cell_info") or {}
+                break
     carrier = ""
     for s in (sims or {}).get("sims") or []:
         if str(s.get("slot")) == str(slot):
@@ -108,11 +149,33 @@ def build_snapshot(modem, net, sims):
             return None
         return int(f) if f == int(f) else f
 
+    mode = extras.get("mode", cell.get("mode"))
+    if mode is not None and not isinstance(mode, str):
+        mode = str(mode)
     return {
         "slot": slot, "carrier": carrier, "band": cell.get("band"),
-        "mode": cell.get("mode"), "cell_id": cell.get("id"),
+        "mode": mode, "cell_id": extras.get("id", cell.get("id")),
         "rsrp": num(cell.get("rsrp")), "sinr": num(cell.get("sinr")), "rsrq": num(cell.get("rsrq")),
     }
+
+
+def load_snapshot():
+    """The three ubus reads + 4.10 cell_info fallback, then build_snapshot."""
+    modem = ubus_call("cellular.modem", "status")
+    if not modem:
+        return {}
+    m = _modem_obj(modem)
+    bus = m.get("bus")
+    slot = m.get("current_sim_slot")
+    net = None
+    if slot is not None:
+        args = {"slot": _as_slot(slot)}
+        if bus is not None:
+            args["bus"] = bus
+        net = ubus_call("cellular.network", "cell_info", args)
+    if not _is_cell_info_payload(net):
+        net = ubus_call("cellular.network", "info")
+    return build_snapshot(modem, net, ubus_call("cellular.sim", "status"))
 
 
 def ubus_call(obj, method, args=None):
@@ -289,9 +352,7 @@ def main(argv):
                                           "message": cfg["iface"] + " is not connected", "iface": cfg["iface"]})
             return 3
 
-        snapshot = build_snapshot(ubus_call("cellular.modem", "status"),
-                                   ubus_call("cellular.network", "info"),
-                                   ubus_call("cellular.sim", "status"))
+        snapshot = load_snapshot()
 
         write_status(cfg["status"], {"running": True, "phase": "download", "iface": cfg["iface"]})
         down = run_download(device, cfg)
