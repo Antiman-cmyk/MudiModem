@@ -114,21 +114,38 @@ EUTRA_ARFCN_MAX = 65535
 
 
 def _row_network_type(row, cell_nt, index):
-    """The RAT of ONE carrier row. GL tags the CELL (51 = EN-DC/NSA) and its
-    signal[] rows normally carry no network_type of their own; under NSA the
-    first row is the LTE anchor (issue #5 capture: 51 with a B3 / EARFCN-1700
-    anchor), and GL's own cellular-detail keys the n/B prefix off the ROW —
-    never off the cell — leaving a row without one unprefixed. So: an explicit
-    row value wins; under an NSA cell an implicit row is LTE when it is the
-    anchor (index 0) or its channel sits in the E-UTRA ARFCN range, else it is
-    the NR leg and keeps the cell's NSA tag; any other cell type is inherited."""
+    """The RAT of ONE carrier row, read from the 4.10 image (libcm_network.so
+    cell_info handler @0x8284, filler quectel_get_qcainfo_signal in
+    libcm_modem.so @0x2710c; reference/4.10/re-notes.md):
+
+    * Every row GL emits carries its own `network_type` (plus ca, band, pci,
+      earfcn, bandwidth, rsrp/rsrq/sinr/rssi/rscp/ecio/snr, *_level, strength).
+      Under EN-DC the QCAINFO "PCC" line is the LTE anchor -> row code 4, the
+      "SCC" lines whose band token starts with 'N' are the NR legs -> 51, and
+      the cell is 51. Plain LTE CA -> 41. So an explicit row value is normally
+      authoritative.
+    * ONE exception, also in the binary: when QCAINFO yielded no carriers
+      (ca_num == 0) the handler emits a single fallback row built from the
+      QENG servingcell struct — LTE-anchor band/pci/earfcn — but stamps it
+      with the CELL's code (51 under NSA). An NR row can never sit on an
+      E-UTRA channel (every NR-ARFCN in use is >= 123400; E-UTRA tops out at
+      65535), so a row tagged NR whose channel is in the E-UTRA range is that
+      fallback anchor: LTE.
+    * A row with NO network_type (an abridged capture such as issue #5) falls
+      back to the same rule: under an NSA cell, the anchor (index 0) or an
+      E-UTRA-range channel is LTE, anything else is the NR leg; other cell
+      types are inherited."""
+    ch = _num(row.get("earfcn", row.get("tx_channel")))
+    on_eutra = ch is not None and 0 <= ch <= EUTRA_ARFCN_MAX
     explicit = row.get("network_type")
     if explicit not in (None, ""):
+        n = _num(explicit)
+        if n is not None and int(n) in (5, 51) and on_eutra:
+            return 4
         return explicit
     cn = _num(cell_nt)
     if cn is not None and int(cn) == 51:
-        ch = _num(row.get("earfcn", row.get("tx_channel")))
-        if index == 0 or (ch is not None and 0 <= ch <= EUTRA_ARFCN_MAX):
+        if index == 0 or on_eutra:
             return 4
     return cell_nt
 

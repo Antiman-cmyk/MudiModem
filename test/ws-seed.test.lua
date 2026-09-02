@@ -18,7 +18,7 @@ assert(type(s) == "table" and s.t == nil and s.stale == nil, "no file => empty s
 local now = os.time()
 local function write(t)
   local f = assert(io.open(latest, "w"))
-  f:write(string.format('{"t":%d,"slot":1,"rsrp":-97,"pci":null}', t * 1000)); f:close()
+  f:write(string.format('{"t":%.0f,"slot":1,"rsrp":-97,"pci":null}', t * 1000)); f:close()
 end
 write(now - 5)
 s = M.collect()

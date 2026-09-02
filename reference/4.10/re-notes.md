@@ -56,3 +56,16 @@ object/method/key strings a stretch of code uses).
   `sgm41542S`, `sgm,sgm41600`, `cellwise,cw2217`, `qcom,battery-charger`, `awinic,aw35615`.
 - Baseband in the OTA: NA `RG650VNA01ACR02A04G8G` (= the 4.8 box's), EU `RG650VEU00ADR02A04G8G`.
 - busybox applets: no `pkill`; `pgrep pidof killall flock nohup setsid timeout` present.
+
+## Additions 2026-09-02 (second pass — cell_info rows, tower lock, redial)
+- `set/get/scan_cell_tower` are exported by **`libcm_network.so`** (0x11e18 / 0x12384 / 0x12b24),
+  not `modem.so`: glc's `dlsym` on the modem.so handle resolves through its NEEDED chain. The
+  `cellular.network cell_info` **server** handler is the static function @0x8284 (the exported
+  `get_cell_info` @0x11858 is the ubus CLIENT stub); the Quectel filler is `libcm_modem.so`
+  `quectel_get_qcainfo_signal` @0x2710c (`AT+QENG="servingcell"` @0x271dc, `AT+QCAINFO` @0x274ec).
+- `re-tools/strrefs.py` runs `objdump -D` over the whole RE segment; on `libcm_modem.so` objdump
+  aborts part-way (bad opcodes), so refs past that point are silently missing — disassemble a
+  `--start-address/--stop-address` range when a function's refs look incomplete.
+- With `qemu-user-static` installed, the image's own `lua`, `cjson.so` and `jsonfilter` run on the
+  dev box: `qemu-aarch64-static -L <rootfs> <rootfs>/usr/bin/lua …` (qemu redirects absolute paths
+  that exist under the rootfs). `tools/test-local.sh` uses this for the router-Lua test pass.

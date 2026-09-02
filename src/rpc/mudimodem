@@ -307,15 +307,22 @@ local function band_cfg_set(payload)
   return glc("modem", "set_band_config", payload)
 end
 
--- Clear GL's stored cell lock for one slot (slot-addressed, no sub_id). The
--- stored tower fields ride along with lock=false, as GL's own unlock does, so
--- modem.so sees the record it wrote. The ONE GL-side unlock, used by
--- clear_cell_lock and revert_now alike. Returns (result|nil, err).
-local function gl_unlock(slot)
+-- Clear GL's stored cell lock for one slot (slot-addressed, no sub_id). Read
+-- in the 4.10 image (libcm_network.so set_cell_tower @0x11e18 ->
+-- libcm_modem.so quectel_set_tower @0x2adbc): with lock=false GL needs only
+-- `bus`, deletes the slot's stored `tower` record, and clears exactly ONE
+-- family in the modem — `network_type == "NR5G"` -> AT+QNWLOCK="common/5g",0,
+-- anything else -> "common/4g",0 (skipped when that family reads unlocked),
+-- then save_ctrl 0,0 + QEFSSYNC, then `cellular.cm cm_start_dial` (a redial).
+-- So the caller names the family; the stored tower fields ride along. The ONE
+-- GL-side unlock, used by clear_cell_lock and revert_now alike. Returns
+-- (result|nil, err).
+local function gl_unlock(slot, family)
   local gl = glc("modem", "get_cell_tower", { bus = BUS })
   local tower = (gl and gl["slot" .. tostring(slot)]) or {}
   local payload = { bus = BUS, slot = slot, lock = false }
   for k, v in pairs(tower) do if payload[k] == nil then payload[k] = v end end
+  if family then payload.network_type = (family == "5g" or family == "NR5G") and "NR5G" or "LTE" end
   return glc("modem", "set_cell_tower", payload)
 end
 
@@ -704,27 +711,51 @@ end
 function M.clear_cell_lock(args)
   local sub_id, _, matched, slot = resolve_active()
   if not slot then return { error = "no active SIM slot (modem not ready)" } end
-  local res, err = gl_unlock(slot)
-  if not res then return { error = "GL unlock failed: " .. tostring(err) } end
-  -- GL clears QNWLOCK but leaves the lock's mode side-effect in place, so a 5G
-  -- unlock would strand the modem on 5G-only (a 4G lock forces LTE:NR5G +
-  -- nr5g_disable_mode=1). Restore the sane default. AUTO — not the exact pre-lock
-  -- mode — because the manual-unlock path has no PREV snapshot: PENDING is
-  -- deleted on Keep, and Unlock is disabled while a revert pends. Mirrors panic.
-  -- Bare at() only — never pcall a cosocket (CLAUDE.md §8).
-  -- The GL unlock above is slot-addressed and needs no sub_id; these AT writes
-  -- do. Sent to an unconfirmed sub_id they would reset the OTHER SIM's mode
-  -- and leave this one stranded — so they wait for a confirmed one.
-  if not matched then
-    append_event("user", "Cell lock cleared", "unlocked via GL; mode not reset (sub_id unconfirmed)")
-    return { ok = true, mode = nil,
-             warning = "unlocked, but the network-mode preference was not reset: the active SIM's subscription could not be confirmed. If the link stays on one RAT, retry Unlock once the SIM is registered, or run `mudimodem-revert panic` over ssh." }
+
+  -- Which family is locked? GL clears only the one named by network_type and
+  -- defaults to 4g when the store has no record — a 5G lock would survive a
+  -- bare unlock. Ask the modem (two QNWLOCK reads) when the sub_id is
+  -- confirmed; else trust GL's stored record; else clear both families.
+  local families = {}
+  if matched then
+    local l4 = parse_qnwlock4(at_expect('AT+QNWLOCK="common/4g"', '"common/4g"', sub_id))
+    local l5 = parse_qnwlock5(at_expect('AT+QNWLOCK="common/5g"', '"common/5g"', sub_id))
+    if l5 and l5.locked then families[#families + 1] = "NR5G" end
+    if l4 and l4.locked then families[#families + 1] = "LTE" end
   end
-  at('AT+QNWPREFCFG="mode_pref",AUTO', sub_id)
-  at('AT+QNWPREFCFG="nr5g_disable_mode",0', sub_id)
-  at('AT+QNWLOCK="save_ctrl",0,0', sub_id)
-  append_event("user", "Cell lock cleared", "unlocked + mode restored to AUTO")
-  return { ok = true, mode = "AUTO" }
+  if #families == 0 then
+    local gl = glc("modem", "get_cell_tower", { bus = BUS })
+    local tower = (gl and gl["slot" .. tostring(slot)]) or {}
+    local nt = tostring(nn(tower.network_type) or "")
+    if nt ~= "" then families = { nt:find("NR5G", 1, true) and "NR5G" or "LTE" }
+    else families = { "NR5G", "LTE" } end
+  end
+  for _, fam in ipairs(families) do
+    local res, err = gl_unlock(slot, fam)
+    if not res then return { error = "GL unlock (" .. fam .. ") failed: " .. tostring(err) } end
+  end
+
+  -- Network mode after the unlock. GL's lock/unlock never send mode_pref (no
+  -- such reference in quectel_set_tower — verified in the 4.10 image); the
+  -- module itself moves mode_pref when a cell is locked (the 4.8 live
+  -- observation: 5G lock -> NR5G-only), and GL's unlock leaves it there, which
+  -- is what stranded the modem on 5G-only. Rather than hard-code AUTO or
+  -- replicate GL's mode table, re-apply GL's OWN stored band config unchanged:
+  -- its quectel_set_band_info then re-emits the mode_pref/nr5g_disable_mode
+  -- that belong to the configured mode. No AT, no sub_id, GL's semantics.
+  local prev = band_cfg_get(slot)
+  local restored
+  if prev then
+    local ok2 = band_cfg_set(band_cfg_payload(slot, prev.mode_raw or prev.mode,
+      prev.enable and { LTE = prev.LTE, nsa = prev.nsa, sa = prev.sa } or nil))
+    if ok2 then restored = prev.mode_raw or prev.mode end
+  end
+  append_event("user", "Cell lock cleared",
+    "unlocked (" .. table.concat(families, "+") .. ")" ..
+    (restored and ("; network mode re-applied from GL's config: " .. restored) or "; mode re-apply failed"))
+  return { ok = true, families = families, mode = restored,
+           warning = (not restored) and
+             "unlocked, but GL's stored band config could not be re-applied to reset the network mode; if the link stays on one RAT, apply the mode again on the Bands tab" or nil }
 end
 
 -- WRITE: band allowlists and/or the network mode, protected by
@@ -1014,7 +1045,7 @@ function M.revert_now(args)
     -- derived `stale` (GL locked, modem unlocked) has the page offer "Clear
     -- it" instead of silently disagreeing with the modem.
     local res, gerr
-    if slot then res, gerr = gl_unlock(slot) else gerr = "no SLOT in pending" end
+    if slot then res, gerr = gl_unlock(slot, pending_get("RAT") or "5g") else gerr = "no SLOT in pending" end
     return { ok = true, reverted = true, gl_reconciled = res and true or false,
              gl_error = (not res) and tostring(gerr) or nil }
   end

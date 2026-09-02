@@ -398,8 +398,13 @@ AT+QNWLOCK="common/5g",0               ← CLEAR
 AT+QNWLOCK="save_ctrl",1,1             ← GL sets on lock; flags are per-RAT (4g,5g) persistence
 AT+QNWLOCK="save_ctrl",0,0             ← GL sets on unlock; 0 = lock gone on reboot
 ```
-- **Side effects (GL always does these with the lock):** locking 5G forces `mode_pref=NR5G`;
-  locking LTE forces `mode_pref=LTE:NR5G` + `nr5g_disable_mode=1`. Unlock must restore them.
+- **Side effects:** on the 4.8 box a 5G lock left `mode_pref=NR5G` behind (live observation).
+  ⚠️ 2026-09-02, from the 4.10 image: GL's tower code (`quectel_set_tower`) sends NO
+  `mode_pref`/`nr5g_disable_mode` with a lock or an unlock — so that shift is the MODULE's own
+  reaction to `QNWLOCK` (❓ not re-observed on 4.10; same baseband). Unlock must still restore
+  the mode: MudiModem re-applies GL's stored band config after an unlock so GL's own
+  `quectel_set_band_info` re-emits the configured mode; the watchdog/revert restore the exact
+  pre-lock snapshot.
 - **Query response when locked** (from modem.sh's awk parsing): `common/4g` → `,<mode>,<freq>,<pci>`;
   `common/5g` → `,<pci>,<freq>,<scs>,<band>`.
 - GL's unlock flow: query state → skip if `,0` → clear → delete its stored tower config.

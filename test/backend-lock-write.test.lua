@@ -164,8 +164,8 @@ assert(r.ok and r.reverted, "revert_now failed: " .. tostring(r.error))
 assert(#popen_cmds == 1 and popen_cmds[1]:find("mudimodem%-revert restore%-now"), "revert_now must run the watchdog's restore-now: " .. tostring(popen_cmds[1]))
 for _, c in ipairs(at_log) do assert(not c:find("QNWLOCK") and not c:find("QNWPREFCFG"), "no second AT restore implementation in Lua: " .. c) end
 local unlocked
-for _, c in ipairs(glc_calls) do if c:find('"lock":false') then unlocked = true end end
-assert(unlocked, "revert_now must GL-unlock to reconcile the store (after the modem-side undo)")
+for _, c in ipairs(glc_calls) do if c:find('"lock":false') and c:find('"network_type":"NR5G"') then unlocked = true end end
+assert(unlocked, "revert_now must GL-unlock the LOCKED family (network_type NR5G for a 5g lock) to reconcile the store")
 assert(r.gl_reconciled == true, "GL reconcile reported")
 assert(not io.open(PENDING, "r"), "pending must be gone after revert")
 
@@ -194,21 +194,41 @@ for _, c in ipairs(glc_calls) do assert(not c:find("set_cell_tower"), "GL must n
 assert(io.open(PENDING, "r"), "pending must remain for the watchdog")
 assert(io.open(ARMED, "r"), "watchdog must stay armed")
 
--- 8. clear_cell_lock: GL unlock (slot-addressed) + mode restored to AUTO at the
---    CONFIRMED sub_id.
+-- 8. clear_cell_lock (4.10 semantics, read in the image): GL clears ONE family
+--    per call, named by network_type — so with the modem reporting a 5G lock
+--    the unlock must carry network_type NR5G; then GL's stored band config is
+--    re-applied unchanged so GL itself re-emits the mode_pref for the
+--    configured mode. No raw-AT mode writes from us.
 reset()
+lock5_reply = '\r\n+QNWLOCK: "common/5g",516,127490,15,71\r\n\r\nOK\r\n'   -- modem: 5G locked, 4G not
 r = M.clear_cell_lock({})
-assert(r.ok and r.mode == "AUTO", "clear_cell_lock failed")
-local gl_unlocked, mode_auto
-for _, c in ipairs(glc_calls) do if c:find('"lock":false') and c:find('"slot":1') then gl_unlocked = true end end
-for _, c in ipairs(at_log) do if c:find('mode_pref",AUTO @1', 1, true) then mode_auto = true end end
-assert(gl_unlocked, "clear_cell_lock must GL-unlock slot 1")
-assert(mode_auto, "clear_cell_lock must reset mode_pref to AUTO at the matched sub_id")
+assert(r.ok, "clear_cell_lock failed: " .. tostring(r.error))
+assert(#r.families == 1 and r.families[1] == "NR5G", "must unlock exactly the locked family; got " .. table.concat(r.families, ","))
+local gl_unlocked, reapplied
+for _, c in ipairs(glc_calls) do
+  if c:find('"set_cell_tower"') and c:find('"lock":false') and c:find('"slot":1') and c:find('"network_type":"NR5G"') then gl_unlocked = true end
+  if c:find('"set_band_config"') and c:find('"network_mode":"AUTO"') then reapplied = true end
+end
+assert(gl_unlocked, "clear_cell_lock must GL-unlock slot 1 naming the NR5G family")
+assert(reapplied, "clear_cell_lock must re-apply GL's stored band config (mode comes from GL, not a hard-coded AUTO)")
+assert(r.mode == "AUTO", "reports GL's stored mode")
+for _, c in ipairs(at_log) do assert(not c:find("QNWPREFCFG") and not c:find("save_ctrl"), "no raw-AT mode writes: " .. c) end
+
+-- 8a. Both families locked -> both cleared, NR5G first.
+reset()
+lock5_reply = '\r\n+QNWLOCK: "common/5g",516,127490,15,71\r\n\r\nOK\r\n'
+lock4_reply = '\r\n+QNWLOCK: "common/4g",1,900,42\r\n\r\nOK\r\n'
+r = M.clear_cell_lock({})
+assert(r.ok and #r.families == 2 and r.families[1] == "NR5G" and r.families[2] == "LTE", table.concat(r.families, ","))
+local n = 0
+for _, c in ipairs(glc_calls) do if c:find('"set_cell_tower"') and c:find('"lock":false') then n = n + 1 end end
+assert(n == 2, "one GL unlock per locked family")
 
 -- 8b. sub_id UNCONFIRMED (SIM has no PLMN yet): set_cell_lock refuses outright —
 --     its PREV snapshot and the watchdog's revert would address a guessed
---     subscription; clear_cell_lock still GL-unlocks the slot (needs no sub_id)
---     but withholds the AT mode writes and says so.
+--     subscription. clear_cell_lock needs no sub_id at all now: it cannot ask
+--     the modem, so it clears the family GL's record names (none stored here
+--     -> both), re-applies GL's config, and spends no AT.
 reset()
 no_plmn = true
 r = M.set_cell_lock({ rat = "5g", pci = 516, freq = 127490, scs = 15, band = 71 })
@@ -217,11 +237,11 @@ for _, c in ipairs(glc_calls) do assert(not c:find("set_cell_tower"), "no GL wri
 assert(not io.open(PENDING, "r"), "no pending on refusal")
 at_log = {}; glc_calls = {}
 r = M.clear_cell_lock({})
-assert(r.ok and r.warning and r.warning:find("not reset"), "clear_cell_lock must unlock but warn; got " .. tostring(r.warning))
-local gl_unlocked2
-for _, c in ipairs(glc_calls) do if c:find('"lock":false') then gl_unlocked2 = true end end
-assert(gl_unlocked2, "clear_cell_lock must still GL-unlock the slot")
-for _, c in ipairs(at_log) do assert(not c:find("QNWPREFCFG") and not c:find("save_ctrl"), "no AT mode writes at a guessed sub_id: " .. c) end
+assert(r.ok and #r.families == 2, "with no modem answer and no GL record, both families are cleared; got " .. tostring(r.error))
+local unl = 0
+for _, c in ipairs(glc_calls) do if c:find('"set_cell_tower"') and c:find('"lock":false') then unl = unl + 1 end end
+assert(unl == 2, "two GL unlocks")
+for _, c in ipairs(at_log) do assert(not c:find("QNWLOCK") and not c:find("QNWPREFCFG"), "no AT at an unconfirmed sub_id: " .. c) end
 
 -- 9. set_bands now ALSO refuses while a pending exists (shared interlock:
 -- a band apply must not clobber a cell pending, or vice versa).

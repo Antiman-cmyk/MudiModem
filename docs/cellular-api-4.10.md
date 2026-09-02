@@ -58,7 +58,7 @@ gone with the LCD renderer it fed.
 | `cellular.modem info` (no args) | `modems[]` with `.band` (module-supported sets) |
 | `cellular.sim info` (no args) | `sims[]{slot, mcc, mnc, iccid, …}` — PLMN for the sub_id resolver |
 | `cellular.network info` | `networks[]{bus, slot, carrier, …}` — carrier/identity, read every 60 s by collectd |
-| `cellular.network cell_info {"bus":"cpu","slot":N}` | `{network_type, tac, cell_id, signal[]{ca, band, earfcn, pci, bandwidth(_ul/_dl), rsrp, rsrq, sinr, rssi, *_level}}`. **Executes `AT+QENG`/`AT+QCAINFO` on every call** (🟡 `libcm_network.so`: `get_cell_info` → `quectel_get_qcainfo_signal`) — collectd is the only caller, at 10 s, and everything else (speed test, cell lock) reuses its `latest.json` while it is < 30 s old |
+| `cellular.network cell_info {"bus":"cpu","slot":N}` | `{network_type, tac, cell_id, signal[]{ca, network_type, band, earfcn, pci, bandwidth, rsrp, rsrq, sinr, rssi, rscp, ecio, snr, rsrp_level…snr_level (7), strength}}` — EVERY row carries `network_type` and `pci` (🟢 handler `libcm_network.so` @0x8284, both row emitters @0x88d4/@0x8ab0, ≤5 rows). EN-DC: QCAINFO `PCC` = LTE anchor → row 4, `SCC` lines whose band token starts with `N` → row 51 (`libcm_modem.so` parse_qcainfo_line @0x27bd4), cell 51; plain LTE CA → 41. ⚠️ When QCAINFO yields no carriers the handler emits ONE fallback row from the QENG servingcell struct (LTE-anchor band/pci/earfcn) stamped with the CELL's code — `cellular_compat._row_network_type` re-tags an NR-coded row on an E-UTRA channel as LTE. Top-level code: `modem_network_mode_to_public_code` (`libcmutils.so` table @0x10db7: 6→4, 7→41, 8→51, 9→5). **Executes `AT+QENG`/`AT+QCAINFO` on every call** (🟢 `libcm_modem.so` quectel_get_qcainfo_signal @0x2710c: templates @0x271dc/@0x274ec; no `AT+QNWINFO` anywhere) — collectd is the only caller, at 10 s, and everything else (speed test, cell lock) reuses its `latest.json` while it is < 30 s old |
 | `modem.CPU.AT get_result_AT {cmd, timeout, sub_id}` | provider `/usr/bin/modem_AT` (spawned per bus by `cellular_manager`); the only path with an explicit `sub_id` — used for `policy_band` / `ue_capability_band` / `QNWLOCK` reads |
 | `gl-session notify {name, data}` / `has_websocket` / `call {module, func, params}` | push bus; browser-attached probe; root loop-back into `/rpc` (`is_local` + `glinet` header) — how the watchdog restores bands from a shell |
 
@@ -97,7 +97,7 @@ awareness. Written to `/tmp/mudimodem/samples.jsonl` + `latest.json`, broadcast 
 |---|---|---|
 | `get_band_config` | `{bus, slot}` → `{band_enable, network_mode:"AUTO"\|"NR5G"\|"LTE", band_filter_mode (echo), supports_band, band_list?}`. **Not a ubus method**: `glc` `dlsym()`s the C function `get_band_config` exported by `libcm_modem.so`, which reads `cellular.modem get_feature_config` and re-keys it (`reference/4.10/re-notes.md`). glc is therefore the only server-side transport. | backend `get_bands` (via glc) |
 | `set_band_config` | `{bus, slot, band_enable, network_mode, band_list:{LTE:[], "NR-NSA":[], "NR-SA":[]}}` — no `band_filter_mode`; mode `LTE` ⇒ NR lists empty; `band_enable:false` ⇒ no `band_list` (filtering off = GL's default) | backend `set_bands` / watchdog restore + panic |
-| `get_cell_tower {bus}` / `set_cell_tower {bus, slot, lock, network_type, pci, freq, scs?, band?, …}` / `scan_cell_tower {bus, slot}` / `get_operator_config {bus, slot}` | cell lock (glc) |
+| `get_cell_tower {bus}` / `set_cell_tower {bus, slot, lock, network_type, pci, freq, scs?, band?, …}` / `scan_cell_tower {bus, slot}` / `get_operator_config {bus, slot}` | cell lock (glc). 🟢 read in the image (`libcm_network.so` set_cell_tower @0x11e18 → `libcm_modem.so` quectel_set_tower @0x2adbc): the handler reads bus (required, else 20002001), slot, lock, network_type, pci, freq, band, scs, mnc, mcc, srxlev, squal, bandwidth, cellid, tac, carrier; the record lives in `/etc/config/cellular/slot_map.json` → `slot_feature.<name>.tower` (deleted on unlock). **lock=false clears ONE family, chosen by `network_type`** (`"NR5G"` → `AT+QNWLOCK="common/5g",0`, anything else → `"common/4g",0`; skipped when that family reads unlocked), then `save_ctrl,0,0` + `AT+QEFSSYNC=1`. lock=true: 5G `QNWLOCK="common/5g",pci,freq,scs,band`, 4G `"common/4g",1,freq,pci`, then `save_ctrl,1,1`. **Neither lock nor unlock sends `mode_pref`/`nr5g_disable_mode`** (no such reference in quectel_set_tower — the 4.8-era "lock forces mode_pref" is the module's own behaviour, not GL's). **Success (lock or unlock) sleeps 2 s then `cellular.cm cm_start_dial {bus, slot, source:9}` — a redial.** `slot != current_sim` → record saved only, no AT. Errors: 20002044 lock, 20002050 unlock, 20002052 save-only. |
 | `get_sim_config {slot, bus, iccid}` / `set_sim_config {… apn, protocol, auth, username, password, dial_number, ip_type:Number, roaming, rrc_seg, ttl, ttl_ipv6, hl, mtu}` | SIM tab (read-modify-write; **no band fields any more**) |
 | `get_slot_failover_config {bus}` / `set_slot_failover_config {bus, current_sim}` (switch) or `{bus, enable_switch, slot_priority, enable_timing, hour, min, current_sim, slot_type…}` (settings) | SIM tab |
 
@@ -122,10 +122,17 @@ Settled from the image (second pass, 2026-09-02):
   `modems[]` form (`cellular_compat.pick_modem` / Lua `pick_modem` select the built-in modem by
   `bus == "cpu"` / `type == 0`); no flat-object shape is parsed.
 - **`network_type` enum:** §2 (GL's own maps + two live captures).
-- **`set_band_config` applies to the modem immediately:** `libcm_modem.so` implements it as
-  `process_band_config → set_band_config_to_module` 🟡. Whether it also re-registers/redials
-  is not visible statically — the UI now treats a dropped `set_bands` reply as "probably
-  applied, watchdog armed" and offers Keep/Revert (same handling as the cell lock).
+- **`set_band_config` applies to the modem AND redials** 🟢 (`libcm_modem.so` @0x223fc): it
+  stores via `cellular.modem set_feature_config`, `sync()`, and when `slot == current_sim`
+  calls `cellular.cm cm_start_dial {bus, slot, source:3}` (@0x22ca0; otherwise logs
+  `skip cm_start_dial`). cellular_manager's handler then runs `quectel_set_band_info`
+  (@0x29c28), which emits the band lists plus `mode_pref`/`nr5g_disable_mode` literals chosen
+  from network_mode AND the band counts (AUTO/0, NR5G/2, LTE:NR5G/1, LTE). `network_mode` is
+  stored and re-read **verbatim, unvalidated** (get_band_config deep-copies it; set_band_config
+  only strcmp's NR5G/LTE to decide `band_enable`), and cellular_manager formats the stored
+  string into `AT+QNWPREFCFG="mode_pref",%s` (≤15 bytes) — so a non-enum value is reachable by
+  construction (our `mode_raw` passthrough) even though GL's own writers only ever store
+  AUTO/NR5G/LTE. The dropped-reply handling in the UI (Keep/Revert offered) covers the redial.
 - **Backlight:** the E5800 DTB in `boot.img` (`model = "GL.iNet E5800, …"`) puts the
   `pwm-backlight` node at `/soc/backlight` → sysfs `soc:backlight`, 120-entry brightness table
   (= the 20..120 range the LCD tab uses). `/proc/device-tree/model` contains `E5800`.

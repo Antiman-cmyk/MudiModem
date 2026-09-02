@@ -48,6 +48,32 @@ CELL_INFO_410_NSA_CA = dict(CELL_INFO_410_NSA, signal=[
     {"ca": 1, "network_type": 5, "band": 78, "earfcn": 627264, "pci": 142,
      "bandwidth": 100, "rsrp": -99, "rsrq": -11, "sinr": 8},
 ])
+# EN-DC as GL's 4.10 binary actually emits it (libcm_network.so cell_info
+# handler @0x8284 + quectel_get_qcainfo_signal): EVERY row carries ca,
+# network_type, pci and the full metric set; QCAINFO "PCC" = LTE anchor ->
+# row network_type 4, "SCC" NR legs -> 51, cell -> 51.
+CELL_INFO_410_NSA_FULL = {
+    "bus": "cpu", "slot": 1, "network_type": 51, "tac": "41", "cell_id": "DF30C",
+    "signal": [
+        {"ca": 0, "network_type": 4, "band": 3, "earfcn": 1700, "pci": 61, "bandwidth": 20,
+         "rsrp": -97, "rsrq": -9, "rssi": -67, "sinr": 17, "rscp": -32768, "ecio": -32768, "snr": -32768,
+         "rsrp_level": 4, "rsrq_level": 4, "rssi_level": 4, "sinr_level": 4,
+         "rscp_level": 0, "ecio_level": 0, "snr_level": 0, "strength": 4},
+        {"ca": 1, "network_type": 51, "band": 78, "earfcn": 627264, "pci": 142, "bandwidth": 100,
+         "rsrp": -99, "rsrq": -11, "rssi": -32768, "sinr": 8, "rscp": -32768, "ecio": -32768, "snr": -32768,
+         "rsrp_level": 3, "rsrq_level": 3, "rssi_level": 0, "sinr_level": 3,
+         "rscp_level": 0, "ecio_level": 0, "snr_level": 0, "strength": 3},
+    ],
+    "ret": 0, "resp": "Success",
+}
+# The binary's ca_num == 0 fallback: ONE row from the QENG servingcell struct
+# (LTE-anchor band/pci/earfcn) stamped with the CELL's code — 51 under NSA.
+CELL_INFO_410_NSA_FALLBACK_ROW = {
+    "bus": "cpu", "slot": 1, "network_type": 51, "tac": "41", "cell_id": "DF30C",
+    "signal": [{"ca": 0, "network_type": 51, "band": 3, "earfcn": 1700, "pci": 61, "bandwidth": 20,
+                "rsrp": -97, "rsrq": -9, "rssi": -67, "sinr": 17, "rsrp_level": 4, "strength": 4}],
+    "ret": 0, "resp": "Success",
+}
 # No service (slot 2, no SIM registered): the sentinel payload.
 CELL_INFO_410_NO_SERVICE = {
     "bus": "cpu", "slot": 2, "network_type": 0, "tac": "", "cell_id": "",
@@ -116,6 +142,25 @@ class BuildSample(unittest.TestCase):
         self.assertEqual(s["mode"], "NR5G-NSA", "the cell is still EN-DC")
         self.assertEqual(cc.format_band(s["pcc_rat"], s["band"]), "B3")
         self.assertAlmostEqual(cc.channel_mhz(s["pcc_rat"], s["band"], s["tx_channel"]), 1855.0)
+
+    def test_nsa_full_410_shape_anchor_lte_leg_nsa(self):
+        s = collectd.build_sample(MODEM_STATUS_410, CELL_INFO_410_NSA_FULL, NETWORK_INFO_410, t=1)
+        self.assertEqual(s["mode"], "NR5G-NSA")
+        self.assertEqual([x["rat"] for x in s["signals"]], ["LTE", "NR5G-NSA"])
+        self.assertEqual([x["role"] for x in s["signals"]], ["PCC", "SCC1"])
+        self.assertEqual((s["band"], s["pci"], s["tx_channel"], s["pcc_rat"]), (3, 61, 1700, "LTE"))
+        self.assertEqual((s["signals"][1]["band"], s["signals"][1]["pci"]), (78, 142))
+        self.assertIsNone(s["signals"][1]["rssi"], "-32768 sentinel -> null")
+
+    def test_nsa_fallback_row_tagged_51_but_on_an_eutra_channel_is_lte(self):
+        # GL stamps the cell's 51 onto a row that is really the LTE anchor when
+        # QCAINFO gave no carriers; EARFCN 1700 cannot be an NR-ARFCN.
+        s = collectd.build_sample(MODEM_STATUS_410, CELL_INFO_410_NSA_FALLBACK_ROW, NETWORK_INFO_410, t=1)
+        self.assertEqual(s["mode"], "NR5G-NSA")
+        self.assertEqual(s["signals"][0]["rat"], "LTE")
+        self.assertEqual(s["signals"][0]["network_type"], 4)
+        self.assertEqual(s["pcc_rat"], "LTE")
+        self.assertEqual(cc.format_band(s["pcc_rat"], s["band"]), "B3")
 
     def test_nsa_implicit_nr_row_keeps_the_nsa_tag(self):
         # An EN-DC secondary carrier without its own network_type: its channel

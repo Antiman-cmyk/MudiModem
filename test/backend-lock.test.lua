@@ -185,7 +185,7 @@ assert(r.stale == false, "gl_locked=false + modem unlocked must not be stale")
 local latest = os.getenv("MUDIMODEM_LATEST")
 if latest then
   local lf = io.open(latest, "w")
-  lf:write(string.format('{"t":%d,"slot":1,"rat":"NR5G-SA","mode":"NR5G-SA","cell_id":"DE017C015","id":"DE017C015","pci":142,"tx_channel":627264,"band":78,"rsrp":-94}', os.time() * 1000))
+  lf:write(string.format('{"t":%.0f,"slot":1,"rat":"NR5G-SA","mode":"NR5G-SA","cell_id":"DE017C015","id":"DE017C015","pci":142,"tx_channel":627264,"band":78,"rsrp":-94}', os.time() * 1000))
   lf:close()
   package.loaded["oui.ubus"].call = base_ubus_call
   at_log = {}; at_replies = {}
@@ -199,7 +199,7 @@ if latest then
   --     null. cjson.null is a truthy userdata: the shortcut must NOT take it
   --     as a PCI — it falls back to the QENG read and never returns nulls.
   lf = io.open(latest, "w")
-  lf:write(string.format('{"t":%d,"slot":1,"rat":null,"mode":null,"cell_id":null,"id":null,"pci":null,"tx_channel":null,"band":null,"rsrp":null,"signals":[]}', os.time() * 1000))
+  lf:write(string.format('{"t":%.0f,"slot":1,"rat":null,"mode":null,"cell_id":null,"id":null,"pci":null,"tx_channel":null,"band":null,"rsrp":null,"signals":[]}', os.time() * 1000))
   lf:close()
   at_log = {}; at_replies = {}
   r = M.get_lock({})
@@ -212,7 +212,7 @@ if latest then
   -- 7c. NSA: the flattened aliases are the LTE ANCHOR (B3 / 1700) while rat is
   --     NR5G-NSA. The lock target must be the NR leg, taken from signals[].
   lf = io.open(latest, "w")
-  lf:write(string.format('{"t":%d,"slot":1,"rat":"NR5G-NSA","mode":"NR5G-NSA","pcc_rat":"LTE","cell_id":"DF30C","id":"DF30C","pci":61,"tx_channel":1700,"band":3,"rsrp":-97,'
+  lf:write(string.format('{"t":%.0f,"slot":1,"rat":"NR5G-NSA","mode":"NR5G-NSA","pcc_rat":"LTE","cell_id":"DF30C","id":"DF30C","pci":61,"tx_channel":1700,"band":3,"rsrp":-97,'
     .. '"signals":[{"role":"PCC","rat":"LTE","network_type":4,"band":3,"earfcn":1700,"pci":61},{"role":"SCC1","rat":"NR5G-NSA","network_type":51,"band":78,"earfcn":627264,"pci":142}]}', os.time() * 1000))
   lf:close()
   at_log = {}; at_replies = {}
@@ -224,7 +224,7 @@ if latest then
   -- 7d. NSA sample with ONLY the anchor row (the issue-#5 shape): decline the
   --     shortcut and let QENG answer (its parser prefers the NR5G-NSA line).
   lf = io.open(latest, "w")
-  lf:write(string.format('{"t":%d,"slot":1,"rat":"NR5G-NSA","mode":"NR5G-NSA","pcc_rat":"LTE","cell_id":"DF30C","id":"DF30C","pci":61,"tx_channel":1700,"band":3,'
+  lf:write(string.format('{"t":%.0f,"slot":1,"rat":"NR5G-NSA","mode":"NR5G-NSA","pcc_rat":"LTE","cell_id":"DF30C","id":"DF30C","pci":61,"tx_channel":1700,"band":3,'
     .. '"signals":[{"role":"PCC","rat":"LTE","network_type":4,"band":3,"earfcn":1700,"pci":61}]}', os.time() * 1000))
   lf:close()
   at_log = {}; at_replies = {}

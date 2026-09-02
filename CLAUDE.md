@@ -51,6 +51,9 @@ lock) — don't re-derive it here.
 >   `soc:backlight` (DTB), the 4.10 OTA's NA baseband is the SAME `RG650VNA01ACR02A04G8G`,
 >   charger/gauge DT nodes unchanged, `set_band_config` writes the module immediately, and
 >   `get/set_band_config` are C functions behind `glc` (no dotted ubus object exists — glc stays).
+>   **Both `set_band_config` and `set_cell_tower` REDIAL on success** (`cellular.cm cm_start_dial`,
+>   read in the image) — every band apply / lock / unlock drops the link for a few seconds, which
+>   is why a dropped `/rpc` reply is treated as "probably applied, watchdog armed".
 >   Method + tools: `reference/4.10/re-notes.md`.
 
 Everything below was reverse-engineered from the live device (2026-07-16 / **-07-17**, GL 4.8.5)
@@ -541,6 +544,19 @@ router and searchable. It's a differentiator no router UI has.
   `mudimodem.collect`, never call `cellular.network cell_info` itself.
 - The dev box now has `lua5.1` + `lua-cjson`: every `test/backend-*.test.lua` isolation test runs
   locally (set `MM_PLUGIN=$PWD/src/rpc/mudimodem` + the temp-path env vars; see verify.sh 6/6b).
+  **`tools/test-local.sh` runs every suite** (Python, Node, Lua, sh under dash AND busybox ash,
+  shellcheck). With `MM_ROOTFS=<extracted 4.10 rootfs>` and `qemu-user-static` it ALSO runs the
+  Lua tests under the **router's own `/usr/bin/lua` + `cjson.so`** (`qemu-aarch64-static -L
+  $MM_ROOTFS …` — qemu redirects absolute paths that exist under the rootfs, so `require
+  "cjson"` loads GL's build). That pass is the one that matters, because the two Luas differ:
+  - **OpenWrt's Lua 5.1 carries the LNUM patch: integers are 32-bit.** `string.format("%d",
+    os.time()*1000)` THROWS ("integer expected, got number"); use `%.0f` or `tostring()`. cjson
+    encodes the ms timestamp fine (`%.14g`, 13 digits). The host's stock Lua accepts `%d`.
+  - GL's `cjson` has `empty_array` / `encode_empty_table_as_object`; the dev box's lacks both,
+    which is why `backend-history` / `backend-battery-history` only pass in the router pass.
+  - The image's `jsonfilter` (libubox) runs the same way: `-e '@.error'` prints the object on one
+    line when present, prints nothing and exits 1 when the path is missing, `{ }` for an empty
+    object — exactly what `mudimodem-revert`'s `reply_is_error` / `gl_unlock_slot` rely on.
 - **nginx caches the Lua plugin per worker** (`objects[object]` in `oui/rpc.lua`) → after editing
   the backend you must **reload nginx** (`/etc/init.d/nginx reload`) or changes won't take.
   ⚠️ `reload` (HUP) leaves old workers
@@ -756,7 +772,11 @@ MudiModem/
   without it), mirroring the backend's `gl_unlock`. All sh tests also run under `busybox sh`.
 - ✅ **Cell-unlock fix + Reset-to-default (2026-07-24).** **Cell-unlock 5G-only stranding FIXED:**
   `clear_cell_lock` now issues `mode_pref=AUTO` + `nr5g_disable_mode=0` + `save_ctrl=0,0` after GL's
-  unlock. Root cause: a GL cell lock is *two* changes — `QNWLOCK` + a `mode_pref=NR5G` side-effect —
+  unlock. Root cause: a GL cell lock is *two* changes — `QNWLOCK` + a `mode_pref=NR5G` side-effect
+  (**4.10 image, 2026-09-02: GL's own tower code sends no mode command at all — the shift is the
+  module's; `clear_cell_lock` now re-applies GL's stored band config so GL's own
+  `quectel_set_band_info` restores the configured mode, and unlocks per locked family because
+  GL's `set_cell_tower lock:false` clears only the `network_type` it is given**) —
   and the three unlock paths were asymmetric (only `revert_now`/watchdog restored mode; the Unlock
   button's `clear_cell_lock` didn't). Restores to **AUTO**, not the exact pre-lock mode (the
   manual-unlock path has no PREV snapshot — `PENDING` is deleted on Keep). verify.sh **6c** greps for
