@@ -52,6 +52,7 @@ module.exports = (function () {
   // count multiplied by a poll interval that no longer exists.)
   var FAIL_NOTE_AFTER = 3;
   var STALL_MS = 60000;            // no push for this long => one catch-up fetch
+  var HOLE_MS = 50000;             // a push landing this long after the last sample => backfill the hole
   // TOP is headroom for plug/unplug tick labels. Lane value/range headers live
   // in HTML above the SVG (jayck88 layout) so they are never clipped by the
   // outermost-svg overflow:hidden default or lost in preserveAspectRatio stretch.
@@ -238,8 +239,15 @@ module.exports = (function () {
             }
             self.okCount++; self.failStreak = 0; self.lastGoodAt = Date.now();
             var ns = res.samples || [];
-            var merged = merge && self.samples && self.samples.length
-              ? self.samples.concat(ns) : ns;
+            var merged = ns;
+            if (merge && self.samples && self.samples.length) {
+              // Skip what is already held and keep time order — a hole backfill
+              // is OLDER than the pushed sample that revealed it.
+              var haveT = {};
+              for (var i = 0; i < self.samples.length; i++) haveT[self.samples[i].t] = 1;
+              merged = self.samples.concat(ns.filter(function (x) { return x && x.t && !haveT[x.t]; }))
+                .sort(function (a, b) { return a.t - b.t; });
+            }
             self.serverNow = res.now || Date.now();
             self.serverNowAt = Date.now();
             var cut = self.serverNow - 24 * 3600 * 1000;
@@ -271,6 +279,7 @@ module.exports = (function () {
       // so it clears the stale-history note.
       onPush: function (s) {
         if (!s || !s.t || s.t <= this.lastT) return;
+        var prevT = this.lastT;
         this.pushSeenAt = Date.now(); this.lastGoodAt = Date.now();
         var merged = this.samples.concat([s]);
         var cut = s.t - 24 * 3600 * 1000;
@@ -280,6 +289,10 @@ module.exports = (function () {
         this.serverNow = s.t; this.serverNowAt = Date.now();
         this.okCount++; this.failStreak = 0; this.err = "";
         this.tick++;
+        // Pushes were withheld (the collector's has_websocket gate after a page
+        // opens) or lost (ws reconnect): the samples exist in the log — fetch
+        // the hole once. The stall guard cannot see it; this push reset it.
+        if (prevT > 0 && s.t - prevT > HOLE_MS) this.fetchHistory({ since: prevT, merge: true });
       },
       setRange: function (w) {
         this.winW = w; this.pinnedM = null; this.cursor = null;

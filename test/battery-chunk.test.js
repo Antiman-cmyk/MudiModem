@@ -1475,3 +1475,19 @@ test('mounted() installs a stall guard, never a 10 s poll', () => {
   assert.ok(!/10000/.test(src), 'no 10 s interval');
   assert.ok(/pushSeenAt/.test(src), 'stall guard keyed on the last push');
 });
+
+
+test('onPush: a battery sample landing after a hole backfills it (since = previous cursor), deduped and in order', async () => {
+  const calls = stubRpc([{ samples: [{ t: 21000, cap: 71 }, { t: 41000, cap: 71 }, { t: 61000, cap: 72 }], now: 61000 }]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, { loading: false });
+    vm.samples = [{ t: 1000, cap: 70 }]; vm.lastT = 1000;
+    vm.onPush({ t: 61000, cap: 72 });                                 // 60 s after the last sample (3 x 20 s)
+    const bf = calls.find((x) => x.params[2] === 'get_battery_history');
+    assert.ok(bf, 'backfill fetch issued');
+    assert.deepStrictEqual(bf.params[3], { since: 1000 });
+    await new Promise((r) => setImmediate(r));
+    assert.deepStrictEqual(vm.samples.map((s) => s.t), [1000, 21000, 41000, 61000], 'filled, sorted, pushed point not duplicated');
+  } finally { unstubRpc(); }
+});

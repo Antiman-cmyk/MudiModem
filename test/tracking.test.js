@@ -702,3 +702,49 @@ test('deriveNetEvents without state still returns a plain array (pure API unchan
   const ev = vm.deriveNetEvents([s({ t: 1000 }), s({ t: 2000, id: 'B2' })], []);
   assert.ok(Array.isArray(ev) && ev.length === 1);
 });
+
+
+test('onPush: a sample landing after a hole triggers a since-fetch that is merged deduped and in order', async () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  const calls = [];
+  global.window = {
+    $getCookie() { return 'tok'; },
+    $axios: { post(url, body) {
+      calls.push(body.params[3]);
+      // backfill reply: the three withheld samples plus the pushed one again
+      return Promise.resolve({ data: { result: { samples: [
+        { t: 11000, rsrp: -97, slot: 1, id: 'A' }, { t: 21000, rsrp: -96, slot: 1, id: 'A' },
+        { t: 31000, rsrp: -95, slot: 1, id: 'A' }, { t: 41000, rsrp: -94, slot: 1, id: 'A' }], events: [], now: 41000 } } });
+    } }
+  };
+  try {
+    vm.samples = [{ t: 1000, rsrp: -100, slot: 1, id: 'A' }]; vm.lastT = 1000;
+    vm.onPush({ t: 41000, rsrp: -94, slot: 1, id: 'A' });          // 40 s after the last sample
+    assert.strictEqual(calls.length, 1, 'one backfill fetch');
+    assert.deepStrictEqual(calls[0], { since: 1000 }, 'from the cursor before the push');
+    await new Promise((r) => setImmediate(r));
+    assert.deepStrictEqual(vm.samples.map((s) => s.t), [1000, 11000, 21000, 31000, 41000], 'filled, sorted, no duplicate');
+    vm.onPush({ t: 51000, rsrp: -93, slot: 1, id: 'A' });
+    assert.strictEqual(calls.length, 1, 'a regular 10 s push does not fetch');
+  } finally { delete global.window; }
+});
+
+
+test('lanes break across a time hole (> 45 s with no sample), like the strip, instead of bridging it', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  const now = Date.now();
+  // 5 samples, then a 2-minute hole, then 5 more — all with readings.
+  const mk = (t) => ({ t, slot: '1', id: 'A', band: 71, mode: 'NR5G-SA', rsrp: -100, sinr: 5, rsrq: -12, carrier: 'X' });
+  const ss = [];
+  for (let i = 10; i > 5; i--) ss.push(mk(now - i * 10000 - 120000));
+  for (let i = 5; i > 0; i--) ss.push(mk(now - i * 10000));
+  vm.samples = ss; vm.serverNow = now; vm.serverNowAt = now; vm.loading = false; vm.winW = 15;
+  const tree = c.render.call(vm, h);
+  const paths = walk(tree).filter((n) => n.tag === 'path' && n.data.attrs && /^M/.test(n.data.attrs.d));
+  assert.ok(paths.length >= 1, 'lanes drawn');
+  const rsrpPath = paths[0].data.attrs.d;
+  const moves = (rsrpPath.match(/M/g) || []).length;
+  assert.strictEqual(moves, 2, 'the RSRP lane is two segments: it breaks across the hole rather than bridging it');
+});

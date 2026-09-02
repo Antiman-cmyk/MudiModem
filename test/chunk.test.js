@@ -1775,3 +1775,27 @@ test('fetchBands({light:true}) with no model yet falls back to a full fetch', ()
     assert.deepStrictEqual(calls[0].params[3], {}, 'nothing to merge into -> full get_bands');
   } finally { unstubRpc(); }
 });
+
+
+test('strip: a push landing after a hole backfills it with one since-fetch, deduped and in order', async () => {
+  // Preload up to t=1,000,000; the collector then withheld pushes for ~3 ticks
+  // (its has_websocket gate) — the next push lands 40 s later.
+  const calls = stubAxios([histReply(1000000, 10000, [-95, -94, -93]),
+                           histReply(1040000, 10000, [-92, -91, -90, -89])]);   // backfill reply includes the pushed point
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.fetchStripHistory();
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(vm.hist.length, 3);
+    vm.onSamplePush({ t: 1040000, rsrp: -89 });
+    assert.strictEqual(calls.length, 2, 'the hole triggers exactly one incremental fetch');
+    assert.strictEqual(calls[1].params.since, 1000000, 'since = the cursor BEFORE the push');
+    await new Promise((r) => setImmediate(r));
+    assert.deepStrictEqual(vm.hist.map((p) => p.t), [1000000 - 20000, 1000000 - 10000, 1000000, 1010000, 1020000, 1030000, 1040000], 'hole filled, sorted, no duplicate of the pushed point');
+    assert.strictEqual(vm.histLastT, 1040000);
+    // a normal next-tick push does NOT fetch
+    vm.onSamplePush({ t: 1050000, rsrp: -88 });
+    assert.strictEqual(calls.length, 2, 'no fetch for a regular 10 s push');
+  } finally { unstubRpc(); }
+});

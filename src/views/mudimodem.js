@@ -47,6 +47,7 @@ module.exports = {
       STRIP_POLL_MS: 30000,   // safety-poll cadence (only acts when pushes stalled)
       STRIP_STALL_MS: 45000,  // no push for this long => safety poll fetches the tail
       STRIP_GAP_MS: 45000,    // a hole wider than this breaks the line, not bridges it
+      STRIP_HOLE_MS: 25000,   // a push landing this long after the last point => backfill the hole
       pushSeenAt: 0,          // browser clock of the last collector push
       hist: [],               // [{t, v}] oldest-first, BOX timestamps, rsrp only
       histLastT: 0,           // newest t held — the incremental `since` cursor
@@ -1204,7 +1205,7 @@ module.exports = {
     // browser-computed cutoff — box and browser clocks disagree on a travel
     // router). After that, samples arrive as collector pushes (onSamplePush);
     // the incremental {since} form is only used by the stall safety-poll.
-    fetchStripHistory() {
+    fetchStripHistory(opts) {
       var self = this;
       if (this.histFetching || this.pollStopped) return;
       if (typeof window === "undefined" || !window.$axios) return;
@@ -1212,8 +1213,10 @@ module.exports = {
       // The FIRST load is always the window: an explicit flag, not `histLastT
       // > 0` — the `serving.t` watcher is immediate and runs before mounted(),
       // so a store already holding a collect frame (the /ws seed, or a return
-      // to this route) has moved the cursor before this ever runs.
-      var params = this.histPreloaded ? { since: this.histLastT } : { window_ms: span };
+      // to this route) has moved the cursor before this ever runs. A caller
+      // may name an older `since` to backfill a hole it noticed.
+      var params = (opts && opts.since > 0) ? { since: opts.since }
+                 : (this.histPreloaded ? { since: this.histLastT } : { window_ms: span });
       this.histFetching = true;
       this.stripRpc(params).then(function (res) {
         self.histFetching = false;
@@ -1229,7 +1232,17 @@ module.exports = {
         }
         self.histNow = res.now || Date.now();
         self.histNowAt = Date.now();
-        var merged = (params.since ? self.hist.concat(fresh) : fresh);
+        var merged = fresh;
+        if (params.since) {
+          // Incremental: points already held (a push that arrived while this
+          // was in flight, or the push that triggered a backfill) are skipped
+          // by t, and the result is re-sorted — a backfill is OLDER than the
+          // pushed point that revealed the hole.
+          var have = {};
+          for (var k = 0; k < self.hist.length; k++) have[self.hist[k].t] = 1;
+          merged = self.hist.concat(fresh.filter(function (p) { return !have[p.t]; }))
+            .sort(function (a, b) { return a.t - b.t; });
+        }
         var cut = self.histNow - span;
         self.hist = merged.filter(function (p) { return p.t >= cut; });
         // Cursor advances off the RAW reply, not the filtered points — a tail of
@@ -1247,6 +1260,7 @@ module.exports = {
     onSamplePush(s) {
       if (!s || !s.t) return;
       if (s.t <= this.histLastT) return;              // replay of the seed / out of order
+      var prevT = this.histLastT;
       // A seed flagged stale is the collector's LAST sample, not a live push:
       // keep the reading (real data at its own t) but leave the stall guard
       // armed so the safety poll keeps looking for a recovery.
@@ -1259,6 +1273,15 @@ module.exports = {
       if (this.hist.length && this.hist[0].t < cut) {
         this.hist = this.hist.filter(function (p) { return p.t >= cut; });
       }
+      // The push landed well over a tick after the last point: pushes were
+      // withheld or lost in between — the collector only pushes while its
+      // has_websocket probe (every 30 s when idle) says a browser is attached,
+      // so the first ~3 ticks after a page opens are never pushed; a ws
+      // reconnect drops some too. Those samples ARE in the collector's log:
+      // fetch them once instead of leaving a hole or a straight bridge in the
+      // trace. (The stall guard cannot catch this — the push itself resets it.)
+      if (this.histPreloaded && prevT > 0 && !s.stale && s.t - prevT > this.STRIP_HOLE_MS)
+        this.fetchStripHistory({ since: prevT });
     },
     startStrip() {
       var self = this;

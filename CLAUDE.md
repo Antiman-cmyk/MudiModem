@@ -773,6 +773,14 @@ MudiModem/
   pass — read in reference/4.10/oui-lib-rpc.lua; verify.sh 14b round-trips it). panic's per-slot
   GL unlock passes the stored tower fields back (`gl_unlock_slot`, jsonfilter; minimal payload
   without it), mirroring the backend's `gl_unlock`. All sh tests also run under `busybox sh`.
+- ⚠️ **Push gating leaves a hole after a page opens — backfilled client-side (2026-09-02, seen
+  live).** collectd pushes only while its `has_websocket` probe (every 30 s idle) says a browser is
+  attached, so the first ~3 ticks after opening the Modem page are never pushed; the stall guard
+  can't notice (the first real push resets it), and the strip showed a gap / a straight bridge
+  while Tracking flattened. Fix: every chart's push handler compares the pushed `t` with the last
+  held one and, past `*_HOLE_MS` (25 s RF, 50 s battery), issues ONE `{since: <previous cursor>}`
+  fetch; the incremental merges dedupe by `t` and re-sort. The cadence difference itself is
+  expected: the preload paints 15 min at once, live adds one point per 10 s.
 - ✅ **Cell-unlock fix + Reset-to-default (2026-07-24).** **Cell-unlock 5G-only stranding FIXED:**
   `clear_cell_lock` now issues `mode_pref=AUTO` + `nr5g_disable_mode=0` + `save_ctrl=0,0` after GL's
   unlock. Root cause: a GL cell lock is *two* changes — `QNWLOCK` + a `mode_pref=NR5G` side-effect

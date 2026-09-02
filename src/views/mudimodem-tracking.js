@@ -46,6 +46,8 @@ module.exports = (function () {
   var TICKSTEP = { 15:2, 60:10, 360:60, 1440:240 };
   var RECENT_USER_MS = 8000;
   var STALL_MS = 45000;            // no push for this long => one catch-up fetch
+  var HOLE_MS = 25000;             // a push landing this long after the last sample => backfill the hole
+  var GAP_MS = 45000;              // no sample for this long => the lanes break (same rule as the strip)
   // PADL / PADR clear the RSRP (left) and SINR (right) y-axis labels. Was 30/12
   // when the overlay had no numeric scale and the legend carried every domain.
   var PADL = 42, PADR = 36, BUS_H = 20, PLOT_H = 230;
@@ -192,8 +194,17 @@ module.exports = (function () {
             if (res) {
               var ns = res.samples || [], ne = res.events || [];
               if (merge) {
-                if (ns.length) self.samples = self.samples.concat(ns);
-                if (ne.length) self.events = self.events.concat(ne);
+                // Skip what is already held (a push that landed meanwhile, or
+                // the one that revealed a hole) and keep time order: a hole
+                // backfill is OLDER than the newest pushed sample.
+                var haveT = {};
+                for (var i = 0; i < self.samples.length; i++) haveT[self.samples[i].t] = 1;
+                var add = ns.filter(function (x) { return x && x.t && !haveT[x.t]; });
+                if (add.length) self.samples = self.samples.concat(add).sort(function (a, b) { return a.t - b.t; });
+                var haveE = {};
+                for (var j = 0; j < self.events.length; j++) haveE[self.events[j].t + "|" + self.events[j].label] = 1;
+                var addE = ne.filter(function (e) { return e && !haveE[e.t + "|" + e.label]; });
+                if (addE.length) self.events = self.events.concat(addE);
               } else { self.samples = ns; self.events = ne; }
               self.serverNow = res.now || Date.now();
               self.serverNowAt = Date.now();
@@ -226,6 +237,7 @@ module.exports = (function () {
       // advances the box-clock reference without a round-trip.
       onPush: function (s) {
         if (!s || !s.t || s.t <= this.lastT) return;
+        var prevT = this.lastT;
         this.pushSeenAt = Date.now();
         // In place: push + shift are O(1) and keep the array identity, so the
         // derived-event cache below stays valid. (concat + filter copied all
@@ -236,6 +248,11 @@ module.exports = (function () {
         var cut = s.t - 24 * 3600 * 1000;
         while (this.samples.length && this.samples[0].t < cut) this.samples.shift();
         this.tick++;
+        // Well over a tick since the last sample: pushes were withheld (the
+        // collector's has_websocket gate, up to ~3 ticks after a page opens)
+        // or lost (ws reconnect). The samples exist in the collector's log —
+        // backfill them once; the stall guard cannot see this, the push reset it.
+        if (prevT > 0 && s.t - prevT > HOLE_MS) this.fetchHistory({ since: prevT, merge: true });
       },
       // A user/watchdog event (mudimodem.event push) — Keep, Revert, auto-revert.
       onEventPush: function (e) {
@@ -584,12 +601,17 @@ module.exports = (function () {
             // cover every sample) so a NaN/outlier can't paint outside the frame.
             return plotBot - (Math.max(d0, Math.min(d1, v)) - d0) / span * PLOT_H;
           };
-          var d = "", pen = false;                       // one path per metric
+          var d = "", pen = false, prevT = null;         // one path per metric
           ss.forEach(function (s) {
             var v = s[L.key];
-            if (v == null) { pen = false; return; }       // break into a gap
+            // Break the pen on a missing reading AND on a time hole: no sample
+            // for over GAP_MS (collector down, outage) is a gap in the data, and
+            // drawing a straight bridge across it would hide the outage as a
+            // flat "no fluctuation" segment — the strip already breaks there.
+            if (v == null) { pen = false; prevT = s.t != null ? s.t : prevT; return; }
+            if (prevT != null && s.t != null && s.t - prevT > GAP_MS) pen = false;
             d += (pen ? "L" : "M") + self.xOf(s.m).toFixed(1) + " " + yv(v).toFixed(1) + " ";
-            pen = true;
+            pen = true; prevT = s.t != null ? s.t : prevT;
           });
           if (d) kids.push(h("path", { attrs: { fill: "none", stroke: L.color,
             "stroke-width": 1.75, "stroke-linejoin": "round", "stroke-linecap": "round",
