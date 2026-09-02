@@ -42,6 +42,15 @@ print(sid)
 PY'
 }
 
+# Run one of test/onbox/*.lua ON the box with the given args. Scripts are shipped
+# as files — never inlined into ssh '...' (CLAUDE.md §8: nested quoting).
+onbox_lua() {  # $1 = test/onbox/<name>.lua, $2.. = args
+  _f="$1"; shift
+  _n="/tmp/mm-onbox-$(basename "$_f")"
+  ssh -o BatchMode=yes "root@$HOST" "cat > $_n" < "$_f" || return 1
+  ssh -o BatchMode=yes "root@$HOST" "lua $_n $*; rc=\$?; rm -f $_n; exit \$rc"
+}
+
 echo "0. firmware is 4.10+ (MudiModem 2.x is 4.10-only)"
 # Numeric major.minor compare — the same expression install.sh uses (a glob
 # like `4.[2-9]*` would accept 4.8.5).
@@ -70,8 +79,7 @@ ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/oui/menu.d/mudimodem.json'
   || fail "menu json missing"
 
 echo "2. menu json is valid JSON on-device"
-ssh -o BatchMode=yes "root@$HOST" \
-  'lua -e "local c=require(\"cjson\"); local f=io.open(\"/usr/share/oui/menu.d/mudimodem.json\"); c.decode(f:read(\"*a\"))"' \
+onbox_lua test/onbox/json-parses.lua /usr/share/oui/menu.d/mudimodem.json \
   || fail "menu json does not parse (would break ui.get_menu_list for EVERY page)"
 
 echo "3. nginx serves the chunk via gzip_static"
@@ -113,8 +121,7 @@ ssh -o BatchMode=yes "root@$HOST" 'test -s /www/views/gl-sdk4-ui-mudimodem-track
   || fail "tracking chunk .gz missing"
 ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/oui/menu.d/mudimodem-tracking.json' \
   || fail "tracking menu json missing"
-ssh -o BatchMode=yes "root@$HOST" \
-  'lua -e "local c=require(\"cjson\"); local f=io.open(\"/usr/share/oui/menu.d/mudimodem-tracking.json\"); c.decode(f:read(\"*a\"))"' \
+onbox_lua test/onbox/json-parses.lua /usr/share/oui/menu.d/mudimodem-tracking.json \
   || fail "tracking menu json does not parse (would break ui.get_menu_list for EVERY page)"
 TBODY=$(ssh -o BatchMode=yes "root@$HOST" \
   'curl -sk -H "Accept-Encoding: gzip" "https://127.0.0.1/views/gl-sdk4-ui-mudimodem-tracking.common.js?_t=1" | gzip -dc')
@@ -143,6 +150,8 @@ if [ -f src/sbin/mudimodem-revert ]; then
   echo "6. watchdog + set_bands safety interlock"
   ssh -o BatchMode=yes "root@$HOST" 'test -x /usr/sbin/mudimodem-revert' \
     || fail "watchdog not installed (run ./tools/deploy.sh)"
+  ssh -o BatchMode=yes "root@$HOST" 'test -x /etc/init.d/mudimodem-revert && ls /etc/rc.d/S*mudimodem-revert >/dev/null 2>&1' \
+    || fail "watchdog boot hook (init.d/mudimodem-revert) missing or not enabled"
   ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-revert.test.sh'  < test/revert.test.sh
   ssh -o BatchMode=yes "root@$HOST" 'MUDIMODEM_HIST=/tmp/mmv-hist sh /tmp/mm-revert.test.sh /usr/sbin/mudimodem-revert >/dev/null; rc=$?; rm -rf /tmp/mm-revert.test.sh /tmp/mmv-hist; exit $rc' \
     || fail "watchdog isolation tests failed"
@@ -213,13 +222,7 @@ if [ -f src/sbin/mudimodem-collectd ]; then
   # freshness rather than watching the file grow avoids a 25 s sleep here.
   ssh -o BatchMode=yes "root@$HOST" 'for i in 1 2 3 4 5 6; do [ -s /tmp/mudimodem/battery.jsonl ] && exit 0; sleep 5; done; exit 1' \
     || fail "no battery.jsonl written after ~30s"
-  ssh -o BatchMode=yes "root@$HOST" 'lua -e "
-    local f=io.open(\"/tmp/mudimodem/battery.jsonl\"); local last
-    for l in f:lines() do last=l end
-    local o=require(\"cjson\").decode(last)
-    local age=(os.time()*1000)-o.t
-    if age>60000 then os.exit(1) end
-    if o.cap==nil or o.cur==nil then os.exit(1) end"' \
+  onbox_lua test/onbox/battery-fresh.lua \
     || fail "battery.jsonl newest sample is stale (>60s) or missing cap/cur"
   echo "   battery collector is sampling (fresh sample, cap+cur present)"
   ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-bat.test.lua' < test/backend-battery-history.test.lua
@@ -256,7 +259,9 @@ ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/lib/mudimodem/mudimodem-at.py' \
   || fail "AT tool missing"
 
 echo "8a. library gz parses on-device and is served via gzip_static"
-ssh -o BatchMode=yes "root@$HOST" 'gzip -dc /www/mudimodem/at-library.json.gz > /tmp/mm-lib.json && lua -e "local c=require(\"cjson\"); local f=io.open(\"/tmp/mm-lib.json\"); local d=c.decode(f:read(\"*a\")); assert(type(d.entries)==\"table\" and #d.entries>0)"; rc=$?; rm -f /tmp/mm-lib.json; exit $rc' \
+ssh -o BatchMode=yes "root@$HOST" 'gzip -dc /www/mudimodem/at-library.json.gz > /tmp/mm-lib.json' \
+  && onbox_lua test/onbox/library-entries.lua /tmp/mm-lib.json; rc=$?
+ssh -o BatchMode=yes "root@$HOST" 'rm -f /tmp/mm-lib.json'; [ "$rc" = "0" ] \
   || fail "at-library.json.gz is not valid gzipped JSON with entries"
 ssh -o BatchMode=yes "root@$HOST" \
   'curl -sk -H "Accept-Encoding: gzip" "https://127.0.0.1/mudimodem/at-library.json?_t=1" | gzip -dc | grep -q "\"entries\""' \
@@ -354,7 +359,7 @@ ssh -o BatchMode=yes "root@$HOST" 'sh /tmp/mm-su.test.sh /usr/sbin/mudimodem-sel
   || fail "self-update isolation test failed"
 
 echo "10c. app_version live shape (direct dofile call, real network)"
-ssh -o BatchMode=yes "root@$HOST" 'lua -e '\''package.loaded["oui.ubus"]={call=function()end}; local M=dofile("/usr/lib/oui-httpd/rpc/mudimodem"); local r=M.app_version({}); assert(type(r)=="table" and r.installed~=nil, "app_version shape"); print("app_version live shape OK: installed="..tostring(r.installed).." checked="..tostring(r.checked))'\''' \
+onbox_lua test/onbox/app-version-shape.lua \
   || fail "app_version live shape check failed"
 
 echo "11. Speedtest: files present, menu valid, chunk evals"
@@ -362,8 +367,7 @@ ssh -o BatchMode=yes "root@$HOST" 'test -s /www/views/gl-sdk4-ui-mudimodem-speed
   || fail "speedtest chunk .gz missing"
 ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/oui/menu.d/mudimodem-speedtest.json' \
   || fail "speedtest menu json missing"
-ssh -o BatchMode=yes "root@$HOST" \
-  'lua -e "local c=require(\"cjson\"); local f=io.open(\"/usr/share/oui/menu.d/mudimodem-speedtest.json\"); c.decode(f:read(\"*a\"))"' \
+onbox_lua test/onbox/json-parses.lua /usr/share/oui/menu.d/mudimodem-speedtest.json \
   || fail "speedtest menu json does not parse (would break ui.get_menu_list for EVERY page)"
 ssh -o BatchMode=yes "root@$HOST" 'test -x /usr/lib/mudimodem/mudimodem-speedtest.py' \
   || fail "speedtest runner script missing or not executable"
@@ -392,18 +396,20 @@ ssh -o BatchMode=yes "root@$HOST" 'pgrep -f mudimodem-speedtestd >/dev/null' \
 
 echo "11c. LIVE: one real speed test end-to-end over Cellular"
 ssh -o BatchMode=yes "root@$HOST" 'rm -f /tmp/mudimodem/speedtest-status.json'
+# the row check is a shipped file (never inlined into ssh '...'), used inside the block below
+ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-onbox-speedtest-row.lua' < test/onbox/speedtest-row.lua
 RESULT=$(ssh -o BatchMode=yes "root@$HOST" '
   rm -f /tmp/mmv-speedtests.jsonl
   python3 /usr/lib/mudimodem/mudimodem-speedtest.py --trigger manual --iface cellular --hist /tmp/mmv-speedtests.jsonl
   rc=$?
   if [ $rc -eq 0 ] && [ -s /tmp/mmv-speedtests.jsonl ]; then
-    lua -e "local c=require(\"cjson\");local f=io.open(\"/tmp/mmv-speedtests.jsonl\");local d=c.decode(f:read(\"*l\"));assert(d.down_mbps and d.down_mbps>0,\"down_mbps\");assert(d.up_mbps and d.up_mbps>0,\"up_mbps\");assert(d.latency_ms,\"latency_ms\");assert(d.carrier,\"carrier\")" \
+    lua /tmp/mm-onbox-speedtest-row.lua /tmp/mmv-speedtests.jsonl \
       && rc=0 || rc=1
   else
     rc=1
   fi
   [ $rc -eq 0 ] && cat /tmp/mmv-speedtests.jsonl
-  rm -f /tmp/mmv-speedtests.jsonl
+  rm -f /tmp/mmv-speedtests.jsonl /tmp/mm-onbox-speedtest-row.lua
   exit $rc
 ') || fail "live speed test failed (produced no result, timed out, or result missing down_mbps/up_mbps/latency_ms/carrier)"
 echo "   live result: $RESULT"
@@ -488,10 +494,10 @@ else
 fi
 
 echo "15. websocket push bus: gl-session is up (4.10 ws stack); our socket names are subscribed by the menu"
-# has_websocket is only a liveness probe here: the collector pushes on every
-# tick regardless of browsers (gl-session's notify is a no-op with none).
+# The collector gates its pushes on this probe (ws_attached: no browser => no
+# fork per tick), so it must answer {has_ws:…}.
 ssh -o BatchMode=yes "root@$HOST" 'ubus call gl-session has_websocket | grep -q has_ws' \
-  || fail "gl-session has_websocket unavailable (the 4.10 push bus is not up)"
+  || fail "gl-session has_websocket unavailable (the collector gates its pushes on it)"
 ssh -o BatchMode=yes "root@$HOST" 'for n in mudimodem.collect mudimodem.battery mudimodem.event; do grep -q "$n" /usr/share/oui/menu.d/mudimodem.json || exit 1; done' \
   || fail "menu does not subscribe every mudimodem.* push name"
 ssh -o BatchMode=yes "root@$HOST" 'ubus call gl-session notify "{\"name\":\"mudimodem.selftest\",\"data\":{\"ok\":1}}"' \

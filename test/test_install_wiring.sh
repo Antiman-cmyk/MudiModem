@@ -20,6 +20,9 @@ grep -q 'pkill -' src/rpc/mudimodem               && fail "backend must not use 
 # (grep -q prints nothing, so it can never feed a second grep — match, then filter.)
 if grep 'gl_modem' tools/mudimodem-at.py | grep -v poller | grep -q .; then fail "AT tool must not touch gl_modem"; fi
 grep -q 'init.d/mudi' install.sh                  || fail "install.sh must purge 1.x LCD leftovers (mudi/mudi-watch) on upgrade"
+grep -q 'src/etc/init.d/mudimodem-revert' install.sh && grep -q 'init.d/mudimodem-revert enable' install.sh || fail "install.sh must install + enable the watchdog boot hook"
+grep -q '/etc/init.d/mudimodem-revert' uninstall.sh && grep -q 'init.d/mudimodem-revert disable' uninstall.sh || fail "uninstall.sh must disable + remove the boot hook"
+grep -q 'boot-check' src/etc/init.d/mudimodem-revert || fail "boot hook must run mudimodem-revert boot-check"
 grep -q 'set_cell_tower' src/sbin/mudimodem-revert || fail "panic must clear GL's stored cell lock per slot (sub_id-agnostic)"
 grep -q 'gl-stale\|MUDIMODEM_STALE' src/rpc/mudimodem src/sbin/mudimodem-revert && fail "gl-stale marker file was removed in 2.0.0; stale is derived live" || true
 

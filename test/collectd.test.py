@@ -317,6 +317,61 @@ class CollectSample(unittest.TestCase):
         self.assertFalse(any(c[1] == "cell_info" for c in calls))
 
 
+class WsGate(unittest.TestCase):
+    """ws_attached(): probe gl-session has_websocket on a cadence; skip pushes
+    while nobody is attached; a failed probe counts as attached."""
+    def _probe(self, reply, rc=0):
+        old_run = collectd.subprocess.run
+        calls = []
+
+        def fake_run(cmd, **_kw):
+            calls.append(cmd)
+
+            class R:
+                returncode = rc
+                stdout = reply
+                stderr = ""
+            return R()
+        collectd.subprocess.run = fake_run
+        return calls, old_run
+
+    def setUp(self):
+        collectd._ws_gate.update({"attached": True, "at": 0.0})
+
+    def test_no_browser_means_no_push_until_the_next_probe(self):
+        calls, old = self._probe('{"has_ws": false}')
+        try:
+            self.assertFalse(collectd.ws_attached(now=1000.0))
+            self.assertEqual(calls[-1][:4], ["ubus", "call", "gl-session", "has_websocket"])
+            n = len(calls)
+            self.assertFalse(collectd.ws_attached(now=1000.0 + collectd.WS_PROBE_IDLE_S - 1), "cached")
+            self.assertEqual(len(calls), n, "no second probe inside the idle cadence")
+            self.assertFalse(collectd.ws_attached(now=1000.0 + collectd.WS_PROBE_IDLE_S + 1))
+            self.assertEqual(len(calls), n + 1, "re-probed after the idle cadence")
+        finally:
+            collectd.subprocess.run = old
+
+    def test_browser_present_pushes_and_probes_less_often(self):
+        calls, old = self._probe('{"has_ws": true}')
+        try:
+            self.assertTrue(collectd.ws_attached(now=2000.0))
+            n = len(calls)
+            self.assertTrue(collectd.ws_attached(now=2000.0 + collectd.WS_PROBE_IDLE_S + 5), "still cached: attached cadence is longer")
+            self.assertEqual(len(calls), n)
+            self.assertTrue(collectd.ws_attached(now=2000.0 + collectd.WS_PROBE_ATTACHED_S + 1))
+            self.assertEqual(len(calls), n + 1)
+        finally:
+            collectd.subprocess.run = old
+
+    def test_probe_failure_counts_as_attached(self):
+        # gl-session down must surface as logged push failures, never as silence.
+        calls, old = self._probe("Command failed: Not found", rc=4)
+        try:
+            self.assertTrue(collectd.ws_attached(now=3000.0))
+        finally:
+            collectd.subprocess.run = old
+
+
 class WsPublish(unittest.TestCase):
     def _capture(self, name, payload):
         seen = {}
@@ -404,17 +459,40 @@ class Trim(unittest.TestCase):
             kept = [json.loads(l)["t"] for l in open(p)]
             self.assertEqual(kept, [8, 9, 10])       # last 3
 
-    def test_skips_malformed_lines_and_tolerates_missing_file(self):
+    def test_scrubs_a_torn_tail_line_and_tolerates_missing_file(self):
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "s.jsonl")
             with open(p, "w") as f:
                 f.write('{"t":9000}\n')
-                f.write("not json\n")
                 f.write('{"t":9500}\n')
+                f.write('{"t":96')                     # torn by a crash mid-append
             collectd.trim(p, max_age_ms=5000, max_lines=100, ref_ms=10000)
             kept = [json.loads(l)["t"] for l in open(p)]
             self.assertEqual(kept, [9000, 9500])
             collectd.trim(os.path.join(d, "absent.jsonl"), 5000, 100)  # no raise
+
+    def test_malformed_head_lines_are_dropped_with_the_old_ones(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "s.jsonl")
+            with open(p, "w") as f:
+                f.write("not json\n")
+                f.write('{"t":1000}\n')
+                f.write('{"t":9000}\n')
+            collectd.trim(p, max_age_ms=5000, max_lines=100, ref_ms=10000)
+            kept = [json.loads(l)["t"] for l in open(p)]
+            self.assertEqual(kept, [9000])
+
+    def test_nothing_to_drop_means_no_rewrite(self):
+        # The steady-state cost: parse the head until the first young line, then
+        # leave the file untouched (same inode, same mtime).
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "s.jsonl")
+            self._write(p, [9000, 9500, 9900])
+            os.utime(p, (1, 1))
+            st0 = os.stat(p)
+            collectd.trim(p, max_age_ms=5000, max_lines=100, ref_ms=10000)
+            st1 = os.stat(p)
+            self.assertEqual((st0.st_ino, st0.st_mtime), (st1.st_ino, st1.st_mtime), "untouched")
 
 
 def _mklim(d, pid=None, limit=None):

@@ -98,6 +98,9 @@ echo "installing watchdog + validator + backend:"
 # Watchdog + validator BEFORE the backend: set_bands needs the watchdog present,
 # and the validator must exist before nginx reloads the plugin (§8).
 cp_install src/sbin/mudimodem-revert  /usr/sbin/mudimodem-revert            0755
+# Boot hook: a revert window cut off by a reboot is restored at the next boot.
+cp_install src/etc/init.d/mudimodem-revert /etc/init.d/mudimodem-revert       0755
+/etc/init.d/mudimodem-revert enable 2>/dev/null || true
 cp_install src/sbin/mudimodem-selfupdate /usr/sbin/mudimodem-selfupdate     0755
 cp_install src/validator/mudimodem.lua /usr/share/gl-validator.d/mudimodem.lua 0644
 cp_install src/rpc/mudimodem          /usr/lib/oui-httpd/rpc/mudimodem       0644
@@ -195,6 +198,7 @@ for p in \
   /usr/sbin/mudimodem-speedtestd \
   /etc/init.d/mudimodem-speedtestd \
   /usr/sbin/mudimodem-revert \
+  /etc/init.d/mudimodem-revert \
   /usr/sbin/mudimodem-selfupdate \
   /usr/share/gl-validator.d/mudimodem.lua \
   /usr/lib/oui-httpd/rpc/mudimodem \

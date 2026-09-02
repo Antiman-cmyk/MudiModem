@@ -1,0 +1,16 @@
+#!/bin/sh /etc/rc.common
+# One-shot at boot for the MudiModem confirm-or-revert watchdog.
+#
+# A band/cell-lock change is written with a 60 s watchdog behind it. If the box
+# reboots inside that window (or the watchdog's restore failed and left the
+# pending file), the change would outlive the watchdog: GL's store re-applies it
+# on start. `mudimodem-revert boot-check` restores the pending snapshot in that
+# case and is a no-op otherwise. Not a daemon — runs once, after cellular
+# (START=95 collectd runs alongside; the modem stack is up well before 96).
+START=96
+
+boot() {
+	[ -x /usr/sbin/mudimodem-revert ] && /usr/sbin/mudimodem-revert boot-check >/dev/null 2>&1 || true
+}
+start() { boot; }
+stop() { :; }

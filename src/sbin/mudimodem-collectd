@@ -44,7 +44,7 @@ POLL_INTERVAL   = float(os.environ.get("MUDIMODEM_POLL", "10"))
 CARRIER_INTERVAL = float(os.environ.get("MUDIMODEM_CARRIER_INTERVAL", "60"))
 SAMPLE_MAX_AGE  = 24 * 3600 * 1000     # 24 h, in ms
 SAMPLE_MAX_LINE = 9000                  # 24h at 10s = 8640; hard backstop above that
-TRIM_EVERY      = 12                     # ~2 min at 10 s
+TRIM_EVERY      = 60                     # ~10 min at 10 s (trim() is O(dropped); the cap absorbs the overshoot)
 EVENT_TRIM_EVERY = 360                   # ~1 h
 WS_NAME         = "mudimodem.collect"    # global_sockets names the page subscribes to
 WS_BATT_NAME    = "mudimodem.battery"
@@ -152,6 +152,41 @@ def collect_sample():
 
 _ws_fail = {"n": 0, "last_log": 0.0}
 WS_FAIL_LOG_EVERY_S = 60
+
+# ---- browser-presence gate for the push bus ---------------------------------
+# gl-session's notify is a no-op with no websocket client (gl-ngx-session.lua:
+# the handler loops over ws_clients and returns), so on a headless travel router
+# every 10 s RF push and 20 s battery push was a pointless fork+exec of `ubus`
+# (~13k a day). `gl-session has_websocket` answers {has_ws:bool}; probe it
+# every WS_PROBE_IDLE_S while nobody is attached and skip the pushes, every
+# WS_PROBE_ATTACHED_S once someone is. A page that opens between probes gets
+# the /ws SEED (latest.json, <= one tick old) at once and its first live push
+# within probe + tick <= 40 s — inside every stall guard (strip 45 s, tracking
+# 45 s, battery 60 s), so nothing on screen changes. A failed probe counts as
+# "attached": a dead gl-session must show up as logged push failures, never as
+# silence.
+WS_PROBE_IDLE_S     = float(os.environ.get("MUDIMODEM_WS_PROBE_IDLE", "30"))
+WS_PROBE_ATTACHED_S = float(os.environ.get("MUDIMODEM_WS_PROBE_ATTACHED", "60"))
+_ws_gate = {"attached": True, "at": 0.0}
+
+
+def ws_attached(now=None):
+    """True when a browser is (or may be) subscribed; re-probed on the cadence above."""
+    now = time.time() if now is None else now
+    every = WS_PROBE_ATTACHED_S if _ws_gate["attached"] else WS_PROBE_IDLE_S
+    if now - _ws_gate["at"] < every:
+        return _ws_gate["attached"]
+    _ws_gate["at"] = now
+    attached = True
+    try:
+        out = subprocess.run(["ubus", "call", "gl-session", "has_websocket"],
+                             capture_output=True, timeout=5, text=True)
+        if out.returncode == 0 and out.stdout:
+            attached = bool(json.loads(out.stdout).get("has_ws", True))
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        attached = True
+    _ws_gate["attached"] = attached
+    return attached
 
 
 def _ws_failure(detail):
@@ -290,30 +325,48 @@ def read_battery(root=None, t=None, pidf=None, limf=None):
 
 
 def trim(path, max_age_ms, max_lines, ref_ms=None):
-    """Rewrite path keeping only lines newer than max_age and at most max_lines,
-    atomically. Skips malformed lines. No-op if the file is absent."""
+    """Drop lines older than max_age and cap the count, atomically. No-op if the
+    file is absent — and no rewrite at all when nothing needs dropping.
+
+    The file is append-ordered by t, so only the HEAD has to be parsed: walk
+    from the top until the first line that is young enough (each parsed line
+    is one that goes), then keep the rest verbatim. A whole-file parse and
+    rewrite every pass — 8,640 json.loads + a 2 MB write every 2 min at 24 h —
+    was the old cost; now it is O(lines dropped), ~60 every 10 min. Malformed
+    lines can only be a torn TAIL (our own appender writes one atomic line at
+    a time), so the last line is checked and scrubbed; readers skip junk
+    anyway (read_window)."""
     try:
         with open(path) as f:
             lines = f.readlines()
     except FileNotFoundError:
         return
+    if not lines:
+        return
     cutoff = (now_ms() if ref_ms is None else ref_ms) - max_age_ms
-    kept = []
-    for ln in lines:
-        ln = ln.strip()
-        if not ln:
-            continue
+
+    def stamp(ln):
         try:
-            obj = json.loads(ln)
-        except ValueError:
-            continue
-        if obj.get("t", 0) >= cutoff:
-            kept.append(ln)
+            return json.loads(ln).get("t", 0)
+        except (ValueError, AttributeError):
+            return None                              # malformed: goes
+
+    drop = 0
+    for ln in lines:
+        t = stamp(ln.strip()) if ln.strip() else None
+        if t is not None and t >= cutoff:
+            break
+        drop += 1
+    kept = lines[drop:]
+    if kept and stamp(kept[-1].strip()) is None:      # torn tail line
+        kept = kept[:-1]
     if len(kept) > max_lines:
         kept = kept[-max_lines:]
+    if len(kept) == len(lines):
+        return                                       # nothing to drop: leave the file alone
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
-        f.write("\n".join(kept) + ("\n" if kept else ""))
+        f.write("".join(l if l.endswith("\n") else l + "\n" for l in kept))
     os.replace(tmp, path)
 
 
@@ -478,13 +531,15 @@ def main():
                     with open(battery_path, "a") as f:
                         f.write(json.dumps(b) + "\n")
                     write_latest(battery_latest_path, b)
-                    ws_publish(WS_BATT_NAME, b)
+                    if ws_attached():
+                        ws_publish(WS_BATT_NAME, b)
             s = collect_sample()
             if s is not None:
                 with open(samples_path, "a") as f:
                     f.write(json.dumps(s) + "\n")
                 write_latest(latest_path, s)
-                ws_publish(WS_NAME, s)
+                if ws_attached():
+                    ws_publish(WS_NAME, s)
             i += 1
             if i % TRIM_EVERY == 0:
                 trim(samples_path, SAMPLE_MAX_AGE, SAMPLE_MAX_LINE)

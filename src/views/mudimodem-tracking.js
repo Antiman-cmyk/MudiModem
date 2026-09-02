@@ -89,7 +89,7 @@ module.exports = (function () {
       // server's user/watchdog events, newest last. Depends on `tick` for polling.
       allEvents: function () {
         this.tick;
-        var derived = this.deriveNetEvents(this.samples, this.events);
+        var derived = this.deriveNetEventsIncremental(this.samples, this.events);
         return this.events.concat(derived).sort(function (a, b) { return a.t - b.t; });
       }
     },
@@ -103,7 +103,7 @@ module.exports = (function () {
       "pushedEvent": { deep: true, handler: function (e) { this.onEventPush(e); } }
     },
 
-    created: function () { this.injectStyle(); },
+    created: function () { this.injectStyle(); this._derived = null; },
     mounted: function () {
       var self = this;
       if (typeof window === "undefined") return;
@@ -227,12 +227,14 @@ module.exports = (function () {
       onPush: function (s) {
         if (!s || !s.t || s.t <= this.lastT) return;
         this.pushSeenAt = Date.now();
-        this.samples = this.samples.concat([s]);
+        // In place: push + shift are O(1) and keep the array identity, so the
+        // derived-event cache below stays valid. (concat + filter copied all
+        // 8,640 samples on every 10 s push once the 24 h window was full.)
+        this.samples.push(s);
         this.lastT = s.t;
         this.serverNow = s.t; this.serverNowAt = Date.now();
         var cut = s.t - 24 * 3600 * 1000;
-        if (this.samples.length && this.samples[0].t < cut)
-          this.samples = this.samples.filter(function (x) { return x.t >= cut; });
+        while (this.samples.length && this.samples[0].t < cut) this.samples.shift();
         this.tick++;
       },
       // A user/watchdog event (mudimodem.event push) — Keep, Revert, auto-revert.
@@ -244,11 +246,41 @@ module.exports = (function () {
         this.events = this.events.concat([e]);
         this.tick++;
       },
+      // Incremental front for deriveNetEvents: a push adds ONE sample, so only
+      // that sample needs deriving — re-deriving all 8,640 on every push was the
+      // page's one O(n)-per-10 s cost. The cache resumes from the last sample
+      // it processed (found by identity from the tail, so head trimming does not
+      // invalidate it); a change to the known events resets it, since those
+      // suppress derived ticks retroactively (RECENT_USER_MS around each).
+      deriveNetEventsIncremental: function (samples, known) {
+        var c = this._derived;
+        if (c && c.known === known && c.knownLen === known.length && c.lastSample &&
+            samples.length && samples[samples.length - 1] !== c.lastSample) {
+          var i = samples.length - 1;
+          while (i >= 0 && samples[i] !== c.lastSample) i--;
+          if (i >= 0) {
+            var r = this.deriveNetEvents(samples, known, { from: i + 1, last: c.last, out: c.out });
+            var cutT = samples[0].t;
+            c.out = r.out.filter(function (e) { return e.t >= cutT; });
+            c.last = r.last; c.lastSample = samples[samples.length - 1];
+            return c.out.slice();
+          }
+        }
+        if (c && c.known === known && c.knownLen === known.length && c.lastSample &&
+            samples.length && samples[samples.length - 1] === c.lastSample) return c.out.slice();
+        var full = this.deriveNetEvents(samples, known, { withState: true });
+        this._derived = { known: known, knownLen: known.length, out: full.out, last: full.last,
+                          lastSample: samples.length ? samples[samples.length - 1] : null };
+        return full.out.slice();
+      },
       // pure: derive net (handover/failover) events from consecutive samples,
       // suppressing any within RECENT_USER_MS of a known user/watchdog event so a
       // change WE applied isn't double-counted as a network event.
-      deriveNetEvents: function (samples, known) {
-        var out = [], last = null;
+      // With `state` ({from, last, out} or {withState:true}) it resumes from a
+      // prior run and returns {out, last}; without it, the plain event array.
+      deriveNetEvents: function (samples, known, state) {
+        var out = (state && state.out) ? state.out.slice() : [], last = (state && state.last) || null;
+        var start = (state && state.from) || 0;
         var recentUser = function (t) {
           for (var i = 0; i < known.length; i++)
             if (Math.abs(known[i].t - t) <= RECENT_USER_MS &&
@@ -274,7 +306,7 @@ module.exports = (function () {
           var c = pcc(x);
           return [x.id, ratKey(x), c.band, c.pci, c.earfcn != null ? c.earfcn : x.tx_channel].join(":");
         };
-        for (var i = 0; i < samples.length; i++) {
+        for (var i = start; i < samples.length; i++) {
           var s = samples[i];
           if (last && !recentUser(s.t)) {
             if (String(s.slot) !== String(last.slot)) {
@@ -303,6 +335,7 @@ module.exports = (function () {
           // compares against the pre-outage cell) but never emits.
           if (s.id != null) last = s; else if (!last) last = s;
         }
+        if (state) return { out: out, last: last };
         return out;
       },
 

@@ -35,6 +35,7 @@ FILES="
 /usr/sbin/mudimodem-speedtestd
 /etc/init.d/mudimodem-speedtestd
 /usr/sbin/mudimodem-revert
+/etc/init.d/mudimodem-revert
 /usr/sbin/mudimodem-selfupdate
 /usr/share/gl-validator.d/mudimodem.lua
 /usr/lib/oui-httpd/rpc/mudimodem
@@ -63,6 +64,9 @@ if [ -x /etc/init.d/mudimodem-collectd ]; then
   /etc/init.d/mudimodem-collectd stop    2>/dev/null || true
   /etc/init.d/mudimodem-collectd disable 2>/dev/null || true
   echo "collector stopped + disabled"
+fi
+if [ -x /etc/init.d/mudimodem-revert ]; then
+  /etc/init.d/mudimodem-revert disable 2>/dev/null || true
 fi
 if [ -x /etc/init.d/mudimodem-speedtestd ]; then
   /etc/init.d/mudimodem-speedtestd stop    2>/dev/null || true

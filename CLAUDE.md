@@ -136,13 +136,16 @@ ubus object into the `statusMap` Vuex store. Read it in a component with the **`
 getter (`...mapGetters(["moduleStatus"])`).
 
 **`/ws` is not `/rpc`, so the dot restriction (§3) never applies here** — GL's own `internet.json`
-subscribes to six dotted `cellular.*` objects. **Ours now declares the same six:**
+subscribes dotted `cellular.*` objects. **Ours (4.10) declares the three live cellular names plus
+our collector's own push names:**
 ```json
 { "index": 15, "view": "mudimodem", "title": "Modem", "icon": "modem", "level": 1,
-  "global_sockets": ["cellular.modems_info", "cellular.modems_status",
-                     "cellular.networks_info", "cellular.networks_status",
-                     "cellular.sims_info", "cellular.sims_status"] }
+  "global_sockets": ["cellular.modems_info", "cellular.modems_status", "cellular.networks_info",
+                     "mudimodem.collect", "mudimodem.battery", "mudimodem.event"] }
 ```
+(4.8 listed six `cellular.*` names; `sims_info`/`sims_status`/`networks_status` are dead on 4.10.
+app.js subscribes the UNION of every menu entry's `global_sockets` at ws open — read in the 4.10
+bundle — so the level-0 tracking route needs no list of its own.)
 ⇒ **every read we need — band universe, modem identity, signal, SIM state — arrives free over the
 websocket with no RPC and no backend.** The Lua backend is only needed for *writes* and for the AT
 passthrough. This is the single biggest simplification to Phase 1.
@@ -631,7 +634,7 @@ router and searchable. It's a differentiator no router UI has.
 | **0** | Hello-world chunk + menu entry | ✅ done. Settled the template-compiler + `level` unknowns. |
 | **1** | Read-only diagnostics tab | Now **cheaper than planned** — reads come free over `global_sockets` (§2); no backend needed except `policy_band`/`ue_capability_band` (§5a). |
 | **2** | Band grid + cell lock, auto-revert, panic restore | ✅ **2a+2b done** (band read/write/revert). ⏳ cell lock (`QNWLOCK` §6a) + durability (make `set_bands` persist via `modem.set_sim_config`) remain. |
-| **3** | AT console + community library | ✅ done (2026-07-18). Own channel via /usr/lib/mudimodem/mudimodem-at.py; gl_modem slept during sends; library at /www/mudimodem/at-library.json.gz. |
+| **3** | AT console + community library | ✅ done (2026-07-18). Own channel via /usr/lib/mudimodem/mudimodem-at.py; library at /www/mudimodem/at-library.json.gz. (The 4.8-era `gl_modem` SIGSTOP during sends is gone — no such daemon on 4.10.) |
 | **4** | SIM / APN | ❌ **REMOVED 2026-09-02.** Stock 4.10's Internet page has slot switch, dial/APN profile and failover in full (verified in the shipped chunk) — the rule is to ship only what stock lacks or does incompletely. The DSDS/roaming knowledge below (§12 2026-07-18, §"Session findings") stays as reference; `cellular.modems_status`/`networks_info` are still consumed by the strip. |
 | **2.0.0** | GL 4.10 rewrite; LCD removed | ✅ 2026-09-02 — see the header block. The 1.x LCD renderer is gone; `mudimodem-collectd` is the single modem reader, pushing over `gl-session notify`. |
 
@@ -857,8 +860,8 @@ MudiModem/
   fields degrade to `idle`, never to a confident `full`/`blocked`.
   Spec: `docs/superpowers/specs/2026-07-27-battery-tab-history-design.md`;
   plan: `docs/superpowers/plans/2026-07-27-battery-tab-history.md`.
-- 🔭 Later: register
-  the watchdog `boot-check` in a boot hook; an ipk. (`/etc/sysupgrade.conf` itself is already
+- 🔭 Later: an ipk. (`boot-check` now has its boot hook — `/etc/init.d/mudimodem-revert`,
+  START=96, installed + enabled by install.sh/deploy.sh; `/etc/sysupgrade.conf` itself is already
   handled by `deploy.sh` — see the corrected bullet below.)
 
 ### Session findings 2026-07-17 (all in reference §10–§11)
@@ -914,6 +917,6 @@ MudiModem/
 - ✅ `/etc/sysupgrade.conf` **is** registered by `./tools/deploy.sh` (idempotent
   `grep -qxF … || echo … >> "$f"`), covering every shipped file. **Any new shipped file must be
   added to that list**, or a firmware upgrade wipes it. Still not done: `install.sh`/`uninstall.sh`,
-  a boot hook for the watchdog `boot-check`, and an ipk.
+  and an ipk (the `boot-check` boot hook shipped 2026-09-02).
 - 🧹 `tools/verify.sh` still only checks the menu JSON *parses*; it should also assert
   `get_menu_list` returns it at `level:1` (§8 has the stub).

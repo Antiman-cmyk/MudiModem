@@ -103,6 +103,9 @@ echo "version.json deployed ($VER, updates from $UPD_BASE)"
 if [ -f src/sbin/mudimodem-revert ]; then
   ssh -o BatchMode=yes "root@$HOST" 'cat > /usr/sbin/mudimodem-revert && chmod 0755 /usr/sbin/mudimodem-revert && mkdir -p /etc/mudimodem' \
     < src/sbin/mudimodem-revert
+ssh -o BatchMode=yes "root@$HOST" 'cat > /etc/init.d/mudimodem-revert && chmod 0755 /etc/init.d/mudimodem-revert && /etc/init.d/mudimodem-revert enable' \
+  < src/etc/init.d/mudimodem-revert
+echo "watchdog boot hook deployed + enabled"
   echo "watchdog installed (/usr/sbin/mudimodem-revert)"
 fi
 
@@ -190,6 +193,7 @@ ssh -o BatchMode=yes "root@$HOST" 'f=/etc/sysupgrade.conf; touch "$f"; for p in 
   /usr/share/gl-ngx/websocket/mudimodem.lua \
   /usr/lib/oui-httpd/rpc/mudimodem \
   /usr/sbin/mudimodem-revert \
+  /etc/init.d/mudimodem-revert \
   /usr/sbin/mudimodem-selfupdate \
   /usr/sbin/mudimodem-collectd \
   /etc/init.d/mudimodem-collectd \

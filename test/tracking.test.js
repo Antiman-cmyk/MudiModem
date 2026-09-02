@@ -666,3 +666,39 @@ test('pushedEvent is watched deep (same-second events share a whole-second t)', 
   assert.ok(w && w.deep === true && typeof w.handler === 'function', 'deep watcher on the event object');
   assert.ok(!c.watch['pushedEvent.t'], 'the .t watcher would miss a second event in the same second');
 });
+
+
+test('incremental derivation equals a from-scratch derivation across pushes and 24 h trimming', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  vm.events = [];
+  const base = Date.now() - 24 * 3600 * 1000 + 60000;   // oldest sample is 1 min inside the window
+  const mk = (i, over) => Object.assign({ t: base + i * 10000, slot: '1', id: i < 5 ? 'A' : (i < 9 ? 'B' : 'C'),
+    band: 71, pci: 1, tx_channel: 100, mode: 'NR5G-SA', network_type: 5, rsrp: -100 }, over || {});
+  vm.samples = []; vm.lastT = 0;
+  for (let i = 0; i < 12; i++) vm.onPush(mk(i));
+  const arr = vm.samples;
+  const inc = vm.deriveNetEventsIncremental(vm.samples, vm.events);
+  const full = vm.deriveNetEvents(vm.samples, vm.events);
+  assert.deepStrictEqual(inc, full, 'same events after 12 pushes');
+  assert.strictEqual(inc.length, 2, 'two handovers (A->B, B->C)');
+  // more pushes: only the new samples are derived, result still equals full
+  vm.onPush(mk(12, { id: 'D' }));
+  vm.onPush(mk(13));
+  assert.strictEqual(vm.samples, arr, 'push is in place — array identity kept');
+  assert.deepStrictEqual(vm.deriveNetEventsIncremental(vm.samples, vm.events), vm.deriveNetEvents(vm.samples, vm.events));
+  // a new user event invalidates the cache (retroactive suppression) — still equal
+  vm.onEventPush({ t: base + 13 * 10000 + 2000, kind: 'user', label: 'Bands applied', detail: '' });
+  const inc2 = vm.deriveNetEventsIncremental(vm.samples, vm.events);
+  assert.deepStrictEqual(inc2, vm.deriveNetEvents(vm.samples, vm.events));
+  // 24 h trim: push a sample far in the future so the head ages out (shift), cache survives
+  vm.onPush(mk(14, { t: base + 24 * 3600 * 1000 + 5000, id: 'D' }));
+  assert.ok(vm.samples[0].t > base, 'head trimmed in place');
+  assert.deepStrictEqual(vm.deriveNetEventsIncremental(vm.samples, vm.events), vm.deriveNetEvents(vm.samples, vm.events));
+});
+
+test('deriveNetEvents without state still returns a plain array (pure API unchanged)', () => {
+  const vm = makeVm(loadChunk());
+  const ev = vm.deriveNetEvents([s({ t: 1000 }), s({ t: 2000, id: 'B2' })], []);
+  assert.ok(Array.isArray(ev) && ev.length === 1);
+});
