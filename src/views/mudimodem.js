@@ -2074,7 +2074,7 @@ module.exports = {
       }
     } else if (this.tab === "at") {
       if (this.consoleComp) {
-        panel = h(this.consoleComp, { props: { cell: { slot: this.activeSlot, carrier: this.servingCarrier } } });
+        panel = h(this.consoleComp, { props: { cell: { slot: this.activeSlot, carrier: this.servingCarrier, modem: this.modemName() } } });
       } else {
         panel = h("div", { staticClass: "mm-card" }, [h("div", { staticClass: "mm-soon" },
           this.consoleErr ? "Couldn't load the AT console: " + this.consoleErr

@@ -548,7 +548,8 @@ router and searchable. It's a differentiator no router UI has.
 - The dev box now has `lua5.1` + `lua-cjson`: every `test/backend-*.test.lua` isolation test runs
   locally (set `MM_PLUGIN=$PWD/src/rpc/mudimodem` + the temp-path env vars; see verify.sh 6/6b).
   **`tools/test-local.sh` runs every suite** (Python, Node, Lua, sh under dash AND busybox ash,
-  shellcheck). With `MM_ROOTFS=<extracted 4.10 rootfs>` and `qemu-user-static` it ALSO runs the
+  shellcheck). With the extracted 4.10 rootfs at `firmware/rootfs/` (gitignored; the default —
+  or `MM_ROOTFS=<dir>`) and `qemu-user-static` it ALSO runs the
   Lua tests under the **router's own `/usr/bin/lua` + `cjson.so`** (`qemu-aarch64-static -L
   $MM_ROOTFS …` — qemu redirects absolute paths that exist under the rootfs, so `require
   "cjson"` loads GL's build). That pass is the one that matters, because the two Luas differ:

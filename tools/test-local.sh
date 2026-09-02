@@ -41,6 +41,8 @@ for f in test/backend-*.test.lua test/ws-seed.test.lua; do
     *backend-history.test.lua|*backend-battery-history*) echo "XFAIL $f on host cjson (no empty_array) — see router pass"; continue;; esac
   run "$f" lua5.1 "$f"
 done
+# Default to the extracted image under firmware/rootfs (gitignored; see firmware/README.md).
+[ -z "${MM_ROOTFS:-}" ] && [ -x firmware/rootfs/usr/bin/lua ] && MM_ROOTFS=firmware/rootfs
 if [ -n "${MM_ROOTFS:-}" ] && command -v qemu-aarch64-static >/dev/null && [ -x "$MM_ROOTFS/usr/bin/lua" ]; then
   echo "== lua (ROUTER lua via qemu, rootfs $MM_ROOTFS) =="
   unset LUA_PATH

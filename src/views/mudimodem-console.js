@@ -423,7 +423,7 @@ module.exports = {
     // ---- caution banner + risk gate ----
     var banner = h("div", { staticClass: "mmc-caution" }, [
       h("b", "Sharp edge."),
-      h("span", "Commands go straight to the RG650V-NA. Nothing is validated. " +
+      h("span", "Commands go straight to the " + ((this.cell && this.cell.modem) || "modem") + ". Nothing is validated. " +
         "Entries marked nv write modem memory that survives a factory reset."),
       h("label", { staticClass: "mmc-gate" }, [
         h("input", {
