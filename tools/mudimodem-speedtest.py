@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """MudiModem's speed test runner — curl-based download/upload/latency test
 over a chosen outbound interface, with a signal/carrier/tower snapshot taken
-immediately before the test.
+immediately before the test (from mudimodem-collectd's latest.json when it is
+fresh — a speed test must not add AT traffic of its own on GL 4.10, where
+`cell_info` executes QENG/QCAINFO).
 
 Stdlib + curl subprocess only (matches mudimodem-at.py's footing: no pip, no
 compiled deps). Deployed standalone to /usr/lib/mudimodem/mudimodem-speedtest.py
@@ -76,106 +78,68 @@ def latency_stats(samples):
     return round(median * 1000), round((vals[-1] - vals[0]) * 1000)
 
 
-def _first(*vals):
-    for v in vals:
-        if v is not None and v != "":
-            return v
-    return None
+LATEST_PATH = os.environ.get("MUDIMODEM_LATEST", "/tmp/mudimodem/latest.json")
+LATEST_MAX_AGE_S = float(os.environ.get("MUDIMODEM_LATEST_MAX_AGE", "30"))
+BUS = os.environ.get("MUDIMODEM_BUS", "cpu")
+
+_HERE = os.path.dirname(os.path.abspath(globals().get("__file__") or sys.argv[0] or "."))
+for _d in ("/usr/lib/mudimodem", os.path.join(_HERE, "..", "src", "lib")):
+    if os.path.isdir(_d) and _d not in sys.path:
+        sys.path.insert(0, _d)
+import cellular_compat as cc  # noqa: E402
+
+SNAP_KEYS = ("slot", "carrier", "band", "mode", "cell_id", "rsrp", "sinr", "rsrq",
+             "pci", "tx_channel", "signals")
 
 
-def _as_slot(slot):
+def snapshot_from_sample(sample):
+    """Reduce one collectd sample (cellular_compat schema) to the result
+    metadata we persist per test."""
+    if not isinstance(sample, dict) or sample.get("slot") is None:
+        return {}
+    out = {k: sample.get(k) for k in SNAP_KEYS if k in sample}
+    out["cell_id"] = sample.get("cell_id", sample.get("id"))
+    return out
+
+
+def read_latest(path=None, max_age_s=None, now=None):
+    """The collector's latest.json when it is fresh (< max_age_s), else None.
+    Reusing it means a speed test adds NO extra AT traffic of its own."""
+    path = LATEST_PATH if path is None else path
+    max_age_s = LATEST_MAX_AGE_S if max_age_s is None else max_age_s
     try:
-        return int(slot)
-    except (TypeError, ValueError):
-        return slot
+        with open(path) as f:
+            obj = json.load(f)
+    except (OSError, ValueError):
+        return None
+    t = obj.get("t") if isinstance(obj, dict) else None
+    if not isinstance(t, (int, float)):
+        return None
+    now = time.time() if now is None else now
+    if now - t / 1000.0 > max_age_s:
+        return None
+    return obj
 
 
-def _modem_obj(modem):
-    """Unwrap 4.8 {modems:[...]} or return 4.10's already-flat object."""
-    if not isinstance(modem, dict):
-        return {}
-    if "modems" in modem:
-        mods = modem.get("modems") or []
-        return mods[0] if mods else {}
-    return modem
-
-
-def _is_cell_info_payload(net):
-    return isinstance(net, dict) and ("signal" in net or "cell_id" in net)
-
-
-def build_snapshot(modem, net, sims):
-    """Signal/carrier/tower snapshot for the active slot -- the same three
-    ubus reads mudimodem-collectd uses (cellular.modem status / cellular.
-    network info-or-cell_info / cellular.sim status), independently
-    implemented here since each deployed MudiModem script is self-contained
-    (mirrors mudimodem-at.py / mudimodem-collectd, neither of which share
-    code either). {} if the active slot can't be resolved.
-
-    Accepts both firmware 4.8 (modems[] + networks[].cell_info) and 4.10
-    (flat modem + cell_info.signal[]) shapes — issue #5.
-    """
-    m = _modem_obj(modem)
-    slot = m.get("current_sim_slot")
-    if slot is None:
-        return {}
-    cell, extras = {}, {}
-    net = net or {}
-    if _is_cell_info_payload(net):
-        sigs = net.get("signal") or []
-        cell = sigs[0] if sigs else {}
-        extras = {
-            "id": _first(net.get("cell_id"), cell.get("id")),
-            "mode": _first(cell.get("mode"), cell.get("network_type"),
-                           net.get("network_type")),
-        }
-    else:
-        for n in net.get("networks") or []:
-            if str(n.get("slot")) == str(slot):
-                cell = n.get("cell_info") or {}
-                break
-    carrier = ""
-    for s in (sims or {}).get("sims") or []:
-        if str(s.get("slot")) == str(slot):
-            carrier = s.get("carrier") or ""
-            break
-
-    def num(v):
-        if v is None or v == "":
-            return None
-        try:
-            f = float(v)
-        except (ValueError, TypeError):
-            return None
-        return int(f) if f == int(f) else f
-
-    mode = extras.get("mode", cell.get("mode"))
-    if mode is not None and not isinstance(mode, str):
-        mode = str(mode)
-    return {
-        "slot": slot, "carrier": carrier, "band": cell.get("band"),
-        "mode": mode, "cell_id": extras.get("id", cell.get("id")),
-        "rsrp": num(cell.get("rsrp")), "sinr": num(cell.get("sinr")), "rsrq": num(cell.get("rsrq")),
-    }
+def build_snapshot(modem, cell_info, networks_info=None):
+    """Direct-read fallback: cellular_compat.build_sample over the same 4.10
+    ubus payloads collectd uses. {} if the active slot can't be resolved."""
+    s = cc.build_sample(modem, cell_info, networks_info, bus=BUS)
+    return snapshot_from_sample(s) if s else {}
 
 
 def load_snapshot():
-    """The three ubus reads + 4.10 cell_info fallback, then build_snapshot."""
+    """Prefer the collector's fresh latest.json (zero modem traffic); only when
+    it is stale/absent do the 4.10 reads ourselves (one AT-backed cell_info)."""
+    latest = read_latest()
+    if latest is not None:
+        return snapshot_from_sample(latest)
     modem = ubus_call("cellular.modem", "status")
-    if not modem:
+    slot = cc.active_slot(modem, BUS)
+    if slot is None:
         return {}
-    m = _modem_obj(modem)
-    bus = m.get("bus")
-    slot = m.get("current_sim_slot")
-    net = None
-    if slot is not None:
-        args = {"slot": _as_slot(slot)}
-        if bus is not None:
-            args["bus"] = bus
-        net = ubus_call("cellular.network", "cell_info", args)
-    if not _is_cell_info_payload(net):
-        net = ubus_call("cellular.network", "info")
-    return build_snapshot(modem, net, ubus_call("cellular.sim", "status"))
+    cell = ubus_call("cellular.network", "cell_info", {"bus": BUS, "slot": slot})
+    return build_snapshot(modem, cell, ubus_call("cellular.network", "info"))
 
 
 def ubus_call(obj, method, args=None):

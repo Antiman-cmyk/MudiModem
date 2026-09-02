@@ -1,6 +1,8 @@
 -- Isolation test for get_lock. Shims oui.ubus (canned AT replies incl. a
 -- crossed-reply round) and ngx.location.capture (canned glc bodies). No box.
--- Env (set by runner): MM_PLUGIN, MUDIMODEM_PENDING, MUDIMODEM_ARMED, MUDIMODEM_STALE
+-- Env (set by runner): MM_PLUGIN, MUDIMODEM_PENDING, MUDIMODEM_ARMED, MUDIMODEM_STALE,
+-- MUDIMODEM_LATEST (point at a missing file so the QENG path is exercised; the
+-- last scenario points it at a fresh collector sample instead).
 
 local at_log, at_replies = {}, {}
 package.loaded["oui.ubus"] = {
@@ -23,9 +25,9 @@ package.loaded["oui.ubus"] = {
       end
       return { data = "\r\nOK\r\n" }
     elseif object == "cellular.modem" and method == "status" then
-      return { modems = { { bus = "cpu", current_sim_slot = "1" } } }
+      return { modems = { { bus = "cpu", current_sim_slot = 1 } } }   -- GL's no-arg modems[] form
     elseif object == "cellular.sim" and method == "info" then
-      return { sims = { { slot = "1", mcc = "310", mnc = "260" } } }
+      return { sims = { { slot = 1, mcc = "310", mnc = "260" } } }
     end
     return {}
   end
@@ -177,5 +179,75 @@ r = M.get_lock({})
 assert(r.lock.l4g.locked == false and r.lock.l5g.locked == false, "modem must be unlocked")
 assert(r.gl.locked == false, "GL store must show unlocked")
 assert(r.stale == false, "gl_locked=false + modem unlocked must not be stale")
+
+-- 7. A FRESH collector sample (latest.json < 30 s) replaces the QENG read:
+--    the serving cell comes from it and no AT+QENG is spent.
+local latest = os.getenv("MUDIMODEM_LATEST")
+if latest then
+  local lf = io.open(latest, "w")
+  lf:write(string.format('{"t":%d,"slot":1,"rat":"NR5G-SA","mode":"NR5G-SA","cell_id":"DE017C015","id":"DE017C015","pci":142,"tx_channel":627264,"band":78,"rsrp":-94}', os.time() * 1000))
+  lf:close()
+  package.loaded["oui.ubus"].call = base_ubus_call
+  at_log = {}; at_replies = {}
+  r = M.get_lock({})
+  assert(r.serving and r.serving.source == "collector", "fresh latest.json must feed the serving cell")
+  assert(r.serving.pci == 142 and r.serving.arfcn == 627264 and r.serving.band == 78 and r.serving.rat == "NR5G-SA")
+  for _, c in ipairs(at_log) do assert(not c:find("QENG"), "must not spend a QENG read when the collector is fresh") end
+  os.remove(latest)
+
+  -- 7b. A fresh NO-SERVICE sample is written with "pci": null / "tx_channel":
+  --     null. cjson.null is a truthy userdata: the shortcut must NOT take it
+  --     as a PCI — it falls back to the QENG read and never returns nulls.
+  lf = io.open(latest, "w")
+  lf:write(string.format('{"t":%d,"slot":1,"rat":null,"mode":null,"cell_id":null,"id":null,"pci":null,"tx_channel":null,"band":null,"rsrp":null,"signals":[]}', os.time() * 1000))
+  lf:close()
+  at_log = {}; at_replies = {}
+  r = M.get_lock({})
+  assert(r.serving and r.serving.source ~= "collector", "a null-valued sample must not be presented as the serving cell")
+  assert(r.serving.pci == 516 and r.serving.rat == "NR5G-SA", "must fall back to the QENG serving cell")
+  local spent_qeng = false
+  for _, c in ipairs(at_log) do if c:find("QENG") then spent_qeng = true end end
+  assert(spent_qeng, "the QENG fallback must run when the collector sample is null")
+
+  -- 7c. NSA: the flattened aliases are the LTE ANCHOR (B3 / 1700) while rat is
+  --     NR5G-NSA. The lock target must be the NR leg, taken from signals[].
+  lf = io.open(latest, "w")
+  lf:write(string.format('{"t":%d,"slot":1,"rat":"NR5G-NSA","mode":"NR5G-NSA","pcc_rat":"LTE","cell_id":"DF30C","id":"DF30C","pci":61,"tx_channel":1700,"band":3,"rsrp":-97,'
+    .. '"signals":[{"role":"PCC","rat":"LTE","network_type":4,"band":3,"earfcn":1700,"pci":61},{"role":"SCC1","rat":"NR5G-NSA","network_type":51,"band":78,"earfcn":627264,"pci":142}]}', os.time() * 1000))
+  lf:close()
+  at_log = {}; at_replies = {}
+  r = M.get_lock({})
+  assert(r.serving.source == "collector" and r.serving.rat == "NR5G-NSA", "NSA sample with an NR row must feed the serving cell")
+  assert(r.serving.pci == 142 and r.serving.arfcn == 627264 and r.serving.band == 78,
+         "NSA lock target must be the NR leg, not the LTE anchor (got pci " .. tostring(r.serving.pci) .. ")")
+
+  -- 7d. NSA sample with ONLY the anchor row (the issue-#5 shape): decline the
+  --     shortcut and let QENG answer (its parser prefers the NR5G-NSA line).
+  lf = io.open(latest, "w")
+  lf:write(string.format('{"t":%d,"slot":1,"rat":"NR5G-NSA","mode":"NR5G-NSA","pcc_rat":"LTE","cell_id":"DF30C","id":"DF30C","pci":61,"tx_channel":1700,"band":3,'
+    .. '"signals":[{"role":"PCC","rat":"LTE","network_type":4,"band":3,"earfcn":1700,"pci":61}]}', os.time() * 1000))
+  lf:close()
+  at_log = {}; at_replies = {}
+  r = M.get_lock({})
+  assert(r.serving.source ~= "collector", "an anchor-only NSA sample must not become a 5G lock target")
+  spent_qeng = false
+  for _, c in ipairs(at_log) do if c:find("QENG") then spent_qeng = true end end
+  assert(spent_qeng, "QENG must answer for an anchor-only NSA sample")
+  os.remove(latest)
+end
+
+-- 8. No active slot (modem resetting / no SIM): get_lock refuses like every
+--    other resolve_active() caller instead of reading the fallback sub_id.
+package.loaded["oui.ubus"].call = (function(orig)
+  return function(o, m, p)
+    if o == "cellular.modem" and m == "status" then return { modems = { { bus = "cpu" } } } end
+    return orig(o, m, p)
+  end
+end)(base_ubus_call)
+at_log = {}; at_replies = {}
+r = M.get_lock({})
+assert(r.error and r.error:find("no active SIM"), "get_lock must refuse without a slot; got " .. tostring(r.error))
+for _, c in ipairs(at_log) do assert(not c:find("QNWLOCK") and not c:find("QENG"), "no lock/serving AT reads without a slot: " .. c) end
+package.loaded["oui.ubus"].call = base_ubus_call
 
 print("backend-lock.test.lua: all ok")

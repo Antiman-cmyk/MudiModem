@@ -595,3 +595,74 @@ test('an overlapping fetch is skipped, and a range request made during one runs 
     assert.strictEqual(ax.calls[1].window_ms, 1440 * 60000, 'and it is the 24h window');
   } finally { delete global.window; }
 });
+
+// ---- 2.x: live data arrives as pushes over GL's ws bus, not by polling ----
+test('onPush appends a collector sample, advances lastT, dedups replays', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  vm.samples = [{ t: 1000, rsrp: -100, slot: 1, id: 'A' }]; vm.lastT = 1000;
+  vm.onPush({ t: 11000, rsrp: -97, slot: 1, id: 'A' });
+  assert.strictEqual(vm.samples.length, 2);
+  assert.strictEqual(vm.lastT, 11000);
+  assert.strictEqual(vm.serverNow, 11000, 'box clock reference follows the pushed stamp');
+  vm.onPush({ t: 11000, rsrp: -97, slot: 1, id: 'A' });
+  assert.strictEqual(vm.samples.length, 2, 'seed replay ignored');
+  vm.onPush(null); vm.onPush({});
+  assert.strictEqual(vm.samples.length, 2, 'empty frames ignored');
+});
+
+test('onEventPush appends a user/watchdog event once', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  vm.events = [];
+  vm.onEventPush({ t: 5000, kind: 'user', label: 'Kept', detail: '' });
+  vm.onEventPush({ t: 5000, kind: 'user', label: 'Kept', detail: '' });
+  assert.strictEqual(vm.events.length, 1);
+  assert.strictEqual(vm.events[0].label, 'Kept');
+});
+
+test('mounted() installs a stall guard, never a 10 s poll', () => {
+  const c = loadChunk();
+  const src = String(c.mounted);
+  assert.ok(!/10000/.test(src), 'no 10 s interval');
+  assert.ok(/pushSeenAt/.test(src), 'stall guard keyed on the last push');
+});
+
+
+// ---- 2.0.0 review fixes (2026-09-02) ----
+
+test('deriveNetEvents: a CA add/drop (network_type 4 <-> 41) on the same cell is NOT a handover', () => {
+  const vm = makeVm(loadChunk());
+  const base = { t: 1000, slot: '1', id: 'A1', band: 66, pci: 12, tx_channel: 66886, mode: 'LTE', network_type: 4 };
+  const ev = vm.deriveNetEvents([
+    Object.assign({}, base),
+    Object.assign({}, base, { t: 2000, network_type: 41, mode: 'LTE+' }),
+    Object.assign({}, base, { t: 3000, network_type: 4, mode: 'LTE' })
+  ], []);
+  assert.deepStrictEqual(ev, [], 'same id/band/pci/earfcn: CA only');
+  // a real RAT change on the same cell id still signs differently
+  const ev2 = vm.deriveNetEvents([Object.assign({}, base), Object.assign({}, base, { t: 2000, network_type: 51, mode: 'NR5G-NSA' })], []);
+  assert.strictEqual(ev2.length, 1);
+});
+
+test('deriveNetEvents: a failover followed by not-yet-registered samples emits exactly ONE Failover', () => {
+  const vm = makeVm(loadChunk());
+  const ev = vm.deriveNetEvents([
+    s({ t: 1000, slot: '1', id: 'A' }),
+    s({ t: 11000, slot: '2', id: null, band: null, carrier: 'AT&T' }),
+    s({ t: 21000, slot: '2', id: null, band: null, carrier: 'AT&T' }),
+    s({ t: 31000, slot: '2', id: null, band: null, carrier: 'AT&T' }),
+    s({ t: 41000, slot: '2', id: 'B', band: 12, carrier: 'AT&T' })
+  ], []);
+  const fo = ev.filter((e) => e.label === 'Failover');
+  assert.strictEqual(fo.length, 1, 'one slot change, one event (got ' + ev.length + ')');
+  assert.strictEqual(fo[0].t, 11000);
+  assert.ok(!ev.some((e) => e.label === 'Handover'), 'registering on the new SIM is not a handover from the old one');
+});
+
+test('pushedEvent is watched deep (same-second events share a whole-second t)', () => {
+  const c = loadChunk();
+  const w = c.watch.pushedEvent;
+  assert.ok(w && w.deep === true && typeof w.handler === 'function', 'deep watcher on the event object');
+  assert.ok(!c.watch['pushedEvent.t'], 'the .t watcher would miss a second event in the same second');
+});

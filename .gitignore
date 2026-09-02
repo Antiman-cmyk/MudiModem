@@ -9,3 +9,9 @@ docs/*.pdf
 # Python bytecode
 __pycache__/
 *.pyc
+
+# GL firmware images kept locally for analysis — never commit (hundreds of MB).
+# Drop them under firmware/ (see firmware/README.md); only that README is tracked.
+firmware/*
+!firmware/README.md
+*.img

@@ -1,21 +1,66 @@
 # MudiModem — modem control panel inside the GL-E5800 "Mudi" web admin
 
 **Goal:** a community add-on that installs a **Modem** page into the Mudi's stock GL web admin —
-band lock, cell lock, live diagnostics, raw AT console, SIM/APN, and a community **AT command
+band lock, cell lock, live diagnostics, raw AT console, and a community **AT command
 library**. It adds a page *alongside* GL's own; it patches nothing.
 
-Sibling project: **`../MudiUI`** (front-LCD renderer). Different surface, same box. MudiUI's
+Sibling project: **`../MudiUI`** (a separate front-panel add-on — nothing of it ships here). Its
 `CLAUDE.md` is the reference for **modem/AT/ubus knowledge** (its §6 data sources, §7 band+cell
 lock) — don't re-derive it here.
 
-Everything below was reverse-engineered from the live device (2026-07-16 / **-07-17**). **Trust the
-box over this doc if they ever disagree** — then fix the doc.
+> ## ⚠️ 2.0.0 (2026-09-02): the code targets **GL firmware 4.10 ONLY** — 4.8 support is gone.
+> The authoritative 4.10 contract is **`docs/cellular-api-4.10.md`** (verified in the official
+> `e5800-4.10.0_release5` image; GL's own files copied under `reference/4.10/`). Design + merge
+> record: `docs/superpowers/plans/2026-09-02-firmware-4.10-migration-plan.md`; per-feature
+> audit: `docs/superpowers/specs/2026-09-02-4.10-feature-dependency-audit.md`. **Where a section
+> below says "4.8" or contradicts the contract doc, the contract doc wins.** The 4.10 deltas that
+> reshaped the code:
+> - **`/ws` is a push bus.** Only `cellular.modems_info` / `modems_status` (merged `simcard[]`) /
+>   `networks_info` (merged identity) exist; `sims_*`/`networks_status` are dead. Our collector
+>   publishes its own `mudimodem.collect` frames via `ubus call gl-session notify` (seeded by
+>   `/usr/share/gl-ngx/websocket/mudimodem.lua`) — the page never polls for live RF.
+> - **`cellular.network cell_info {bus,slot}` executes QENG/QCAINFO per call** — collectd samples
+>   at 10 s (was 4 s) and everything else reuses its `latest.json`; `signals[]` carries CA.
+> - **Bands go through GL's per-slot `modem.get/set_band_config`** (via glc): single write,
+>   fail-closed, durable by construction; the watchdog restores the `get_band_config` snapshot;
+>   panic = `band_enable:false` + AUTO. `get/set_feature_config`, Path-B and `gl-stale` are gone.
+> - **`gl_modem` is not a daemon on 4.10** (`cellular_manager` → `modem_AT` polls); the AT tool
+>   signals nothing. `/dev/at_mdm0` + `port-bridge` unchanged.
+> - **busybox has no `pkill`** (`pgrep` + `kill`). Detached children go through
+>   `/usr/lib/mudimodem/mudimodem-detach` (nginx fds closed).
+> - **No LCD anything.** The 1.x front-LCD renderer (vendored MudiUI, LCD Display tab,
+>   `get/set_lcd`, `collectd.sock`) was REMOVED in 2.0.0 and nothing LCD-related remains in
+>   the tree; GL 4.10 ships its own Display Management page. `install.sh` and `uninstall.sh`
+>   both purge a 1.x renderer left on the box (stop + disable `mudi`/`mudi-watch`, delete the
+>   files, de-register them from sysupgrade.conf, hand the panel back to `gl_screen`).
+> - **Scope rule (owner, 2026-09-02): ship only what stock 4.10 lacks or does incompletely.**
+>   The SIM/APN tab is gone (GL's Internet page has it all); the lock tab's scan card stays
+>   (it feeds our confirm-or-revert lock — the stock scan can only lock without a safety net).
+> - **`gl-stale` is gone for real:** `get_lock`'s `stale` is derived live (GL's store locked
+>   while the modem is not); no marker file, no `MUDIMODEM_STALE`.
+> - **One data path, no polling:** collectd → `latest.json`/`battery-latest.json` + jsonl →
+>   `gl-session notify` frames `mudimodem.collect` / `.battery` / `.event` (backend + watchdog
+>   push events too) → the SPA store → `cellModel()` in the main chunk (the ONLY reader of GL's
+>   sockets; child tabs get props). `get_history`/`get_battery_history` are preload/backfill only;
+>   charts keep a stall guard, not a poll. `cellular.modem status/info` are always the no-arg
+>   `modems[]` form (GL's own parsers); sub_id resolution is cached per worker.
+> - Shared Python shapes live in `src/lib/cellular_compat.py` (collectd, speedtest).
+> - install/deploy/verify enforce `/etc/glversion >= 4.10`; 4.8 users pin `legacy-4.8`.
+> - Settled from the image, not the box (contract doc §6): `network_type` enum (5=SA, 51=NSA,
+>   41=4G+ — GL's own `getNetworkType` map has 5/51 swapped, ignore it), backlight stays
+>   `soc:backlight` (DTB), the 4.10 OTA's NA baseband is the SAME `RG650VNA01ACR02A04G8G`,
+>   charger/gauge DT nodes unchanged, `set_band_config` writes the module immediately, and
+>   `get/set_band_config` are C functions behind `glc` (no dotted ubus object exists — glc stays).
+>   Method + tools: `reference/4.10/re-notes.md`.
 
-## Working agreements (inherited from MudiUI — they still apply)
+Everything below was reverse-engineered from the live device (2026-07-16 / **-07-17**, GL 4.8.5)
+and updated for 4.10 where marked. **Trust the box over this doc if they ever disagree** — then fix
+the doc.
+
+## Working agreements
 - **Deploy transfer:** the box has **no sftp-server**, so `scp` fails — use `ssh host 'cat > /path' < file`.
 - **Keep the real router IP out of this repo** (it's public). Use `<router-ip>` in docs.
-- MudiModem never touches `/dev/fb0` — no interaction with gl_screen or MudiUI. The two add-ons
-  are independent and can be installed separately.
+- MudiModem never touches `/dev/fb0` or GL's `gl_screen` — the front panel is GL's.
 
 ## 1. Device access
 - **SSH:** `ssh root@mudi` (hostname alias; key auth). BusyBox `ash`.
@@ -48,8 +93,7 @@ GL's admin is an **oui**-framework Vue SPA (lineage: `github.com/zhaojh329/oui`)
 | RPC/WS endpoints | `/rpc`, `/ws`, `/upload`, `/download` → `/usr/share/gl-ngx/oui-*.lua` |
 
 **Pages are dynamically loaded, not compiled in.** Adding one = drop a chunk + a menu JSON. No
-rebuild of GL's app, no closed binary in the way. This is the opposite of the `gl_screen` dead end
-that shaped MudiUI.
+rebuild of GL's app, no closed binary in the way.
 
 Menu JSON is tiny — the entire `modemsignallog.json` is:
 ```json
@@ -82,6 +126,8 @@ all resolve there. Useful ones GL ships but never puts in the nav: **`modem`** (
 `monitor-waveform-regular-full`, `radar-regular-full`.
 
 ### ⭐ `global_sockets` — the read path, and why our backend is barely needed
+**(4.10: only three cellular names exist plus our own `mudimodem.collect` — see the header and
+`docs/cellular-api-4.10.md`; the six-name list below is the 4.8 history.)**
 A menu entry may declare `global_sockets`, and the SPA subscribes over **`/ws`**, pushing each named
 ubus object into the `statusMap` Vuex store. Read it in a component with the **`moduleStatus(name)`**
 getter (`...mapGetters(["moduleStatus"])`).
@@ -165,11 +211,9 @@ return { get_config = function(args) ... end, set_config = function(args) ... en
 | `/usr/lib/mudimodem/mudimodem-at.py` | our own AT channel on `/dev/at_mdm0` (§7a); backend spawns it |
 | `/www/views/gl-sdk4-ui-mudimodem-console.common.js.gz` | the AT-console tab chunk (lazy-loaded) |
 | **`/usr/share/gl-validator.d/mudimodem.lua`** | **arg validator — REQUIRED for the AT console (§3), not optional** |
-| `/usr/bin/mudi.py` | vendored MudiUI front-LCD renderer (§12, 2026-07-24 merge); **default off** |
-| `/usr/bin/mudi-watch.py` | long-press panel-toggle watcher (swaps MudiUI ↔ gl_screen); **default off** |
-| `/etc/init.d/mudi` | procd service for the LCD renderer; **default off** |
-| `/etc/init.d/mudi-watch` | procd service for the LCD watchdog; **default off** |
-| `/etc/config/mudi` | UCI config for the LCD renderer (enabled, brightness, screen_timeout, default_page) |
+| `/usr/lib/mudimodem/cellular_compat.py` | the ONE place Python knows GL 4.10's cellular shapes (collectd + speedtest) |
+| `/usr/lib/mudimodem/mudimodem-detach` | fd-closing wrapper every detached child (watchdog, speedtest, self-update) goes through |
+| `/usr/share/gl-ngx/websocket/mudimodem.lua` | `/ws` seed module: `mudimodem.collect` (flagged `stale`+`age_s` when >60 s old) / `.battery` / `.event` |
 | `/www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz` | Battery tab chunk: 4-lane history chart + charge-limit form (§12, 2026-07-27) |
 
 ⚠️ **The validator is NOT optional once a method takes free-form input.** oui applies a **default
@@ -185,8 +229,7 @@ stub-vs-real-path trap as the `pcall` cosocket bug (§8).
 
 **Frontend decision: native oui view, hand-written, no toolchain.** The chunk is a webpack UMD
 bundle exporting a Vue component (GL's are ~41 KB, core-js polyfills included). We hand-write plain
-JS exporting a Vue options object — keeping this repo toolchain-free, in MudiUI's "plain Python, no
-C" spirit.
+JS exporting a Vue options object — keeping this repo toolchain-free ("plain Python, no C").
 ✅ **Template compiler — RESOLVED (Phase 0): ABSENT. The bundle is Vue 2.6.12 runtime-only.**
 So **`template:` is forbidden — use `render(h)`.** (Evidence: zero occurrences of `{{` in the
 1.9 MB bundle. A full build necessarily contains Vue's own `defaultTagRE = /\{\{...\}\}/g`, so its
@@ -317,6 +360,8 @@ never shows that policy permits 6.
   read dropped 4 AT round-trips (get_bands ~0.04s stable). **policy + capability stay on raw AT**
   (AT-only) — keep the AT count minimal.
 
+✅ **DURABILITY GAP — CLOSED in 2.0.0:** `set_bands` writes GL's own per-slot `set_band_config`,
+so `cellular_manager` re-applies OUR value on restart. The paragraph below is 4.8 history.
 ⚠️⚠️ **DURABILITY GAP (2026-07-17) — raw-AT band writes revert on `cellular_manager` restart.**
 GL's `cellular_manager` **re-applies its stored config to the modem on (re)start**, overwriting raw-AT
 changes. Verified: an experiment-set `nr5g_band=25:41:48:66:77` reset to **`71`** (GL's stored value)
@@ -473,7 +518,8 @@ router and searchable. It's a differentiator no router UI has.
 - **`verified: []` + `source` are load-bearing** — an unverified community command must render as
   "*nobody yet*", not hide. Keeps the library from becoming a folk-remedy collection. AT is
   vendor- *and* firmware-specific; `AT+QNWPREFCFG` is Quectel-only.
-- ⭐ **Transport: our own AT channel, not GL's `modem.CPU.AT`.** GL's channel (`/dev/smd9`) crosses
+- ⭐ **Transport: our own AT channel, not GL's `modem.CPU.AT`.** (4.10: nothing of GL's is
+  SIGSTOPped any more — `gl_modem` no longer exists as a daemon.) GL's channel (`/dev/smd9`) crosses
   responses under heavy polling (reference §10). `/dev/at_mdm0` is a free, world-accessible, separate
   AT port; **`tools/mudimodem-at.py`** (CPython stdlib, no compile, no `pyserial`) drives it cleanly.
   The backend can spawn it per command. ⚠️ It has **no `sub_id`** (active-subscription context only),
@@ -482,9 +528,22 @@ router and searchable. It's a differentiator no router UI has.
 - ✅ Built 2026-07-18 — see §12 and the Phase-3 spec/plan.
 
 ## 8. Dev gotchas
+- **4.10 busybox has no `pkill`** — use `for p in $(pgrep -f …); do kill -HUP $p; done`.
+- **Online install from a fork/branch:** `curl -fsSL "$B/install.sh" | MUDIMODEM_BASE="$B" sh`.
+  install.sh records `base` in `/etc/mudimodem/version.json`; `app_version` and
+  `mudimodem-selfupdate` follow it. **Every default source in this tree is
+  `Antiman-cmyk/MudiModem` (main)** — the owner's repo, not kevinherzig's upstream (still 1.7.0).
+  The community AT library still comes from `kevinherzig/mudi7-at-library`
+  (`tools/mudimodem-lib`, overridable via `/etc/mudimodem/library-url`).
+- **Never spawn a detached child bare from the backend** — `os.execute("… &")` inherits nginx's
+  listening sockets; use `spawn_detached()` → `/usr/lib/mudimodem/mudimodem-detach`.
+- **`cell_info` is an AT call.** Any new reader of RF must consume `latest.json` /
+  `mudimodem.collect`, never call `cellular.network cell_info` itself.
+- The dev box now has `lua5.1` + `lua-cjson`: every `test/backend-*.test.lua` isolation test runs
+  locally (set `MM_PLUGIN=$PWD/src/rpc/mudimodem` + the temp-path env vars; see verify.sh 6/6b).
 - **nginx caches the Lua plugin per worker** (`objects[object]` in `oui/rpc.lua`) → after editing
-  the backend you must **reload nginx** (`/etc/init.d/nginx reload`) or changes won't take. This is
-  the analogue of MudiUI's `/etc/init.d/mudi restart` loop. ⚠️ `reload` (HUP) leaves old workers
+  the backend you must **reload nginx** (`/etc/init.d/nginx reload`) or changes won't take.
+  ⚠️ `reload` (HUP) leaves old workers
   serving drained connections; when a fix must take *now*, use `restart`, not `reload`.
 - ⚠️⚠️ **NEVER wrap `oui.ubus.call` in `pcall`.** It uses an nginx **cosocket**, which *yields* while
   waiting on I/O, and this box's Lua **cannot yield across a C-call boundary** (`pcall` is a C call).
@@ -557,8 +616,8 @@ router and searchable. It's a differentiator no router UI has.
 | **1** | Read-only diagnostics tab | Now **cheaper than planned** — reads come free over `global_sockets` (§2); no backend needed except `policy_band`/`ue_capability_band` (§5a). |
 | **2** | Band grid + cell lock, auto-revert, panic restore | ✅ **2a+2b done** (band read/write/revert). ⏳ cell lock (`QNWLOCK` §6a) + durability (make `set_bands` persist via `modem.set_sim_config`) remain. |
 | **3** | AT console + community library | ✅ done (2026-07-18). Own channel via /usr/lib/mudimodem/mudimodem-at.py; gl_modem slept during sends; library at /www/mudimodem/at-library.json.gz. |
-| **4** | SIM / APN | ✅ **done (2026-07-18)** — two DSDS slot cards (selected≠data made visible), roaming honesty, editable dial profile, slot switch, failover card. **Chunk-only, browser-direct to GL's undotted `modem.*` RPC — zero backend.** Slot switch is `modem.set_slot_failover_config {current_sim}` (verified live 1→2→1), **not** `mvas.switch_sim_slot`. |
-| **LCD merge** | LCD Display tab + consolidated modem reads | ✅ done 2026-07-24 — MudiUI folded into `src/lcd/`; `mudimodem-collectd` is the single reader, pushing over a Unix broadcast socket; new `get_lcd`/`set_lcd` backend; SIGHUP live-reload. |
+| **4** | SIM / APN | ❌ **REMOVED 2026-09-02.** Stock 4.10's Internet page has slot switch, dial/APN profile and failover in full (verified in the shipped chunk) — the rule is to ship only what stock lacks or does incompletely. The DSDS/roaming knowledge below (§12 2026-07-18, §"Session findings") stays as reference; `cellular.modems_status`/`networks_info` are still consumed by the strip. |
+| **2.0.0** | GL 4.10 rewrite; LCD removed | ✅ 2026-09-02 — see the header block. The 1.x LCD renderer is gone; `mudimodem-collectd` is the single modem reader, pushing over `gl-session notify`. |
 
 ## 11. Repo layout
 ```
@@ -571,10 +630,12 @@ MudiModem/
 │   ├── views/mudimodem-battery.js  ← Battery tab chunk (chart + charge-limit form)
 │   ├── menu/mudimodem.json      ← menu registration + global_sockets (level 1, icon "modem")
 │   ├── at-library.snapshot.json ← baked fallback; sources in kevinherzig/mudi7-at-library (§7a)
-│   ├── rpc/mudimodem            ← backend, incl. get_lcd/set_lcd (§12, 2026-07-24 merge)
+│   ├── rpc/mudimodem            ← backend (bands, cell lock, history, console, speedtest, battery, version)
+│   ├── lib/cellular_compat.py   ← GL 4.10 cellular shapes -> normalized sample (collectd + speedtest)
+│   ├── lib/mudimodem-detach     ← detached-child wrapper (closes nginx's fds)
+│   ├── ws/mudimodem.lua         ← /ws seed module (mudimodem.collect/.battery/.event)
 │   ├── sbin/mudimodem-collectd  ← single modem-read daemon; broadcasts over Unix socket + latest.json
-│   └── lcd/                     ← vendored MudiUI front-LCD renderer (mudi.py, mudi-watch.py,
-│                                    mudi.init, mudi-watch.init, mudi.config); default off
+│   └── sbin/mudimodem-revert    ← confirm-or-revert watchdog + ssh panic restore
 ├── tools/
 │   ├── build.sh                 ← "build" = gzip to gl-sdk4-ui-mudimodem.common.js.gz
 │   ├── deploy.sh                ← model-guarded push over ssh `cat` (no scp: no sftp-server)
@@ -584,7 +645,7 @@ MudiModem/
 ├── test/battery-chunk.test.js       ← evals the battery chunk; lane domains, reduce, gaps
 ├── test/backend-battery-history.test.lua
 ├── test/test_collectd.py        ← collectd broadcast socket + latest.json test
-├── test/test_lcd.py             ← LCD renderer / get_lcd / set_lcd test
+├── test/ws-seed.test.lua        ← /ws seed module self-test (stale flag); shipped to the box by verify.sh
 ├── build/                       ← generated, gitignored
 ├── docs/
 │   └── Quectel_RG50xQ&RM5xxQ_..._V1.1.1_Preliminary_20201009.pdf  ← ⚠️ 5-SERIES; box is 6-series
@@ -599,6 +660,12 @@ MudiModem/
 ```
 
 ## 12. Current status / open threads
+- ✅ **2.0.0 — GL 4.10 rewrite (2026-09-02).** Everything in the header block. Tests green locally:
+  Python (collectd, test_collectd, speedtest, at-tool, lib, bands-consistency), Node (main
+  121, console 38, tracking 43, battery 92, speedtest 27), Lua isolation (write/lock/lock-write/
+  console/library/battlimit/validator/persist), sh (revert, selfupdate, wiring). **Not yet run on
+  a live 4.10 box** — the plan's Phase 0 checklist (contract doc §6) is the next step; verify.sh
+  steps 0/0b/7 (cadence + normalized latest.json)/8e (modem_AT)/13c/15 are the 4.10 gates.
 - ✅ Recon complete: oui page/menu/rpc mechanism mapped, dot restriction + ACL model understood,
   Lua-plugin backend contract confirmed, four-file architecture + auto-revert designed.
 - ✅ **Phase 0 done (2026-07-16)** — chunk + menu deployed; `tools/verify.sh` green. Unknowns
@@ -655,20 +722,39 @@ MudiModem/
 - ✅ **Battery charge limit (2026-07-22)** — Config tab toggle + GUI % target; ships
   glbattlimit + config-aware hotplug/init; default disabled. Spec:
   docs/superpowers/specs/2026-07-22-battery-charge-limit-design.md
-- ✅ **MudiUI merge — LCD Display tab (2026-07-24)** — sibling **MudiUI** front-LCD renderer folded
-  into this repo under `src/lcd/`, shipped as its own installable, **default-off** add-on. Modem
-  reads are now consolidated: `mudimodem-collectd` polls at 4s, keeps the retention history, and
-  additionally **broadcasts each sample over a Unix socket + writes `latest.json`**; MudiUI's
-  `CellularSource` was rewritten to be a **socket subscriber** instead of its own ubus/AT poller
-  (its other sources — WiFi, battery, ethernet — are untouched). New backend `get_lcd`/`set_lcd`
-  (enabled, brightness, screen_timeout, default_page) in `src/rpc/mudimodem`, with **SIGHUP
-  live-reload** so the renderer picks up config changes without a restart. Spec:
-  `docs/superpowers/specs/2026-07-24-merge-mudiui-lcd-tab-design.md`; plan:
-  `docs/superpowers/plans/2026-07-24-merge-mudiui-lcd-tab.md`.
-- ✅ **LCD single-page + cell-unlock fix + Reset-to-default (2026-07-24)** — front panel now mounts
-  **only the cellular status page** via `lcd_pages(app)` in `src/lcd/mudi.py` (Wifi/System/Eth/Settings
-  page classes stay defined, just not mounted — keeps their tests green). `deploy.sh` grew an LCD
-  block (files only, **default-off**, fb0-gated). **Cell-unlock 5G-only stranding FIXED:**
+- (2026-07-24 LCD merge: REMOVED in 2.0.0 — see the header; no LCD code remains.)
+- ✅ **2.0.0 review fixes (2026-09-02, from `/code-review xhigh`, verified against the 4.10 image).**
+  Watchdog keeps `pending` when BOTH restores fail (event says "Auto-revert FAILED") and parses
+  gl-session's reply for a top-level `error` (jsonfilter, else one-tab grep) instead of a substring;
+  `set_bands` never writes `NR-SA:[]` (an empty stored list is not an allowlist → supported set),
+  keeps filtering OFF on a mode-only apply, refuses NR lists under 4G-only, reports `applied`
+  from the payload, and passes an unrecognised stored `network_mode` through (`mode_raw`,
+  `meta.mode_known`); `cellular_compat` tags an NSA anchor row LTE (`pcc_rat`; GL keys the n/B
+  prefix off the ROW) and keeps PCI 0 / EARFCN 0; `get_lock` has the no-slot guard, launders
+  `cjson.null`, and takes the NR leg from `signals[]` under NSA; write paths refuse an unconfirmed
+  `sub_id` (cache never pins 0); the page checks `res.error` on get_bands/get_lock, preloads the
+  strip via an explicit flag, labels a stale `/ws` seed by age, never sends 5G lists under 4G-only,
+  hides the manual SIM switch while GL's `slot_switch_enable` is on (GL's own UI does — read in
+  the shipped internet chunk; the minimal `{bus,current_sim}` switch payload is GL's own), and
+  renders `null` as "-"; tracking collapses 4↔41 (CA) in the handover signature and emits one
+  Failover per slot change; selfupdate validates `base` with the same charset as `app_version`
+  and passes it by env; deploy/verify use install.sh's numeric firmware compare; deploy.sh's
+  sysupgrade list is checked against install.sh's by `test/test_install_wiring.sh`. REFUTED by
+  the image and left alone: cjson `[]→{}` in revert_now (oui-rpc.lua sets
+  `encode_empty_table_as_object(false)`), the detach fd loop (ash's script fd occupies fd 10),
+  `band_enable` type (libcm_modem.so emits a JSON boolean), per-route `global_sockets`
+  (app.js subscribes the union of every menu entry at ws open).
+  Follow-up (same day): the cell-lock `revert_now` now runs the watchdog's own
+  `mudimodem-revert restore-now` synchronously (ONE modem-side restore implementation; the GL
+  store reconcile is the shared Lua `gl_unlock`); the bands revert stays in-process on purpose
+  (an nginx worker must not wait on gl-session→/rpc→another worker, and a manual revert must
+  not fall to the open-state fallback). `get_bands {light:1}` returns config+mode+lock with
+  ZERO AT — what the page refetches after a cell-lock action instead of the full model
+  (`light` is a number: oui's `valid_rpc_args` pattern-matches strings only, numbers/booleans
+  pass — read in reference/4.10/oui-lib-rpc.lua; verify.sh 14b round-trips it). panic's per-slot
+  GL unlock passes the stored tower fields back (`gl_unlock_slot`, jsonfilter; minimal payload
+  without it), mirroring the backend's `gl_unlock`. All sh tests also run under `busybox sh`.
+- ✅ **Cell-unlock fix + Reset-to-default (2026-07-24).** **Cell-unlock 5G-only stranding FIXED:**
   `clear_cell_lock` now issues `mode_pref=AUTO` + `nr5g_disable_mode=0` + `save_ctrl=0,0` after GL's
   unlock. Root cause: a GL cell lock is *two* changes — `QNWLOCK` + a `mode_pref=NR5G` side-effect —
   and the three unlock paths were asymmetric (only `revert_now`/watchdog restored mode; the Unlock
@@ -751,7 +837,7 @@ MudiModem/
   fields degrade to `idle`, never to a confident `full`/`blocked`.
   Spec: `docs/superpowers/specs/2026-07-27-battery-tab-history-design.md`;
   plan: `docs/superpowers/plans/2026-07-27-battery-tab-history.md`.
-- 🔭 Later: `install.sh`/`uninstall.sh` (device-guarded + idempotent, mirroring MudiUI's); register
+- 🔭 Later: register
   the watchdog `boot-check` in a boot hook; an ipk. (`/etc/sysupgrade.conf` itself is already
   handled by `deploy.sh` — see the corrected bullet below.)
 

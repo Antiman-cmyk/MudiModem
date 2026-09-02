@@ -22,7 +22,7 @@ ngx = { socket = { tcp = function() return { settimeout = function() end, connec
   worker = { id = function() return 0 end, count = function() return 4 end },
   now = function() return os.time() end, time = function() return os.time() end }
 
-local ok, M = pcall(dofile, "/usr/lib/oui-httpd/rpc/mudimodem")
+local ok, M = pcall(dofile, os.getenv("MM_PLUGIN") or "/usr/lib/oui-httpd/rpc/mudimodem")
 assert(ok, "backend failed to load: " .. tostring(M))
 assert(type(M.get_battery_history) == "function", "get_battery_history missing")
 

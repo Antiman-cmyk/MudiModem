@@ -29,7 +29,6 @@ local ALLOWED = { get_bands = true, set_bands = true, confirm = true, revert_now
                   get_speedtest_schedule = true, set_speedtest_schedule = true,
                   app_version = true, device_info = true, self_update = true, update_status = true,
                   get_battlimit = true, set_battlimit = true,
-                  get_lcd = true, set_lcd = true,
                   get_battery_history = true,
                   get_history_persist = true, set_history_persist = true }
 for k, v in pairs(M) do
@@ -52,7 +51,10 @@ for _, g in ipairs({ "sa", "nsa", "LTE" }) do
 end
 
 -- Live sanity: this modem supports 5G SA, and SA support must be non-trivial.
-assert(#r.supported.sa >= 5, "expected the RG650V-NA to support many SA bands, got " .. #r.supported.sa)
+assert(#r.supported.sa >= 5, "expected the RG650V to support many SA bands, got " .. #r.supported.sa)
+-- 4.10: config comes from GL's per-slot store, so it carries the mode + enable flag.
+assert(type(r.config.enable) == "boolean", "config.enable must be a boolean (get_band_config.band_enable)")
+assert(r.meta.slot ~= nil, "meta.slot missing (resolve_active must find the active slot)")
 
 -- sub_id must be resolved to a concrete value (never left nil). When the active
 -- SIM is registered, resolution is by PLMN match; when it is deregistered (a
@@ -74,10 +76,9 @@ for _, g in ipairs({ "sa", "nsa", "LTE" }) do
   end
 end
 
--- meta.mode must reflect the modem's AUTHORITATIVE mode_pref (AT), not GL's
--- duplicate/stale network_mode field. get_feature_config returns network_mode
--- twice; the ubus->lua flatten keeps the trailing one, which can read "AUTO"
--- while the modem is genuinely NR5G. Read mode_pref independently and compare.
+-- meta.mode is GL's per-slot network_mode (get_band_config). On 4.10 GL owns
+-- the mode, so it must agree with the modem's mode_pref (AT) — a disagreement
+-- means GL's store and the modem have drifted (the thing 2.x was built to end).
 assert(r.meta.mode ~= nil, "meta.mode missing")
 local mp = conn:call("modem.CPU.AT", "get_result_AT",
   { cmd = 'AT+QNWPREFCFG="mode_pref"', timeout = 6, sub_id = r.meta.sub_id })
@@ -93,7 +94,7 @@ assert(r.meta.mode == norm(want),
   tostring(want) .. ") - the duplicate network_mode key trap")
 
 -- meta.lock: always a table with a boolean 'active'; when active it carries the
--- locked cell's RAT + pci + freq (from get_feature_config.tower). This is what
+-- locked cell's RAT + pci + freq (from modem.get_cell_tower). This is what
 -- the Bands tab uses to warn/block on a network-type lock conflict.
 assert(type(r.meta.lock) == "table", "meta.lock missing")
 assert(type(r.meta.lock.active) == "boolean", "meta.lock.active must be boolean")

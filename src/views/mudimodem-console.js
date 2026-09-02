@@ -39,21 +39,13 @@ module.exports = {
     };
   },
 
+  props: { cell: { type: Object, default: function () { return {}; } } },
+
   computed: {
-    ms() {
-      var s = this.$store && this.$store.getters;
-      return (s && s.moduleStatus) ? s.moduleStatus : function () { return {}; };
-    },
-    activeSlot() {
-      var m = (this.ms("cellular.modems_status").modems || [])[0] || {};
-      return m.current_sim_slot;
-    },
-    activeCarrier() {
-      var self = this;
-      var sims = this.ms("cellular.sims_status").sims || [];
-      var s = sims.filter(function (x) { return String(x.slot) === String(self.activeSlot); })[0] || {};
-      return s.carrier || "";
-    },
+    // The parent (mudimodem.js cellModel) is the only reader of GL's sockets;
+    // it passes what this tab needs as a prop.
+    activeSlot() { return this.cell && this.cell.slot; },
+    activeCarrier() { return (this.cell && this.cell.carrier) || ""; },
     // The port answers for the active subscription ONLY — say so, always.
     truthLine() {
       var who = this.activeCarrier

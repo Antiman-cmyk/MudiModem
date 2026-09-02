@@ -107,52 +107,58 @@ function histReply(endT, stepMs, vals, now) {
   return { samples, events: [], now: now == null ? endT : now };
 }
 
-// A realistic websocket snapshot, shaped exactly like the device pushes it
-// (captured 2026-07-17; slot 1 = active T-Mobile n71).
+// A realistic 4.10 websocket snapshot (docs/cellular-api-4.10.md): the three
+// GL sockets + OUR collector's pushed sample. Slot 1 = active T-Mobile n71.
+// The RF lives ONLY in mudimodem.collect (cellular_compat schema: signals[] +
+// flattened PCC aliases); the GL sockets carry status + identity only.
+const SAMPLE = {
+  t: 1700000000000, slot: 1, registered: true, carrier: 'T-Mobile',
+  rat: 'NR5G-SA', network_type: 5, cell_id: '187461035', tac: '870100',
+  signals: [{ role: 'PCC', ca: 0, network_type: 5, rat: 'NR5G-SA', band: 71, earfcn: 127490,
+              pci: 516, bandwidth_mhz: 15, rsrp: -101, rsrq: -14, sinr: 4, rssi: null,
+              rsrp_level: 3, rsrq_level: 3, sinr_level: 2 }],
+  id: '187461035', band: 71, mode: 'NR5G-SA', pci: 516, tx_channel: 127490,
+  dl_bandwidth: '15MHz', rsrp: -101, rsrq: -14, sinr: 4, rssi: null,
+  rsrp_level: 3, rsrq_level: 3, sinr_level: 2
+};
 const LIVE = {
   'cellular.modems_info': { modems: [{
     bus: 'cpu', name: 'RG650V-NA', type: 0,
     band: { LTE: [2, 4, 66, 71], 'NR-NSA': [41, 71], 'NR-SA': [25, 41, 71, 77, 78] }
   }] },
-  'cellular.modems_status': { modems: [{ bus: 'cpu', current_sim_slot: '1' }] },
+  'cellular.modems_status': { modems: [{ bus: 'cpu', current_sim_slot: 1, slot_switch_status: 0,
+    simcard: [
+      { slot: 1, status: 6, dial_status: 0, technology: 5, apn: 'h2g2', iccid: '89012601000000000001' },
+      { slot: 2, status: 6, dial_status: 2, technology: 4, apn: 'broadband', iccid: '89014100000000000002' }
+    ] }] },
   'cellular.networks_info': { networks: [
-    { slot: '1', bus: 'cpu', cell_info: {
-      id: '187461035', band: 71, mode: 'NR5G-SA FDD',
-      rsrp: '-101', rsrp_level: 3, rsrq: '-14', rsrq_level: 3,
-      sinr: '4', sinr_level: 2, dl_bandwidth: '15MHz', tx_channel: '127490' } },
-    { slot: '2', bus: 'cpu', cell_info: { band: 66, mode: 'LTE FDD', rsrp: '-120', rsrp_level: 1 } }
+    { slot: 1, bus: 'cpu', carrier: 'T-Mobile', mcc: '310', mnc: '260', iccid: '89012601000000000001',
+      imsi: '310260000000001', phone_number: '15550001234', apn_list: ['h2g2', 'fast.t-mobile.com'] },
+    { slot: 2, bus: 'cpu', carrier: 'AT&T', mcc: '310', mnc: '410', iccid: '89014100000000000002',
+      imsi: '310410000000002', apn_list: ['broadband'] }
   ] },
-  'cellular.sims_info': { sims: [{ slot: '1', mcc: '310', mnc: '260' }] },
-  'cellular.sims_status': { sims: [
-    { slot: '1', carrier: 'T-Mobile', status: 6 },
-    { slot: '2', carrier: 'AT&T', status: 6 }
-  ] }
+  'mudimodem.collect': SAMPLE
 };
 
-// Failover split state, captured live 2026-07-18: slot 1 SELECTED (T-Mobile,
-// registered, no data), slot 2 (Belgian 206-01 travel SIM, roaming on AT&T)
-// CARRYING DATA. The state GL's UI cannot render.
+// Failover split state (captured live 2026-07-18, re-keyed to 4.10 sockets):
+// slot 1 SELECTED (T-Mobile, registered, no data), slot 2 (Belgian 206-01
+// travel SIM, roaming on AT&T) CARRYING DATA. The state GL's UI cannot render.
+// simcard[].dial_status is GL's merged CONNECTION enum (0 connected,
+// 1 connecting, 2 disconnected) — GL's own UI maps {0:"active",1:"connecting"}.
 const SPLIT = {
   'cellular.modems_info': LIVE['cellular.modems_info'],
-  'cellular.modems_status': { modems: [{ bus: 'cpu', current_sim_slot: '1', slot_switch_status: 0 }] },
-  'cellular.sims_info': { sims: [
-    { slot: '1', bus: 'cpu', iccid: '89012601000000000001', imsi: '310260000000001',
+  'cellular.modems_status': { modems: [{ bus: 'cpu', current_sim_slot: 1, slot_switch_status: 0,
+    simcard: [
+      { slot: 1, iccid: '89012601000000000001', status: 6, dial_status: 2, apn: 'h2g2' },
+      { slot: 2, iccid: '89320420000000000002', status: 6, dial_status: 0, apn: 'internet.proximus.be' }
+    ] }] },
+  'cellular.networks_info': { networks: [
+    { slot: 1, bus: 'cpu', carrier: 'T-Mobile', iccid: '89012601000000000001', imsi: '310260000000001',
       mcc: '310', mnc: '260', phone_number: '15550001234',
       apn_list: ['h2g2', 'fast.t-mobile.com', 'gigsky', 'gigsky'] },
-    { slot: '2', bus: 'cpu', iccid: '89320420000000000002', imsi: '206018000000002',
+    { slot: 2, bus: 'cpu', carrier: 'AT&T', iccid: '89320420000000000002', imsi: '206018000000002',
       mcc: '206', mnc: '01', phone_number: '',
       apn_list: ['bicsapn', 'internet.proximus.be'] }
-  ] },
-  'cellular.sims_status': { sims: [
-    { slot: '1', iccid: '89012601000000000001', carrier: 'T-Mobile', status: 6, apn: 'h2g2' },
-    { slot: '2', iccid: '89320420000000000002', carrier: 'AT&T', status: 6, apn: 'internet.proximus.be' }
-  ] },
-  'cellular.networks_status': { networks: [
-    // Split state: slot 1 selected but DISCONNECTED (status 2); slot 2 CONNECTED
-    // (status 0) and carrying data via failover. status is GL's connection enum
-    // {CONNECTED:0, CONNECTING:1, DISCONNECTED:2}, which is what drives the badge.
-    { slot: '1', iccid: '89012601000000000001', status: 2, dial_status: 0 },
-    { slot: '2', iccid: '89320420000000000002', status: 0, dial_status: 0 }
   ] }
 };
 
@@ -176,7 +182,7 @@ test('renders gracefully with an empty store (no push yet)', () => {
   const vm = makeVm(c, {});
   const tree = c.render.call(vm, h);
   assert.strictEqual(tree.tag, 'div');
-  assert.match(textOf(tree), /Waiting for the modem/, 'must show an honest empty state');
+  assert.match(textOf(tree), /Waiting for the collector/, 'must show an honest empty state');
   assert.match(textOf(tree), /Bands/, 'tabs still render without data');
 });
 
@@ -195,9 +201,8 @@ test('picks the ACTIVE slot, never slot 0/2 by accident', () => {
   const vm = makeVm(c, LIVE);
   const txt = textOf(c.render.call(vm, h));
   assert.match(txt, /-101/, 'slot-1 (T-Mobile n71) RSRP');
-  assert.match(txt, /NR5G-SA FDD/, 'shows slot-1 mode');
-  // slot-2 is LTE band 66 — its mode must not leak in ("-120" is now an axis label).
-  assert.doesNotMatch(txt, /LTE FDD/, 'must NOT show slot-2 (AT&T) cell');
+  assert.match(txt, /NR5G-SA/, 'shows slot-1 mode');
+  assert.doesNotMatch(txt, /AT&T/, 'must NOT show slot-2 (AT&T) anywhere in the strip');
 });
 
 test('anchors on the ACTIVE (selected) SIM, never borrows the other slot', () => {
@@ -207,23 +212,23 @@ test('anchors on the ACTIVE (selected) SIM, never borrows the other slot', () =>
   // state and NEVER show SIM2's cell (which is GL's SIM1-active/modem-connected split).
   const S = {
     'cellular.modems_info': { modems: [{ bus: 'cpu', name: 'RG650V-NA', type: 0, band: { 'NR-SA': [71] } }] },
-    'cellular.modems_status': { modems: [{ bus: 'cpu', current_sim_slot: '1' }] },
+    'cellular.modems_status': { modems: [{ bus: 'cpu', current_sim_slot: 1, simcard: [
+      { slot: 1, status: 5, dial_status: 2 }, { slot: 2, status: 6, dial_status: 0 } ] }] },
     'cellular.networks_info': { networks: [
-      { slot: '1', bus: 'cpu' },  // active SIM: no cell (not registered)
-      { slot: '2', bus: 'cpu', cell_info: { band: 66, mode: 'LTE FDD', rsrp: '-116', rsrp_level: 1 } }
+      { slot: 1, bus: 'cpu', carrier: '', mcc: '310', mnc: '260' },
+      { slot: 2, bus: 'cpu', carrier: 'AT&T' }
     ] },
-    'cellular.sims_info': { sims: [{ slot: '1', mcc: '310', mnc: '260' }] },
-    'cellular.sims_status': { sims: [
-      { slot: '1', carrier: '', status: 5 }, { slot: '2', carrier: 'AT&T', status: 6 }
-    ] }
+    // the collector anchors on the ACTIVE slot: no service there => null metrics
+    'mudimodem.collect': { t: 1700000000000, slot: 1, registered: false, carrier: '', rat: null,
+      network_type: null, cell_id: null, signals: [], id: null, band: null, mode: null,
+      rsrp: null, rsrq: null, sinr: null, rssi: null }
   };
   const vm = makeVm(c, S);
   assert.strictEqual(String(vm.activeSlot), '1', 'active SIM stays the selected slot');
   assert.strictEqual(vm.activeRegistered, false, 'active SIM is not registered');
   const txt = textOf(c.render.call(vm, h));
   assert.match(txt, /SIM 1 \(active\) is not registered/, 'honest not-registered message');
-  assert.doesNotMatch(txt, /-116/, 'must NOT show slot-2 RSRP');
-  assert.doesNotMatch(txt, /LTE FDD/, 'must NOT show slot-2 cell');
+  assert.doesNotMatch(txt, /AT&T/, 'must NOT borrow slot-2 (AT&T)');
 });
 
 test('shows the active SIM when it IS registered, with carrier label', () => {
@@ -233,7 +238,7 @@ test('shows the active SIM when it IS registered, with carrier label', () => {
   const txt = textOf(c.render.call(vm, h));
   assert.match(txt, /-101/, 'shows slot-1 n71');
   assert.match(txt, /T-Mobile/, 'labels T-Mobile');
-  assert.doesNotMatch(txt, /LTE FDD/, 'does not show slot-2');
+  assert.doesNotMatch(txt, /AT&T/, 'does not show slot-2');
 });
 
 test('quality colour comes from GL levels, mapped to GL ramp tokens', () => {
@@ -249,9 +254,10 @@ test('quality colour comes from GL levels, mapped to GL ramp tokens', () => {
 
 test('strip facts row carries the moved diagnostics fields (Cell/Channel/BW/RSSI)', () => {
   const c = loadChunk();
-  // Clone LIVE and add an RSSI reading to the active slot's cell_info.
+  // Clone LIVE and add an RSSI reading to the collector sample (LTE-style).
   const withRssi = JSON.parse(JSON.stringify(LIVE));
-  withRssi['cellular.networks_info'].networks[0].cell_info.rssi = '-70';
+  withRssi['mudimodem.collect'].rssi = -70;
+  withRssi['mudimodem.collect'].signals[0].rssi = -70;
   const vm = makeVm(c, withRssi);
   vm.tab = 'bands';                 // NOT diag/tracking — isolate the strip as the source
   const nodes = walk(c.render.call(vm, h));
@@ -262,6 +268,7 @@ test('strip facts row carries the moved diagnostics fields (Cell/Channel/BW/RSSI
   assert.match(txt, /187461035/, 'Cell id from serving cell');
   assert.match(txt, /Ch/, 'Channel label present');
   assert.match(txt, /127490/, 'ARFCN from serving cell');
+  assert.match(txt, /637\.[45] MHz/, 'ARFCN decoded on the NR global raster');
   assert.match(txt, /15MHz/, 'bandwidth from serving cell');
   assert.match(txt, /RSSI/, 'RSSI label present');
   assert.match(txt, /-70/, 'RSSI value from serving cell');
@@ -327,7 +334,7 @@ test('strip history: the window is trimmed on the BOX clock, not the browser', a
     await new Promise((r) => setImmediate(r));
     assert.strictEqual(vm.hist.length, 5, 'all 5 minutes of box-time history kept');
     assert.ok(Math.abs(vm.stripEnd() - boxNow) < 5000, 'stripEnd tracks the box clock');
-    assert.ok(vm.stripFromDaemon(), 'and the strip draws from the daemon');
+    assert.ok(vm.stripPoints().length >= 2, 'and the strip draws from the daemon');
   } finally { unstubRpc(); }
 });
 
@@ -379,8 +386,32 @@ test('strip domain: expands for strong RSRP instead of pinning to −80', async 
 test('strip domain: in-range samples keep the fixed −120…−80 base', () => {
   const c = loadChunk();
   const vm = makeVm(c, LIVE);
-  vm.trace = [-100, -95, -90];
+  vm.hist = [{ t: 1, v: -100 }, { t: 2, v: -95 }, { t: 3, v: -90 }];
+  vm.histNow = 3; vm.histNowAt = Date.now();
   assert.deepStrictEqual(vm.stripAxisDomain(), [-120, -80]);
+});
+
+test('strip trace: one source — no history yet draws no line, and the eyebrow still names the window', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, LIVE);
+  assert.strictEqual(vm.tracePath(), '', 'nothing to draw before two samples exist');
+  assert.deepStrictEqual(vm.stripAxisDomain(), [-120, -80], 'base domain with no points');
+  const eyebrow = walk(c.render.call(vm, h)).find((n) => n.data.staticClass === 'mm-eyebrow');
+  assert.strictEqual(textOf(eyebrow), 'RSRP · last 15 min');
+});
+
+test('strip trace: a collector push extends the history without a round-trip', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, LIVE);
+  vm.hist = [{ t: 1000, v: -100 }]; vm.histLastT = 1000; vm.histNow = 1000; vm.histNowAt = Date.now();
+  vm.onSamplePush({ t: 11000, rsrp: -97, slot: 1 });
+  assert.strictEqual(vm.hist.length, 2);
+  assert.strictEqual(vm.histLastT, 11000, 'cursor advanced off the pushed sample');
+  vm.onSamplePush({ t: 11000, rsrp: -97, slot: 1 });   // replay of the seed
+  assert.strictEqual(vm.hist.length, 2, 'duplicates are ignored');
+  vm.onSamplePush({ t: 21000, rsrp: null, slot: 1 });  // no-service sample
+  assert.strictEqual(vm.hist.length, 2, 'null rsrp is a gap, not a point');
+  assert.strictEqual(vm.histLastT, 21000, 'but it still moves the cursor');
 });
 
 test('strip trace: a hole in the history breaks the line instead of bridging it', async () => {
@@ -398,19 +429,6 @@ test('strip trace: a hole in the history breaks the line instead of bridging it'
     assert.strictEqual((d.match(/M/g) || []).length, 2, 'the gap starts a new subpath');
     assert.strictEqual((d.match(/L/g) || []).length, 2, 'each side of the gap is still a line');
   } finally { unstubRpc(); }
-});
-
-test('strip trace: falls back to the websocket trace when the daemon has nothing', () => {
-  const c = loadChunk();
-  const vm = makeVm(c, LIVE);
-  vm.trace = [-100, -95, -90];
-  assert.strictEqual(vm.stripFromDaemon(), false, 'no daemon history');
-  const d = vm.tracePath();
-  assert.ok(d.startsWith('M'), 'still draws');
-  assert.strictEqual((d.match(/[ML]/g) || []).length, 3, 'all three websocket points');
-  const eyebrow = walk(c.render.call(vm, h))
-    .find((n) => n.data.staticClass === 'mm-eyebrow');
-  assert.strictEqual(textOf(eyebrow), 'RSRP live', 'labelled as the live fallback');
 });
 
 test('strip trace: the eyebrow names the daemon window once history is in', async () => {
@@ -1130,431 +1148,7 @@ test('Speedtest tab appears in the tab bar', () => {
 // Phase 4 — SIM / APN tab
 // ---------------------------------------------------------------------------
 
-test('slotCards: merges info/status/network per slot with the DSDS facts', () => {
-  const vm = makeVm(loadChunk(), SPLIT);
-  const [s1, s2] = vm.slotCards;
-  assert.equal(vm.slotCards.length, 2);
-  // Slot 1: selected, registered, NOT carrying data.
-  assert.equal(s1.slot, 1);
-  assert.equal(s1.selected, true);
-  assert.equal(s1.data, false);
-  assert.equal(s1.reg, 6);
-  assert.equal(s1.carrier, 'T-Mobile');
-  assert.equal(s1.apn, 'h2g2');
-  // Slot 2: NOT selected, carrying data — the split state.
-  assert.equal(s2.selected, false);
-  assert.equal(s2.data, true);
-  assert.equal(s2.iccid, '89320420000000000002');
-});
-
-test('slotCards: roaming honesty — home PLMN vs serving carrier', () => {
-  const vm = makeVm(loadChunk(), SPLIT);
-  const [s1, s2] = vm.slotCards;
-  // T-Mobile SIM on T-Mobile: home operator known, not roaming.
-  assert.equal(s1.home, 'T-Mobile US');
-  assert.equal(s1.roaming, false);
-  // Belgian 206-01 SIM serving on AT&T: roaming.
-  assert.equal(s2.home, 'Proximus BE');
-  assert.equal(s2.roaming, true);
-});
-
-test('slotCards: apn_list is deduplicated', () => {
-  const vm = makeVm(loadChunk(), SPLIT);
-  assert.deepEqual(vm.slotCards[0].apnList, ['h2g2', 'fast.t-mobile.com', 'gigsky']);
-});
-
-test('slotCards: empty slot degrades to blanks, unknown PLMN to mcc-mnc', () => {
-  const empty = JSON.parse(JSON.stringify(SPLIT));
-  empty['cellular.sims_info'].sims = [
-    { slot: '1', mcc: '999', mnc: '99', iccid: 'X', imsi: 'Y', apn_list: [] }
-  ];
-  empty['cellular.sims_status'].sims = [{ slot: '1', status: 0 }];
-  empty['cellular.networks_status'].networks = [];
-  const vm = makeVm(loadChunk(), empty);
-  const [s1, s2] = vm.slotCards;
-  assert.equal(s1.home, '999-99');           // unknown PLMN: no fake name
-  assert.equal(s1.roaming, false);           // status 0 → never claim roaming
-  assert.equal(s2.iccid, '');                // absent slot → blank card, no crash
-  assert.equal(s2.reg, undefined);
-});
-
-test('regLabel maps GL sim-status codes', () => {
-  const vm = makeVm(loadChunk(), SPLIT);
-  assert.equal(vm.regLabel(6), 'Registered');
-  assert.equal(vm.regLabel(5), 'Not registered');
-  assert.equal(vm.regLabel(0), 'No SIM');
-  assert.equal(vm.regLabel(undefined), '—');
-  assert.equal(vm.regLabel(3), 'Status 3');
-});
-
-test('mergeSimConfig: dial edits land, band fields pass through untouched', () => {
-  const vm = makeVm(loadChunk(), SPLIT);
-  const fresh = {
-    protocol: 'rmnet', apn: 'old', auth: 'NONE', username: '', password: '',
-    ip_type: 0, roaming: true, network_mode: 'AUTO', ttl: '0', hl: '0', mtu: '0',
-    band_enable: true, band_filter_mode: 0,
-    band_list: { LTE: [], 'NR-NSA': [], 'NR-SA': [71] }
-  };
-  const out = vm.mergeSimConfig(fresh, {
-    apn: 'new-apn', auth: 'PAP', username: 'u', password: 'p', ip_type: 1, roaming: false
-  });
-  // Dial fields updated…
-  assert.equal(out.apn, 'new-apn');
-  assert.equal(out.auth, 'PAP');
-  assert.equal(out.ip_type, 1);
-  assert.equal(out.roaming, false);
-  // …the band lock survives verbatim…
-  assert.equal(out.band_enable, true);
-  assert.equal(out.band_filter_mode, 0);
-  assert.deepEqual(out.band_list, { LTE: [], 'NR-NSA': [], 'NR-SA': [71] });
-  // …numeric passthroughs coerced the way GL coerces them…
-  assert.strictEqual(out.ttl, 0);
-  assert.strictEqual(out.mtu, 0);
-  // …and the input object was not mutated.
-  assert.equal(fresh.apn, 'old');
-});
-
-test('fetchSimCfg: calls modem.get_sim_config with slot+bus+iccid, seeds simEdit', async () => {
-  const calls = stubRpc([{ apn: 'h2g2', auth: 'NONE', username: '', password: '',
-    ip_type: 0, roaming: true, band_enable: true }]);
-  try {
-    const vm = makeVm(loadChunk(), SPLIT);
-    vm.fetchSimCfg(1);
-    await Promise.resolve(); await Promise.resolve();
-    assert.equal(calls.length, 1);
-    assert.deepEqual(calls[0].params, ['sid', 'modem', 'get_sim_config',
-      { slot: 1, bus: 'cpu', iccid: '89012601000000000001' }]);
-    assert.equal(vm.simCfg[1].apn, 'h2g2');
-    assert.deepEqual(vm.simEdit[1],
-      { apn: 'h2g2', auth: 'NONE', username: '', password: '', ip_type: 0, roaming: true });
-  } finally { unstubRpc(); }
-});
-
-test('fetchSimCfg: RPC rejection lands in simCfgErr, simEdit stays null', async () => {
-  const calls = stubRpc([Object.assign(new Error('x'), { type: 'timeout' })]);
-  try {
-    const vm = makeVm(loadChunk(), SPLIT);
-    vm.fetchSimCfg(2);
-    await Promise.resolve(); await Promise.resolve();
-    assert.equal(vm.simCfgErr[2], 'timeout');
-    assert.equal(vm.simEdit[2], null);
-  } finally { unstubRpc(); }
-});
-
-test('fetchFailover: reads config and seeds failoverEdit with string hour/min', async () => {
-  const calls = stubRpc([{ enable_switch: true, esim2_enable: false, current_sim: 1,
-    slot_priority: [1, 2], enable_timing: false, hour: '03', min: '30',
-    slot_type: [{ slot: 1, type: 0 }, { slot: 2, type: 0 }] }]);
-  try {
-    const vm = makeVm(loadChunk(), SPLIT);
-    vm.fetchFailover();
-    await Promise.resolve(); await Promise.resolve();
-    assert.deepEqual(calls[0].params, ['sid', 'modem', 'get_slot_failover_config', { bus: 'cpu' }]);
-    assert.deepEqual(vm.failoverEdit, {
-      enable_switch: true, slot_priority: [1, 2], enable_timing: false, hour: '03', min: '30'
-    });
-  } finally { unstubRpc(); }
-});
-
-test('SIM tab renders two slot cards with honest DSDS badges', () => {
-  const comp = loadChunk();
-  const vm = makeVm(comp, SPLIT);
-  vm.tab = 'sim';
-  const nodes = walk(comp.render.call(vm, h));
-  const cards = nodes.filter((n) => /mm-slot\b/.test(n.data.staticClass || ''));
-  assert.equal(cards.length, 2);
-  // Selected ring on slot 1 only.
-  assert.ok(/\bsel\b/.test(cards[0].data.staticClass));
-  assert.ok(!/\bsel\b/.test(cards[1].data.staticClass));
-  // The split state: "Selected" on card 1, "Carrying data" on card 2.
-  assert.ok(textOf(cards[0]).includes('Selected'));
-  assert.ok(!textOf(cards[0]).includes('Carrying data'));
-  assert.ok(textOf(cards[1]).includes('Carrying data'));
-  // Roaming honesty on card 2.
-  assert.ok(textOf(cards[1]).includes('Proximus BE'));
-  assert.ok(textOf(cards[1]).includes('Roaming on AT&T'));
-});
-
-test('SIM tab: "Carrying data" tracks the CONNECTED network, not a dialing retry', () => {
-  // Live capture 2026-07-19: slot 1 (T-Mobile) is the data slot — network
-  // status 0 (CONNECTED), holds the IP + default route. Slot 2 (AT&T) is
-  // DISCONNECTED (status 2) but stuck mid dial-retry (dial_status 1). The badge
-  // must follow the connection status, NOT dial_status — else AT&T, which
-  // carries no data, wrongly shows "Carrying data".
-  const REAL = {
-    'cellular.modems_info': LIVE['cellular.modems_info'],
-    'cellular.modems_status': { modems: [{ bus: 'cpu', current_sim_slot: '1' }] },
-    'cellular.sims_info': { sims: [
-      { slot: '1', bus: 'cpu', iccid: '89012601000000000001', mcc: '310', mnc: '260' },
-      { slot: '2', bus: 'cpu', iccid: '89320420000000000002', mcc: '310', mnc: '410' }
-    ] },
-    'cellular.sims_status': { sims: [
-      { slot: '1', carrier: 'T-Mobile', status: 6 },
-      { slot: '2', carrier: 'AT&T', status: 6 }
-    ] },
-    'cellular.networks_status': { networks: [
-      { slot: '1', status: 0, dial_status: 0 },   // CONNECTED — the real data slot
-      { slot: '2', status: 2, dial_status: 1 }    // DISCONNECTED, retrying to dial
-    ] }
-  };
-  const comp = loadChunk();
-  const vm = makeVm(comp, REAL);
-  vm.tab = 'sim';
-  const cards = walk(comp.render.call(vm, h))
-    .filter((n) => /mm-slot\b/.test(n.data.staticClass || ''));
-  assert.equal(cards.length, 2);
-  assert.ok(textOf(cards[0]).includes('Carrying data'), 'connected slot 1 (T-Mobile) carries data');
-  assert.ok(!textOf(cards[1]).includes('Carrying data'), 'disconnected slot 2 (AT&T) must NOT show carrying data');
-});
-
-test('SIM tab shows full identifiers by default, hides them on toggle', () => {
-  const comp = loadChunk();
-  const vm = makeVm(comp, SPLIT);
-  vm.tab = 'sim';
-  let text = textOf(comp.render.call(vm, h));
-  assert.ok(text.includes('89012601000000000001'), 'full ICCID visible by default');
-  assert.ok(text.includes('Hide identifiers'), 'offers a hide toggle');
-  vm.simReveal[1] = false;                              // user hides
-  text = textOf(comp.render.call(vm, h));
-  assert.ok(!text.includes('89012601000000000001'), 'full ICCID hidden after toggle');
-  assert.ok(text.includes('8901…'), 'masked stub shown when hidden');
-  assert.ok(text.includes('Show identifiers'));
-});
-
-test('SIM tab: empty slot renders as an empty card, no crash', () => {
-  const empty = JSON.parse(JSON.stringify(SPLIT));
-  empty['cellular.sims_info'].sims = empty['cellular.sims_info'].sims.slice(0, 1);
-  empty['cellular.sims_status'].sims = [
-    empty['cellular.sims_status'].sims[0], { slot: '2', status: 0 }
-  ];
-  const comp = loadChunk();
-  const vm = makeVm(comp, empty);
-  vm.tab = 'sim';
-  const text = textOf(comp.render.call(vm, h));
-  assert.ok(text.includes('No SIM'));
-});
-
-test('applySim: fresh read, merged write, band fields intact in the payload', async () => {
-  const FRESH = { apn: 'h2g2', auth: 'NONE', username: '', password: '', ip_type: 0,
-    roaming: true, band_enable: true, band_filter_mode: 0,
-    band_list: { LTE: [], 'NR-NSA': [], 'NR-SA': [71] } };
-  // reply 1: get_sim_config (RMW read); 2: set_sim_config; 3: post-apply re-seed read.
-  const calls = stubRpc([FRESH, {}, FRESH]);
-  try {
-    const vm = makeVm(loadChunk(), SPLIT);
-    vm.simEdit[1] = { apn: 'fast.t-mobile.com', auth: 'NONE', username: '', password: '',
-      ip_type: 0, roaming: true };
-    vm.applySim(1);
-    await new Promise((r) => setImmediate(r));
-    assert.equal(calls[0].params[2], 'get_sim_config');
-    assert.equal(calls[1].params[2], 'set_sim_config');
-    assert.equal(calls[2].params[2], 'get_sim_config');   // re-seeds edits after write
-    const payload = calls[1].params[3];
-    assert.equal(payload.slot, 1);
-    assert.equal(payload.bus, 'cpu');
-    assert.equal(payload.iccid, '89012601000000000001');
-    assert.equal(payload.apn, 'fast.t-mobile.com');
-    // The band lock rides through untouched — the whole point of RMW.
-    assert.equal(payload.band_enable, true);
-    assert.deepEqual(payload.band_list, { LTE: [], 'NR-NSA': [], 'NR-SA': [71] });
-  } finally { unstubRpc(); }
-});
-
-test('applySim: failure surfaces in simApplyErr and clears the in-flight flag', async () => {
-  const calls = stubRpc([Object.assign(new Error('x'), { type: 'accessDenied' })]);
-  try {
-    const vm = makeVm(loadChunk(), SPLIT);
-    vm.simEdit[1] = { apn: 'a', auth: 'NONE', username: '', password: '', ip_type: 0, roaming: true };
-    vm.applySim(1);
-    await new Promise((r) => setImmediate(r));
-    assert.equal(vm.simApplying, 0);
-    assert.equal(vm.simApplyErr[1], 'accessDenied');
-  } finally { unstubRpc(); }
-});
-
-test('simDirty: true only when an edit differs from the loaded config', () => {
-  const vm = makeVm(loadChunk(), SPLIT);
-  vm.simCfg[1] = { apn: 'h2g2', auth: 'NONE', username: '', password: '', ip_type: 0, roaming: true };
-  vm.simEdit[1] = { apn: 'h2g2', auth: 'NONE', username: '', password: '', ip_type: 0, roaming: true };
-  assert.equal(vm.simDirty(1), false);
-  vm.simEdit[1].apn = 'other';
-  assert.equal(vm.simDirty(1), true);
-});
-
-test('dial form renders APN chips from apn_list and an Apply button', () => {
-  const comp = loadChunk();
-  const vm = makeVm(comp, SPLIT);
-  vm.tab = 'sim';
-  vm.simEdit[1] = { apn: 'h2g2', auth: 'NONE', username: '', password: '', ip_type: 0, roaming: true };
-  const nodes = walk(comp.render.call(vm, h));
-  const chips = nodes.filter((n) => /mm-apnchip/.test(n.data.staticClass || ''));
-  assert.ok(chips.length >= 3);                       // deduped apn_list for slot 1
-  assert.ok(chips.some((c) => textOf(c) === 'fast.t-mobile.com'));
-  const applies = nodes.filter((n) => /mm-apply/.test(n.data.staticClass || '') && textOf(n) === 'Apply');
-  assert.equal(applies.length, 1);                    // only the loaded slot has a form Apply
-});
-
-test('auth != NONE reveals username/password inputs', () => {
-  const comp = loadChunk();
-  const vm = makeVm(comp, SPLIT);
-  vm.tab = 'sim';
-  vm.simEdit[1] = { apn: 'h2g2', auth: 'PAP', username: '', password: '', ip_type: 0, roaming: true };
-  const nodes = walk(comp.render.call(vm, h));
-  const inputs = nodes.filter((n) => n.tag === 'input' &&
-    ((n.data.attrs || {}).placeholder === 'Username' || (n.data.attrs || {}).placeholder === 'Password'));
-  assert.equal(inputs.length, 2);
-});
-
-test('doSwitch: RMW on failover config, sets current_sim, reorders priority when auto-switch on', async () => {
-  const FCFG = { enable_switch: true, esim2_enable: false, current_sim: 1,
-    slot_priority: [1, 2], enable_timing: false, hour: '00', min: '00',
-    slot_type: [{ slot: 1, type: 0 }, { slot: 2, type: 0 }] };
-  const calls = stubRpc([FCFG, {}]);
-  try {
-    const vm = makeVm(loadChunk(), SPLIT);
-    vm.doSwitch(2);
-    await new Promise((r) => setImmediate(r));
-    assert.equal(calls[0].params[2], 'get_slot_failover_config');
-    assert.equal(calls[1].params[2], 'set_slot_failover_config');
-    const p = calls[1].params[3];
-    assert.equal(p.bus, 'cpu');
-    assert.equal(p.current_sim, 2);
-    assert.deepEqual(p.slot_priority, [2, 1]);          // manual pick becomes the preference
-    assert.equal(p.esim2_enable, false);                // passthrough intact
-    assert.deepEqual(p.slot_type, FCFG.slot_type);
-    assert.equal(vm.switchTarget, 2);
-  } finally { unstubRpc(); }
-});
-
-test('doSwitch: timeout is EXPECTED (link drops), not an error', async () => {
-  const FCFG = { enable_switch: false, current_sim: 1, slot_priority: [1, 2] };
-  const calls = stubRpc([FCFG, Object.assign(new Error('t'), { type: 'timeout' })]);
-  let vm;
-  try {
-    vm = makeVm(loadChunk(), SPLIT);
-    vm.doSwitch(2);
-    await new Promise((r) => setImmediate(r));
-    assert.equal(vm.switchErr, '');                     // no error shown
-    assert.equal(vm.switchTarget, 2);                   // still waiting on the websocket
-  } finally { vm.clearSwitchState(); unstubRpc(); }      // kill the 90s fallback timer
-});
-
-test('switch confirm: button on non-selected card only, confirm box states the cost', () => {
-  const comp = loadChunk();
-  const vm = makeVm(comp, SPLIT);
-  vm.tab = 'sim';
-  let nodes = walk(comp.render.call(vm, h));
-  const useBtns = nodes.filter((n) => textOf(n) === 'Use this SIM' && n.tag === 'button');
-  assert.equal(useBtns.length, 1);                      // only on slot 2 (non-selected)
-  vm.switchConfirm = 2;
-  nodes = walk(comp.render.call(vm, h));
-  const box = nodes.filter((n) => /mm-switchbox/.test(n.data.staticClass || ''));
-  assert.equal(box.length, 1);
-  assert.ok(textOf(box[0]).includes('drops connectivity'));
-});
-
-test('applyFailover: full passthrough payload; enable_switch forces current_sim = priority[0]', async () => {
-  const FCFG = { enable_switch: false, esim2_enable: false, current_sim: 1,
-    slot_priority: [1, 2], enable_timing: false, hour: '00', min: '00',
-    slot_type: [{ slot: 1, type: 0 }, { slot: 2, type: 0 }] };
-  const calls = stubRpc([{}]);
-  try {
-    const vm = makeVm(loadChunk(), SPLIT);
-    vm.failover = FCFG;
-    vm.failoverEdit = { enable_switch: true, slot_priority: [1, 2],
-      enable_timing: true, hour: '03', min: '30' };
-    vm.applyFailover(true);
-    await new Promise((r) => setImmediate(r));
-    const p = calls[0].params[3];
-    assert.equal(calls[0].params[2], 'set_slot_failover_config');
-    assert.equal(p.enable_switch, true);
-    assert.equal(p.current_sim, 1);                    // priority[0], GL's invariant
-    assert.deepEqual(p.slot_priority, [1, 2]);
-    assert.equal(p.enable_timing, true);
-    assert.strictEqual(p.hour, '03');                  // strings, as GL sends them
-    assert.equal(p.esim2_enable, false);               // passthrough intact
-    assert.deepEqual(p.slot_type, FCFG.slot_type);
-  } finally { unstubRpc(); }
-});
-
-test('applyFailover: a config that would change the active slot demands confirmation', async () => {
-  const calls = stubRpc([{}]);
-  let vm;
-  try {
-    vm = makeVm(loadChunk(), SPLIT);   // active slot is 1
-    vm.failover = { enable_switch: false, current_sim: 1, slot_priority: [1, 2] };
-    vm.failoverEdit = { enable_switch: true, slot_priority: [2, 1],
-      enable_timing: false, hour: '00', min: '00' };
-    vm.applyFailover();                       // not confirmed
-    await new Promise((r) => setImmediate(r));
-    assert.equal(calls.length, 0);            // nothing sent
-    assert.equal(vm.failoverConfirm, true);   // confirm UI armed instead
-    vm.applyFailover(true);                   // user confirmed
-    await new Promise((r) => setImmediate(r));
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0].params[3].current_sim, 2);
-  } finally { vm && vm.clearSwitchState && vm.clearSwitchState(); unstubRpc(); }
-});
-
-test('failover card renders toggle, priority order and time picker when timing on', () => {
-  const comp = loadChunk();
-  const vm = makeVm(comp, SPLIT);
-  vm.tab = 'sim';
-  vm.failover = { enable_switch: true, current_sim: 1, slot_priority: [1, 2] };
-  vm.failoverEdit = { enable_switch: true, slot_priority: [1, 2],
-    enable_timing: true, hour: '03', min: '30' };
-  const text = textOf(comp.render.call(vm, h));
-  assert.ok(text.includes('Auto failover'));
-  assert.ok(text.includes('Preferred order'));
-  assert.ok(text.includes('Scheduled switch'));
-});
-
-test('status-0 slot renders clean Empty/No SIM — no garbage iccid, no form, no switch', () => {
-  // Modem glitch (seen live 2026-07-18 after rapid slot switches): iccid present
-  // but status 0 (No SIM). The card must render as a clean empty slot — never the
-  // "Empty title + No SIM badge + fake ICCID + editable form" contradiction.
-  const g = JSON.parse(JSON.stringify(SPLIT));
-  g['cellular.sims_status'].sims = [
-    { slot: '1', iccid: '44000000003', carrier: '', status: 0 },
-    { slot: '2', iccid: 'E0127E0127E', carrier: '', status: 0 }
-  ];
-  const comp = loadChunk();
-  const vm = makeVm(comp, g);
-  vm.tab = 'sim';
-  // Even if edits somehow got seeded, a not-present slot must show no form.
-  vm.simEdit[1] = { apn: 'x', auth: 'NONE', username: '', password: '', ip_type: 0, roaming: true };
-  const nodes = walk(comp.render.call(vm, h));
-  const text = textOf(nodes);
-  assert.ok(!text.includes('44000000003'), 'garbage ICCID must not render');
-  assert.ok(!text.includes('Show identifiers'), 'no identity block for an absent SIM');
-  assert.ok(text.includes('No SIM'), 'still shows the No SIM badge');
-  const forms = nodes.filter((n) => /mm-form/.test(n.data.staticClass || ''));
-  assert.equal(forms.length, 0, 'no dial form for an absent SIM');
-  const useBtns = nodes.filter((n) => textOf(n) === 'Use this SIM');
-  assert.equal(useBtns.length, 0, 'no switch button for an absent SIM');
-});
-
-test('present-but-unregistered slot (status 5) still shows identity + form', () => {
-  const g = JSON.parse(JSON.stringify(SPLIT));
-  g['cellular.sims_status'].sims[0] = { slot: '1', iccid: '89012601000000000001',
-    carrier: '', status: 5, apn: 'h2g2' };   // present, searching
-  const comp = loadChunk();
-  const vm = makeVm(comp, g);
-  vm.tab = 'sim';
-  vm.simEdit[1] = { apn: 'h2g2', auth: 'NONE', username: '', password: '', ip_type: 0, roaming: true };
-  const text = textOf(comp.render.call(vm, h));
-  assert.ok(text.includes('89012601000000000001'), 'present SIM shows identity even if unregistered');
-  assert.ok(text.includes('Not registered'), 'honest not-registered badge');
-});
-
-// ---------------------------------------------------------------------------
-// Bands tab — network-type lock conflict check
-// A cell/tower lock names a RAT (LTE / NR5G). If the network mode excludes that
-// RAT, the lock is stranded: stored, reported, but inert. The tab must SAY so
-// (warn) and refuse to let the user MOVE INTO a stranding mode (block).
-// ---------------------------------------------------------------------------
-
-// Helper: the mode segmented-control options, by visible label.
+// The mode segmented control's option buttons (shared by the lock-conflict tests).
 function modeSeg(c, vm, label) {
   return walk(c.render.call(vm, h))
     .filter((n) => n.data.staticClass && /mm-seg-b/.test(n.data.staticClass))
@@ -1974,235 +1568,6 @@ test('config tab: device_info retries on a later tab open after a first failure'
   } finally { unstubRpc(); }
 });
 
-// ---------------------------------------------------------------------------
-// LCD Display tab (MudiUI front panel)
-// ---------------------------------------------------------------------------
-
-const LCD_OFF = { available: true, enabled: false, running: false,
-  brightness: 90, screen_timeout: 600, default_page: 0, error: null };
-const LCD_ON = { available: true, enabled: true, running: true,
-  brightness: 80, screen_timeout: 300, default_page: 1, error: null };
-const LCD_NA = { available: false, enabled: false, running: false,
-  brightness: 90, screen_timeout: 600, default_page: 0, error: "no front panel on this device" };
-
-test('bands tab: Reset to default stages AUTO + all permitted bands and sends them', async () => {
-  const calls = stubRpc([{ window: 60, applied: {} }]);
-  try {
-    const c = loadChunk();
-    const vm = bandsVm(c, { meta: { mode: 'NR5G', plmn_matched: true } });   // start at 5G-only
-    vm.selMode = 'NR5G';
-    vm.resetDefault();
-    assert.strictEqual(vm.selMode, 'AUTO', 'mode reset to AUTO');
-    assert.deepStrictEqual(vm.sel.sa.slice().sort(), [41, 71], 'all permitted SA selected');
-    assert.deepStrictEqual(vm.sel.nsa.slice().sort(), [41, 71], 'all permitted NSA selected');
-    assert.deepStrictEqual(vm.sel.LTE.slice().sort(), [12, 66], 'all permitted LTE selected');
-    assert.strictEqual(calls.length, 1, 'the reset is written, not just staged');
-    assert.strictEqual(calls[0].params[2], 'set_bands', 'via set_bands');
-    const p = calls[0].params[3];
-    assert.strictEqual(p.mode, 'AUTO', 'mode AUTO in the payload');
-    assert.deepStrictEqual(p.sa.slice().sort(), [41, 71], 'SA in the payload');
-    assert.deepStrictEqual(p.nsa.slice().sort(), [41, 71], 'NSA in the payload');
-    assert.deepStrictEqual(p.lte.slice().sort(), [12, 66], 'LTE in the payload');
-    await new Promise((r) => setImmediate(r));
-    assert.ok(vm.pending, 'confirm-or-revert countdown armed');
-    vm.clearCountdown();
-    clearTimeout(vm.resetTimer);
-  } finally { unstubRpc(); }
-});
-
-test('bands tab: Reset to default sends even when nothing differs', async () => {
-  const calls = stubRpc([{ window: 60, applied: {} }]);
-  try {
-    const c = loadChunk();
-    // config empty -> seeds to the full policy set, and mode is already AUTO,
-    // so changedAny() is false — the button must still reach the modem.
-    const vm = bandsVm(c, { config: { enable: true, mode: 0, sa: [], nsa: [], LTE: [] } });
-    assert.strictEqual(vm.changedAny(), false, 'precondition: nothing differs');
-    vm.resetDefault();
-    assert.strictEqual(calls.length, 1, 'forced send happened anyway');
-    assert.strictEqual(calls[0].params[3].mode, 'AUTO', 'mode still sent');
-    assert.ok(calls[0].params[3].sa.length, 'bands still sent');
-    await new Promise((r) => setImmediate(r));
-    vm.clearCountdown();
-    clearTimeout(vm.resetTimer);
-  } finally { unstubRpc(); }
-});
-
-test('bands tab: a forced reset skips a RAT whose policy is empty', () => {
-  const calls = stubRpc([{ window: 60, applied: {} }]);
-  try {
-    const c = loadChunk();
-    // AT&T-shaped SIM: no SA policy at all. Sending sa:[] would drop the RAT.
-    const vm = bandsVm(c, { policy: { sa: [], nsa: [41, 71], LTE: [12, 66] } });
-    vm.resetDefault();
-    const p = calls[0].params[3];
-    assert.ok(!('sa' in p), 'empty SA group omitted, never sent as an empty list');
-    assert.ok(p.nsa.length && p.lte.length, 'the non-empty groups still go');
-    vm.clearCountdown();
-    clearTimeout(vm.resetTimer);
-  } finally { unstubRpc(); }
-});
-
-test('bands tab: Reset to default button renders and is a no-op while pending', () => {
-  const c = loadChunk();
-  const vm = bandsVm(c);
-  const btns = walk(c.render.call(vm, h))
-    .filter((n) => n.tag === 'button').map(textOf);
-  assert.ok(btns.includes('Reset to default'), 'Reset to default button renders');
-  vm.pending = { kind: 'bands', remaining: 30, window: 60, applied: {} };
-  const before = JSON.stringify(vm.sel);
-  vm.resetDefault();
-  assert.strictEqual(JSON.stringify(vm.sel), before, 'resetDefault is a no-op while pending');
-  assert.match(vm.resetNote, /already pending/, 'and says why it did nothing');
-  clearTimeout(vm.resetTimer);
-});
-
-test('bands tab: Reset to default reports that it is sending', () => {
-  const calls = stubRpc([{ window: 60, applied: {} }]);
-  try {
-    const c = loadChunk();
-    const vm = bandsVm(c, { meta: { mode: 'NR5G', plmn_matched: true } });
-    vm.selMode = 'NR5G';
-    vm.resetDefault();
-    assert.match(vm.resetNote, /Sending the default/, 'note says the write is going out');
-    const notes = walk(c.render.call(vm, h))
-      .filter((n) => n.data.staticClass === 'mm-note').map(textOf);
-    assert.ok(notes.some((t) => /Sending the default/.test(t)), 'note renders in the bands footer');
-    vm.clearCountdown();
-    clearTimeout(vm.resetTimer);
-  } finally { unstubRpc(); }
-});
-
-test('bands tab: Reset to default says so when already at the default', () => {
-  const calls = stubRpc([{ window: 60, applied: {} }]);
-  try {
-    const c = loadChunk();
-    // config empty -> seeds to the full policy set, and mode is already AUTO
-    const vm = bandsVm(c, { config: { enable: true, mode: 0, sa: [], nsa: [], LTE: [] } });
-    vm.resetDefault();
-    assert.strictEqual(vm.changedAny(), false, 'genuinely nothing to change');
-    assert.match(vm.resetNote, /Already at the default/, 'the no-op case is explained');
-    assert.match(vm.resetNote, /re-sending/, 'and says it wrote anyway');
-    const notes = walk(c.render.call(vm, h))
-      .filter((n) => n.data.staticClass === 'mm-note').map(textOf);
-    assert.ok(notes.some((t) => /Already at the default/.test(t)), 'no-op note renders');
-    vm.clearCountdown();
-    clearTimeout(vm.resetTimer);
-  } finally { unstubRpc(); }
-});
-
-test('bands tab: any later band edit clears the reset note', () => {
-  const calls = stubRpc([{ window: 60, applied: {} }]);
-  try {
-    const c = loadChunk();
-    const vm = bandsVm(c, { config: { enable: true, mode: 0, sa: [], nsa: [], LTE: [] } });
-    vm.resetDefault();
-    assert.ok(vm.resetNote, 'note set');
-    vm.toggleBand('sa', 41);
-    assert.strictEqual(vm.resetNote, '', 'note cleared by a subsequent edit');
-    assert.strictEqual(vm.resetTimer, null, 'and its timer is cancelled');
-    vm.clearCountdown();
-  } finally { unstubRpc(); }
-});
-
-test('LCD Display tab appears in the tab bar', () => {
-  const c = loadChunk();
-  const vm = makeVm(c, LIVE);
-  const labels = walk(c.render.call(vm, h))
-    .filter((n) => n.data.staticClass && /\bmm-tab\b/.test(n.data.staticClass))
-    .map(textOf);
-  assert.ok(labels.includes('LCD Display'), 'LCD Display tab rendered');
-});
-
-test('lcd tab: null snapshot shows Loading, no controls', () => {
-  const c = loadChunk();
-  const vm = makeVm(c, LIVE);
-  vm.tab = 'lcd';
-  vm.lcd = null;
-  const txt = textOf(vm.renderLcd(h));
-  assert.match(txt, /LCD Display/, 'card title present');
-  assert.match(txt, /Loading/, 'loading placeholder');
-});
-
-test('lcd tab: unavailable hardware shows a static note, no checkbox', () => {
-  const c = loadChunk();
-  const vm = makeVm(c, LIVE);
-  vm.tab = 'lcd';
-  vm.lcd = Object.assign({}, LCD_NA);
-  const txt = textOf(vm.renderLcd(h));
-  assert.match(txt, /not available/i, 'unavailability note');
-  assert.doesNotMatch(txt, /Show status on the front LCD/, 'no enable toggle');
-});
-
-test('lcd tab: enabled renders controls + Running status', () => {
-  const c = loadChunk();
-  const vm = makeVm(c, LIVE);
-  vm.tab = 'lcd';
-  vm.lcd = Object.assign({}, LCD_ON);
-  vm.lcdBrightnessDraft = 80;
-  const nodes = walk(vm.renderLcd(h));
-  const txt = textOf(nodes);
-  assert.match(txt, /Show status on the front LCD/, 'enable label');
-  assert.match(txt, /Brightness/, 'brightness row');
-  assert.match(txt, /Screen timeout/, 'timeout row');
-  assert.match(txt, /Default page/, 'default page row');
-  assert.match(txt, /Running/, 'status Running');
-  // knobs enabled when lc.enabled
-  const num = nodes.find((n) => n.tag === 'input' && (n.data.attrs || {}).type === 'number');
-  assert.ok(num && !num.data.attrs.disabled, 'brightness input enabled when on');
-});
-
-test('lcd tab: disabled greys the knobs but keeps the checkbox', () => {
-  const c = loadChunk();
-  const vm = makeVm(c, LIVE);
-  vm.tab = 'lcd';
-  vm.lcd = Object.assign({}, LCD_OFF);
-  const nodes = walk(vm.renderLcd(h));
-  const cb = nodes.find((n) => n.tag === 'input' && (n.data.attrs || {}).type === 'checkbox');
-  assert.ok(cb && !cb.data.attrs.disabled, 'enable checkbox stays clickable');
-  const num = nodes.find((n) => n.tag === 'input' && (n.data.attrs || {}).type === 'number');
-  assert.ok(num && num.data.attrs.disabled, 'brightness disabled while off');
-  assert.match(textOf(nodes), /Stopped/, 'status Stopped');
-});
-
-test('fetchLcd calls get_lcd and seeds the brightness draft', async () => {
-  const calls = stubRpc([Object.assign({}, LCD_ON)]);
-  try {
-    const vm = makeVm(loadChunk(), LIVE);
-    await vm.fetchLcd();
-    assert.equal(calls.length, 1);
-    assert.deepEqual(calls[0].params, ['sid', 'mudimodem', 'get_lcd', {}]);
-    assert.equal(vm.lcd.enabled, true);
-    assert.equal(vm.lcdBrightnessDraft, 80);
-  } finally { unstubRpc(); }
-});
-
-test('applyLcd posts set_lcd with the patch and stores the fresh snapshot', async () => {
-  const calls = stubRpc([Object.assign({}, LCD_ON)]);
-  try {
-    const vm = makeVm(loadChunk(), LIVE);
-    vm.lcd = Object.assign({}, LCD_OFF);
-    await vm.applyLcd({ enabled: true });
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0].params[2], 'set_lcd');
-    assert.deepEqual(calls[0].params[3], { enabled: true });
-    assert.equal(vm.lcd.enabled, true);
-    assert.equal(vm.lcdBusy, false);
-  } finally { unstubRpc(); }
-});
-
-test('opening the lcd tab fetches get_lcd', async () => {
-  const calls = stubRpc([Object.assign({}, LCD_OFF)]);
-  try {
-    const c = loadChunk();
-    const vm = makeVm(c, LIVE);
-    c.watch.tab.call(vm, 'lcd');
-    await Promise.resolve(); await Promise.resolve();
-    const lcdCalls = calls.filter((x) => x.params[2] === 'get_lcd');
-    assert.equal(lcdCalls.length, 1, 'get_lcd called on tab open');
-  } finally { unstubRpc(); }
-});
-
 test('the Battery tab exists in the tab bar', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'views', 'mudimodem.js'), 'utf8');
   assert.ok(/\["battery", *"Battery"\]/.test(src), 'Battery tab not registered in TABS');
@@ -2221,4 +1586,192 @@ test('the charge-limit form no longer lives in the main chunk', () => {
   assert.ok(!src.includes('applyBattLimit'), 'applyBattLimit still in the main chunk');
   assert.ok(!src.includes('get_battlimit'), 'get_battlimit still called from the main chunk');
   assert.ok(!src.includes('Battery charge limit'), 'the battery card is still rendered in Config');
+});
+
+
+// ---------------------------------------------------------------------------
+// 2.0.0 review fixes (2026-09-02)
+// ---------------------------------------------------------------------------
+
+test('fetchBands: a soft {error} reply lands in bandsError, never in bands (no render throw)', async () => {
+  stubRpc([{ error: 'no active SIM slot (modem not ready)' }]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.tab = 'bands';
+    vm.fetchBands();
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(vm.bands, null, 'the error object must not become the band model');
+    assert.match(vm.bandsError, /no active SIM slot/);
+    const txt = textOf(c.render.call(vm, h));     // must not throw on d.supported
+    assert.match(txt, /Couldn't read bands: no active SIM slot/);
+  } finally { unstubRpc(); }
+});
+
+test('fetchLock: a soft {error} reply lands in lockError and is rendered', async () => {
+  stubRpc([{ error: 'no active SIM slot (modem not ready)' }]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.tab = 'lock';
+    vm.fetchLock();
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(vm.lockData, null);
+    assert.match(vm.lockError, /no active SIM slot/);
+    assert.match(textOf(c.render.call(vm, h)), /Couldn't read lock state: no active SIM slot/);
+  } finally { unstubRpc(); }
+});
+
+test('strip history: the first fetch is the WINDOW even after the immediate serving.t watcher ran', async () => {
+  const calls = stubAxios([histReply(1700000000000, 10000, [-95, -94, -93])]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);                  // store already holds SAMPLE (t set)
+    // Vue runs immediate watchers in initState, before mounted(): replay that.
+    c.watch['serving.t'].handler.call(vm, vm.serving.t);
+    assert.strictEqual(vm.histLastT, SAMPLE.t, 'precondition: the seed moved the cursor');
+    vm.fetchStripHistory();
+    assert.ok('window_ms' in calls[0].params, 'preload must ask for the window, not {since}');
+    assert.ok(!('since' in calls[0].params));
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(vm.histPreloaded, true);
+    vm.fetchStripHistory();
+    assert.strictEqual(calls[1].params.since, vm.histLastT, 'only AFTER the preload does {since} take over');
+  } finally { unstubRpc(); }
+});
+
+test('lock tab: pin target accepts PCI 0 / EARFCN 0 (valid identifiers, not "missing")', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, LIVE);
+  vm.lockData = { lock: { l4g: { locked: false }, l5g: { locked: false } }, gl: { locked: false },
+    serving: { rat: 'LTE', pci: 0, arfcn: 0, band: 1, cell_id: 'A' } };
+  const t = vm.pinTarget();
+  assert.ok(t, 'a PCI-0 / EARFCN-0 LTE cell must be pinnable');
+  assert.strictEqual(t.rat, '4g'); assert.strictEqual(t.pci, 0); assert.strictEqual(t.freq, 0);
+});
+
+test('bands: 5G selections are never sent under 4G-only; they go out once the mode allows them', async () => {
+  const calls = stubRpc([{ ok: true, window: 60, applied: { mode: 'AUTO', sa: '41:71' } }]);
+  try {
+    const c = loadChunk();
+    const vm = bandsVm(c, { meta: { mode: 'LTE', plmn_matched: true } });
+    assert.strictEqual(vm.selMode, 'LTE');
+    vm.toggleBand('sa', 41);
+    assert.strictEqual(vm.changed('sa'), true, 'the grid remembers the edit');
+    assert.strictEqual(vm.sendable('sa'), false, 'but it is not sendable under 4G-only');
+    assert.strictEqual(vm.changedAny(), false, 'Apply stays disabled: nothing would reach GL');
+    assert.match(textOf(c.render.call(vm, h)), /5G selections are not sent/, 'the gate says why');
+    vm.applyBands();
+    assert.strictEqual(calls.length, 0, 'no set_bands call with nothing sendable');
+    vm.setMode('AUTO');
+    assert.strictEqual(vm.sendable('sa'), true);
+    vm.applyBands();
+    assert.strictEqual(calls.length, 1);
+    assert.deepStrictEqual(calls[0].params[3].sa.slice().sort(), [41, 71], 'the SA edit goes out with the mode');
+    assert.strictEqual(calls[0].params[3].mode, 'AUTO');
+  } finally { unstubRpc(); }
+});
+
+test('strip: a stale /ws seed is labelled by age and does not reset the stall guard', () => {
+  const c = loadChunk();
+  const live = JSON.parse(JSON.stringify(LIVE));
+  live['mudimodem.collect'] = Object.assign({}, SAMPLE, { stale: true, age_s: 900 });
+  const vm = makeVm(c, live);
+  assert.strictEqual(vm.staleFor, 900);
+  vm.onSamplePush(vm.serving);
+  assert.strictEqual(vm.pushSeenAt, 0, 'a stale seed is not a live push');
+  assert.ok(vm.hist.length === 1, 'its reading is still kept (real data at its own t)');
+  const txt = textOf(c.render.call(vm, h));
+  assert.match(txt, /RSRP · last sample 15 min ago/);
+  assert.match(txt, /has not produced a sample for 15 min/);
+  // a live frame (no stale flag) resets everything
+  const fresh = Object.assign({}, SAMPLE, { t: SAMPLE.t + 10000 });
+  live['mudimodem.collect'] = fresh;
+  vm.onSamplePush(vm.serving);
+  assert.ok(vm.pushSeenAt > 0, 'a live push arms the stall guard');
+  assert.strictEqual(vm.staleFor, 0);
+  assert.doesNotMatch(textOf(c.render.call(vm, h)), /last sample/);
+});
+
+test('strip: an NSA anchor renders as B3 on the LTE raster (pcc_rat), while mode stays NR5G-NSA', () => {
+  const c = loadChunk();
+  const live = JSON.parse(JSON.stringify(LIVE));
+  live['mudimodem.collect'] = Object.assign({}, SAMPLE, {
+    rat: 'NR5G-NSA', mode: 'NR5G-NSA', network_type: 51, pcc_rat: 'LTE', pcc_network_type: 4,
+    band: 3, tx_channel: 1700, pci: 61, rssi: -67,
+    signals: [{ role: 'PCC', rat: 'LTE', network_type: 4, band: 3, earfcn: 1700, pci: 61, rsrp: -97, rsrq: -9, sinr: 17 },
+              { role: 'SCC1', rat: 'NR5G-NSA', network_type: 51, band: 78, earfcn: 627264, pci: 142, rsrp: -99 }]
+  });
+  const vm = makeVm(c, live);
+  assert.strictEqual(vm.bandLabel, 'B3', 'the anchor is an LTE band');
+  assert.strictEqual(vm.servingGroup, 'LTE', 'the "you are here" ring goes to the LTE grid');
+  assert.strictEqual(vm.chanLabel(vm.servingRat, 3, 1700), '1700 (1855.0 MHz)', 'LTE B3 raster, not 8.5 MHz');
+  assert.strictEqual(vm.isNR, true, 'the CELL is still NR (EN-DC)');
+  const groups = vm.servingBands.map((b) => b.group + b.band).sort();
+  assert.deepStrictEqual(groups, ['LTE3', 'nsa78'], 'anchor on LTE, NR leg on the NSA grid');
+  assert.match(textOf(c.render.call(vm, h)), /1855\.0 MHz/);
+});
+
+test('strip: JSON nulls from the /ws seed render as "-", never as the string "null"', () => {
+  const c = loadChunk();
+  const live = JSON.parse(JSON.stringify(LIVE));
+  live['mudimodem.collect'] = Object.assign({}, SAMPLE, { sinr: null, rsrq: null, rssi: null });
+  const vm = makeVm(c, live);
+  const txt = textOf(c.render.call(vm, h));
+  assert.doesNotMatch(txt, /null/);
+  vm.tab = 'lock';
+  vm.lockData = { lock: {}, gl: {}, serving: { rat: 'NR5G-SA', pci: 516, arfcn: 127490, band: 71 } };
+  assert.doesNotMatch(textOf(c.render.call(vm, h)), /null dB/);
+});
+
+test('bands: an unrecognised stored network mode is shown, not silently treated as Auto', () => {
+  const c = loadChunk();
+  const vm = bandsVm(c, { meta: { mode: 'AUTO', mode_raw: 'LTE:NR5G', mode_known: false, plmn_matched: true } });
+  assert.match(textOf(c.render.call(vm, h)), /GL reports network mode "LTE:NR5G"/);
+});
+
+test('lock tab: the ssh panic hint describes what panic now does (no "known-good bands")', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, LIVE);
+  vm.tab = 'lock';
+  vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+  const txt = textOf(c.render.call(vm, h));
+  assert.doesNotMatch(txt, /known-good bands/);
+  assert.match(txt, /turns band filtering off/);
+});
+
+
+test('after a cell-lock Keep the band model is refreshed LIGHT (config+meta, zero AT), not refetched in full', async () => {
+  const calls = stubRpc([
+    { ok: true },                                                          // confirm
+    { lock: { l4g: { locked: false }, l5g: { locked: false } }, gl: { locked: false, tower: {} }, serving: {} },  // get_lock
+    { config: { enable: true, mode: 'AUTO', sa: [71], nsa: [], LTE: [] },
+      meta: { mode: 'AUTO', mode_known: true, lock: { active: false }, light: true } }   // get_bands light
+  ]);
+  try {
+    const c = loadChunk();
+    const vm = bandsVm(c, { meta: { mode: 'NR5G', plmn_matched: true, plmn: '310260', lock: { active: true, rat: '5g', pci: 516 } } });
+    vm.pending = { kind: 'cell', remaining: 30, window: 60 };
+    vm.keepBands();
+    await new Promise((r) => setImmediate(r)); await new Promise((r) => setImmediate(r));
+    const methods = calls.map((x) => x.params[2]);
+    assert.deepStrictEqual(methods.sort(), ['confirm', 'get_bands', 'get_lock']);
+    const gb = calls.find((x) => x.params[2] === 'get_bands');
+    assert.deepStrictEqual(gb.params[3], { light: 1 }, 'the refetch asks for the store-only view');
+    assert.strictEqual(vm.bands.meta.mode, 'AUTO', 'mode/lock merged from the light reply');
+    assert.strictEqual(vm.bands.meta.lock.active, false);
+    assert.strictEqual(vm.bands.meta.plmn, '310260', 'AT-derived meta survives the merge');
+    assert.deepStrictEqual(vm.bands.policy, { sa: [41, 71], nsa: [41, 71], LTE: [12, 66] }, 'policy untouched');
+    assert.strictEqual(vm.bandsLoading, false, 'no loading flash on a light refresh');
+  } finally { unstubRpc(); }
+});
+
+test('fetchBands({light:true}) with no model yet falls back to a full fetch', () => {
+  const calls = stubRpc([{}]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.fetchBands({ light: true });
+    assert.deepStrictEqual(calls[0].params[3], {}, 'nothing to merge into -> full get_bands');
+  } finally { unstubRpc(); }
 });

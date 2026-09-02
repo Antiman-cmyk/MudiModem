@@ -5,16 +5,23 @@
 // value is the component (module.exports = {...}). `module` is in scope at eval
 // time. Vue here is runtime-only: render(h) only, never `template:`.
 //
-// Reads come two ways, both server-trusted:
-//   - live status: this.$store.getters.moduleStatus("cellular.*") over /ws
+// Reads (GL firmware 4.10 — docs/cellular-api-4.10.md), all server-trusted:
+//   - status over /ws via this.$store.getters.moduleStatus(name):
+//       cellular.modems_info    (module identity, supported bands)
+//       cellular.modems_status  (active slot + merged per-SIM simcard[] state)
+//       cellular.networks_info  (per-slot carrier + SIM identity)
+//       mudimodem.collect       (OUR collector's latest RF sample, pushed by
+//                                mudimodem-collectd through gl-session notify)
+//     ws = status, collector = RF — never cross-read. `cellModel` below is the
+//     ONLY place raw socket shapes are touched; every tab reads its output.
 //   - band model:  window.$rpcRequest("call",["sid","mudimodem","get_bands",{}])
 // The "sid" string is a verbatim placeholder GL swaps for the session cookie.
 //
-// Writes: set_bands is confirm-or-revert via the mudimodem backend + watchdog.
-// The SIM tab (Phase 4) instead writes browser-direct to GL's own undotted RPC
-// (modem.set_sim_config — ALWAYS read-modify-write, the same object carries the
-// band config; modem.set_slot_failover_config — also GL's slot-switch path,
-// since QUIMSLOT does not exist on this modem). No backend, no AT, no sub_id.
+// Writes: set_bands / set_cell_lock are confirm-or-revert via the mudimodem
+// backend + watchdog (the band write itself is GL's own per-slot
+// modem.set_band_config). SIM slot / APN / failover management is NOT here:
+// GL 4.10's own Internet page has it in full, and this add-on ships only what
+// stock lacks or does incompletely.
 //
 // All colour is GL theme tokens (var(--success) etc.), so light/dark/classic
 // all work with zero extra code.
@@ -30,21 +37,20 @@ module.exports = {
   data() {
     return {
       tab: "tracking",
-      trace: [],            // websocket-accumulated RSRP — now only the FALLBACK
-      TRACE_MAX: 90,
-      // ---- status-strip trace: sourced from the collector daemon ----
-      // mudimodem-collectd already samples the modem every 4s and keeps 24h of
-      // history; the strip reads that instead of drawing itself from whatever
-      // the websocket happened to push since this page loaded. Consequences:
-      // the graph is populated on arrival, its x-axis is real time (so a gap
-      // looks like a gap), and it survives a page reload. `trace` above stays
-      // as the fallback for when the daemon has nothing yet (fresh install,
-      // collector stopped) — the strip must never regress to an empty box.
+      // ---- status-strip trace: ONE source, the collector ----
+      // mudimodem-collectd samples the modem every 10s and keeps 24h of history.
+      // The strip PRELOADS the last 15 minutes once (get_history) and is then
+      // fed LIVE by the collector's own pushes over the websocket
+      // (mudimodem.collect) — no polling. A slow safety poll only fires when
+      // no push has arrived for a while (collector restarting, ws hiccup).
       STRIP_MIN: 15,          // minutes of history the strip shows
-      STRIP_POLL_MS: 10000,   // incremental poll cadence (collector writes at 4s)
-      STRIP_GAP_MS: 30000,    // a hole wider than this breaks the line, not bridges it
+      STRIP_POLL_MS: 30000,   // safety-poll cadence (only acts when pushes stalled)
+      STRIP_STALL_MS: 45000,  // no push for this long => safety poll fetches the tail
+      STRIP_GAP_MS: 45000,    // a hole wider than this breaks the line, not bridges it
+      pushSeenAt: 0,          // browser clock of the last collector push
       hist: [],               // [{t, v}] oldest-first, BOX timestamps, rsrp only
       histLastT: 0,           // newest t held — the incremental `since` cursor
+      histPreloaded: false,   // the 15-min window has been fetched once (gates {since})
       histNow: 0,             // box clock as of the last reply
       histNowAt: 0,           // browser clock at that same instant (skew correction)
       histFetching: false,    // one strip fetch at a time
@@ -90,25 +96,6 @@ module.exports = {
       batteryComp: null,
       batteryLoading: false,
       batteryErr: "",
-      // ---- SIM tab (Phase 4) — all writes browser-direct to GL's own undotted
-      // RPC (modem.*); zero mudimodem-backend involvement. Keys 1/2 are the two
-      // physical slots, predeclared so plain assignment stays reactive.
-      simCfg: { 1: null, 2: null },      // fresh get_sim_config per slot (the RMW base)
-      simCfgErr: { 1: "", 2: "" },
-      simEdit: { 1: null, 2: null },     // editable dial-profile fields per slot
-      simReveal: { 1: true, 2: true },   // ICCID/IMSI/phone shown in full by default
-                                         // (admin-only page); "Hide identifiers" masks them
-      simApplying: 0,                    // slot with an Apply in flight, else 0
-      simApplyErr: { 1: "", 2: "" },
-      switchConfirm: 0,                  // slot awaiting "Use this SIM" confirm, else 0
-      switchTarget: 0,                   // slot a switch is moving to, else 0
-      switchErr: "",
-      switchTimer: null,                 // fallback timer clearing the switching state
-      failover: null,                    // get_slot_failover_config result (passthrough base)
-      failoverEdit: null,                // editable copy
-      failoverErr: "",
-      failoverApplying: false,
-      failoverConfirm: false,            // failover Apply would switch slots — confirm first
       // ---- Config tab (Phase 5) ----
       deviceInfo: null,       // { model, cpu } — fetched once via system.board
       appVer: null,           // app_version result { installed, latest, update_available, checked, error? }
@@ -124,11 +111,6 @@ module.exports = {
       pollStopped: false,     // set true on teardown; makes an in-flight poll continuation a no-op
       pollAttempts: 0,        // bounds the poll loop — give up after POLL_MAX
       POLL_MAX: 40,           // ~2 minutes at the 3s poll interval
-      // LCD Display / MudiUI front panel (get_lcd / set_lcd)
-      lcd: null,
-      lcdBusy: false,
-      lcdErr: "",
-      lcdBrightnessDraft: 90,
       // History eMMC backup (get/set_history_persist) — off by default
       histPersist: null,
       histPersistBusy: false,
@@ -136,32 +118,35 @@ module.exports = {
       // Approximate downlink centre freq (MHz) per band, for spectrum ordering
       // and labels. Source: 3GPP TS 38.101-1 (NR) / 36.101 (LTE), rounded to the
       // marketing figure. Labels only — the modem is never sent a frequency.
+      // Covers BOTH RG650V variants (NA + EU) — the module set differs per unit.
       freq: {
-        n: { 2: 1900, 5: 850, 7: 2600, 12: 700, 13: 750, 14: 700, 25: 1900, 26: 850,
-             29: 700, 30: 2300, 38: 2600, 41: 2500, 48: 3500, 66: 1700, 70: 1700,
-             71: 600, 77: 3700, 78: 3500, 79: 4700 },
-        B: { 2: 1900, 4: 1700, 5: 850, 7: 2600, 12: 700, 13: 750, 14: 700, 17: 700,
-             25: 1900, 26: 850, 29: 700, 30: 2300, 38: 2600, 41: 2500, 42: 3500,
-             43: 3600, 48: 3500, 66: 1700, 71: 600 }
+        n: { 1: 2100, 2: 1900, 3: 1800, 5: 850, 7: 2600, 8: 900, 12: 700, 13: 750, 14: 700,
+             20: 800, 25: 1900, 26: 850, 28: 700, 29: 700, 30: 2300, 38: 2600, 40: 2300,
+             41: 2500, 48: 3500, 66: 1700, 70: 1700, 71: 600, 75: 1500, 76: 1500,
+             77: 3700, 78: 3500, 79: 4700 },
+        B: { 1: 2100, 2: 1900, 3: 1800, 4: 1700, 5: 850, 7: 2600, 8: 900, 12: 700, 13: 750,
+             14: 700, 17: 700, 18: 850, 19: 850, 20: 800, 25: 1900, 26: 850, 28: 700,
+             29: 700, 30: 2300, 32: 1500, 34: 2000, 38: 2600, 39: 1900, 40: 2300,
+             41: 2500, 42: 3500, 43: 3600, 46: 5200, 48: 3500, 66: 1700, 71: 600 }
       },
+      // LTE band -> [F_DL_low MHz, N_Offs-DL] (3GPP TS 36.101 table 5.7.3-1), for
+      // the channel readout. NR uses the global raster (chanMhz below).
+      LTE_EARFCN: { 1: [2110, 0], 2: [1930, 600], 3: [1805, 1200], 4: [2110, 1950], 5: [869, 2400],
+                    7: [2620, 2750], 8: [925, 3450], 12: [729, 5010], 13: [746, 5180], 14: [758, 5280],
+                    17: [734, 5730], 18: [860, 5850], 19: [875, 6000], 20: [791, 6150], 25: [1930, 8040],
+                    26: [859, 8690], 28: [758, 9210], 29: [717, 9660], 30: [2350, 9770], 32: [1452, 9920],
+                    34: [2010, 36200], 38: [2570, 37750], 39: [1880, 38250], 40: [2300, 38650],
+                    41: [2496, 39650], 42: [3400, 41590], 43: [3600, 43590], 46: [5150, 46790],
+                    48: [3550, 55240], 66: [2110, 66436], 71: [617, 68586] },
       // Default NR SS-block SCS per band (kHz), used ONLY when no scan result
       // covers the serving cell. Source: 3GPP TS 38.104 §5.4.3 band tables —
       // FDD low/mid bands are 15 kHz, the TDD mid bands 30 kHz. The confirm
       // text says when this assumption is in play. Encoding (kHz vs index)
       // verified at the supervised milestone before first use.
-      SCS_DEFAULT: { 2: 15, 5: 15, 7: 15, 12: 15, 13: 15, 14: 15, 25: 15, 26: 15,
-                     29: 15, 30: 15, 38: 30, 41: 30, 48: 30, 66: 15, 70: 15,
-                     71: 15, 77: 30, 78: 30, 79: 30 },
-      // Home-operator names for common PLMNs (MCC+MNC from sims_info). Labels
-      // only — used for the "roaming on X" honesty line. Unknown → "MCC-MNC".
-      PLMN: {
-        "310260": "T-Mobile US", "312250": "T-Mobile US", "310410": "AT&T US",
-        "310280": "AT&T US", "311480": "Verizon US", "313100": "FirstNet US",
-        "20601": "Proximus BE", "20404": "Vodafone NL", "26201": "Telekom DE",
-        "23430": "EE UK", "20801": "Orange FR", "22201": "TIM IT",
-        "21407": "Movistar ES", "50501": "Telstra AU", "44010": "docomo JP",
-        "302220": "Telus CA", "302610": "Bell CA", "302720": "Rogers CA"
-      }
+      SCS_DEFAULT: { 1: 15, 2: 15, 3: 15, 5: 15, 7: 15, 8: 15, 12: 15, 13: 15, 14: 15,
+                     20: 15, 25: 15, 26: 15, 28: 15, 29: 15, 30: 15, 38: 30, 40: 30,
+                     41: 30, 48: 30, 66: 15, 70: 15, 71: 15, 75: 15, 76: 15,
+                     77: 30, 78: 30, 79: 30 }
     };
   },
 
@@ -184,92 +169,80 @@ module.exports = {
     // unregistered — and never borrows the other slot's cell (which may be
     // carrying failover data; that's GL's own SIM1-active / modem-connected split).
     activeSlot() { return this.modemStatus.current_sim_slot; },
-    servingNet() {
-      var self = this;
+    // ---- cellModel: the ONLY reader of raw 4.10 socket shapes ----
+    // modems_status merges SIM + network state into per-modem simcard[]
+    // (slot, status, dial_status, technology, apn, iccid, pin_counter, …);
+    // networks_info carries carrier + SIM identity (iccid/imsi/mcc/mnc/
+    // phone_number/apn_list) per {bus, slot}. RF comes ONLY from the collector.
+    simcards() { return this.modemStatus.simcard || []; },
+    networks() {
       var bus = this.modem.bus;
-      var nets = (this.ms("cellular.networks_info").networks || [])
+      return (this.ms("cellular.networks_info").networks || [])
         .filter(function (n) { return !bus || n.bus == null || n.bus === bus; });
-      return nets.filter(function (n) { return String(n.slot) === String(self.activeSlot); })[0] || {};
     },
-    serving() { return this.servingNet.cell_info || {}; },
+    anyNetwork() { return this.networks.length > 0; },
+    activeNet() {
+      var self = this;
+      return this.networks.filter(function (n) { return String(n.slot) === String(self.activeSlot); })[0] || {};
+    },
+    activeCard() {
+      var self = this;
+      return this.simcards.filter(function (c) { return String(c.slot) === String(self.activeSlot); })[0] || {};
+    },
+    // SIM identity of the active slot (mcc/mnc/iccid/imsi/phone_number/apn_list).
+    activeSim() { return this.activeNet; },
+    // The collector's latest normalized sample (cellular_compat schema:
+    // signals[] + flattened PCC aliases), pushed over mudimodem.collect. A
+    // frame without `t` is the "nothing yet" seed.
+    latestSample() {
+      var s = this.ms("mudimodem.collect");
+      return (s && s.t) ? s : null;
+    },
+    serving() { return this.latestSample || {}; },
     // Is the active SIM actually registered (has a serving cell)?
     activeRegistered() { return this.serving.rsrp !== undefined && this.serving.rsrp !== null && this.serving.rsrp !== ""; },
-    anyNetwork() { return (this.ms("cellular.networks_info").networks || []).length > 0; },
-    activeSim() {
-      var self = this;
-      var sims = this.ms("cellular.sims_info").sims || [];
-      return sims.filter(function (s) { return String(s.slot) === String(self.activeSlot); })[0] || {};
-    },
-    // Carrier of the ACTIVE SIM (from sim status), for the strip label.
+    // Carrier of the ACTIVE SIM, for the strip label: the sample carries it; the
+    // networks_info entry is the fallback (then the home PLMN name).
     servingCarrier() {
-      var self = this;
-      var sims = this.ms("cellular.sims_status").sims || [];
-      var s = sims.filter(function (x) { return String(x.slot) === String(self.activeSlot); })[0] || {};
-      if (s.carrier) return s.carrier;
-      return this.activeSim.mcc ? (this.activeSim.mcc + this.activeSim.mnc) : "";
+      if (this.serving.carrier) return this.serving.carrier;
+      if (this.activeNet.carrier) return this.activeNet.carrier;
+      return this.activeNet.mcc ? (this.activeNet.mcc + this.activeNet.mnc) : "";
     },
-    // ---- SIM tab (Phase 4) ----
-    // One view-model per physical slot: identity + registration + the two DSDS
-    // facts GL never shows together (selected slot vs data-carrying slot).
-    slotCards() {
-      var self = this;
-      var infos = this.ms("cellular.sims_info").sims || [];
-      var stats = this.ms("cellular.sims_status").sims || [];
-      var nets = this.ms("cellular.networks_status").networks || [];
-      return [1, 2].map(function (slot) {
-        var bySlot = function (arr) {
-          return arr.filter(function (x) { return String(x.slot) === String(slot); })[0] || {};
-        };
-        var info = bySlot(infos), st = bySlot(stats), net = bySlot(nets);
-        var home = self.plmnName(info.mcc, info.mnc);
-        var named = !!self.PLMN[String(info.mcc || "") + String(info.mnc || "")];
-        return {
-          slot: slot,
-          selected: String(self.activeSlot) === String(slot),
-          // "Carrying data" = the network is actually CONNECTED. GL's network
-          // status enum is {CONNECTED:0, CONNECTING:1, DISCONNECTED:2,
-          // CONNECTION_FAILED:3}. dial_status is NOT this: dial_status===1 is a
-          // transient "dialing" retry that a DISCONNECTED slot shows while it
-          // keeps trying — using it painted a stalled AT&T slot as the data slot.
-          data: net.status === 0,
-          reg: st.status,
-          // A SIM is PRESENT per GL's own status codes (5 searching / 6 registered).
-          // status 0 = No SIM: the modem may still report a stale/garbage iccid
-          // during a re-scan, so never key identity/form off the iccid string.
-          present: st.status === 5 || st.status === 6,
-          carrier: st.carrier || "",
-          home: home,
-          // Roaming claim only when confident: registered, home PLMN known, and
-          // the serving carrier's name doesn't contain the home name (or vice
-          // versa — "T-Mobile" vs "T-Mobile US" is home, not roaming).
-          roaming: st.status === 6 && named && !!st.carrier &&
-            !self.nameOverlap(home, st.carrier),
-          iccid: info.iccid || "", imsi: info.imsi || "",
-          phone: info.phone_number || "",
-          mcc: info.mcc || "", mnc: info.mnc || "",
-          apn: st.apn || "",
-          apnList: (info.apn_list || []).filter(function (a, i, arr) {
-            return arr.indexOf(a) === i;
-          })
-        };
-      });
+    // Every serving component carrier, as {group, band, role} — SA = one NR
+    // chip, NSA = LTE anchor + NR chips, LTE-CA = several LTE chips.
+    servingBands() {
+      var self = this, out = [];
+      var sigs = this.serving.signals;
+      if (Array.isArray(sigs) && sigs.length) {
+        sigs.forEach(function (sg) {
+          if (sg && sg.band != null) out.push({ group: self.groupOf(sg.rat || self.serving.mode), band: Number(sg.band), role: sg.role || "PCC" });
+        });
+      } else if (this.serving.band != null && this.serving.band !== "") {
+        out.push({ group: this.groupOf(this.serving.mode), band: Number(this.serving.band), role: "PCC" });
+      }
+      return out.filter(function (b) { return b.group; });
     },
-    // IP-type labels come from the modem itself over the websocket — never
-    // hardcoded (supports_ip_type: 0 IPv4&IPv6 · 1 IPv4 · 2 IPv6 on this box).
-    ipTypeOptions() { return this.modem.supports_ip_type || []; },
     hasData() { return this.serving.rsrp !== undefined && this.serving.rsrp !== null; },
     isNR() { return /NR5G/.test(this.serving.mode || ""); },
+    // The PRIMARY carrier's own RAT — "LTE" for an NSA anchor, while `mode` is
+    // the cell's (NR5G-NSA). Band prefix, channel raster and the "you are
+    // here" ring follow the carrier, never the cell's mode: the LTE anchor of
+    // an EN-DC cell is B3 at 1855 MHz, not "n3" on the NR raster.
+    servingRat() { return this.serving.pcc_rat || this.serving.mode; },
+    // The /ws seed is flagged `stale` (with its box-clock age) when the
+    // collector has not written for over a minute; live pushes never are.
+    // >0 = seconds since the collector's last sample, as of the seed.
+    staleFor() { return this.serving.stale ? Number(this.serving.age_s) || 1 : 0; },
     bandLabel() {
-      if (this.serving.band === undefined || this.serving.band === "") return "—";
-      return (this.isNR ? "n" : "B") + this.serving.band;
+      if (this.serving.band === undefined || this.serving.band === null || this.serving.band === "") return "—";
+      return this.formatBand(this.servingRat, this.serving.band);
     },
-    // Which band group is serving right now (for the "you are here" ring).
-    servingGroup() {
-      var m = this.serving.mode || "";
-      if (/NR5G-SA/.test(m)) return "sa";
-      if (/NR5G/.test(m)) return "nsa";
-      if (/LTE/.test(m)) return "LTE";
-      return null;
+    // Which band group the PCC is on (for the "you are here" ring).
+    servingGroup() { return this.groupOf(this.servingRat); },
+    // Carrier-aggregation summary for the strip: "" for a single carrier.
+    caLabel() {
+      var n = Array.isArray(this.serving.signals) ? this.serving.signals.length : 0;
+      return n > 1 ? "CA ×" + n : "";
     },
     rsrpQ() { return this.qFromLevel(this.serving.rsrp_level); },
     sinrQ() { return this.qFromLevel(this.serving.sinr_level); },
@@ -281,11 +254,16 @@ module.exports = {
       push("Band", this.bandLabel === "—" ? null : this.bandLabel);
       push("Bandwidth", c.dl_bandwidth);
       push("Cell ID", c.id);
-      push("Channel", c.tx_channel);
-      push("RSRP", c.rsrp !== undefined ? c.rsrp + " dBm" : null);
-      push("RSRQ", c.rsrq !== undefined ? c.rsrq + " dB" : null);
-      push("SINR", c.sinr !== undefined ? c.sinr + " dB" : null);
-      if (c.rssi !== undefined) push("RSSI", c.rssi + " dBm");
+      push("TAC", c.tac);
+      push("PCI", c.pci);
+      push("Channel", this.chanLabel(this.servingRat, c.band, c.tx_channel));
+      push("CA", this.caLabel || null);
+      // `!= null` not `!== undefined`: the /ws seed keeps JSON nulls (cjson),
+      // and "null dB" is not a reading.
+      push("RSRP", c.rsrp != null ? c.rsrp + " dBm" : null);
+      push("RSRQ", c.rsrq != null ? c.rsrq + " dB" : null);
+      push("SINR", c.sinr != null ? c.sinr + " dB" : null);
+      if (c.rssi != null) push("RSSI", c.rssi + " dBm");
       push("Carrier", this.servingCarrier);
       push("SIM slot", this.activeSlot);
       return out;
@@ -293,46 +271,34 @@ module.exports = {
   },
 
   watch: {
-    "serving.rsrp": {
+    // Each collector push (a new sample `t`) extends the strip history in place
+    // — the same record get_history would return, minus the round-trip.
+    "serving.t": {
       immediate: true,
-      handler(v) {
-        var n = parseFloat(v);
-        if (isNaN(n)) return;
-        this.trace.push(n);
-        if (this.trace.length > this.TRACE_MAX) this.trace.shift();
-      }
+      handler(t) { this.onSamplePush(this.serving); }
     },
     tab(t) {
       if (t === "bands" && !this.bands && !this.bandsLoading) this.fetchBands();
       if (t === "lock" && !this.lockData && !this.lockLoading) this.fetchLock();
       if (t === "at" && !this.consoleComp && !this.consoleLoading) this.loadConsole();
-      if (t === "sim") this.loadSimTab();
       if (t === "config") {
         if (!this.deviceInfo) this.fetchDeviceInfo();   // retries on every open until it succeeds
         this.checkAppVersion();   // re-check every open, per spec
         this.fetchHistoryPersist();
-      }
-      if (t === "lcd") this.fetchLcd();
-    },
-    // A slot switch is done when GL's selected slot lands on the target.
-    activeSlot(v) {
-      if (this.switchTarget && String(v) === String(this.switchTarget)) {
-        this.clearSwitchState();
-        this.loadSimTab();   // fresh configs for the new arrangement
       }
     }
   },
 
   created() { this.injectStyle(); },
   mounted() {
-    this.startStripPoll();   // strip history comes from the collector daemon
+    this.startStrip();       // preload the strip window; live updates arrive as pushes
     if (this.tab === "tracking") this.loadTracking();
     // Load the band/lock model up front so the banner's mode + tower badges have
     // data whatever tab we land on (the tab watcher only fires on a change).
     if (!this.bands && !this.bandsLoading) this.fetchBands();
   },
   beforeDestroy() {
-    this.clearCountdown(); this.clearSwitchState(); this.stopStripPoll();
+    this.clearCountdown(); this.stopStripPoll();
     if (this.resetTimer) clearTimeout(this.resetTimer);
     if (this.updateConfirmTimer) clearTimeout(this.updateConfirmTimer);
     if (this.updatePollTimer) clearTimeout(this.updatePollTimer);
@@ -350,25 +316,56 @@ module.exports = {
         excellent: "var(--success)", none: "var(--text-hint)"
       })[q];
     },
-    plmnName(mcc, mnc) {
-      if (!mcc) return "";
-      return this.PLMN[String(mcc) + String(mnc)] || (mcc + "-" + mnc);
-    },
     // Case/punctuation-insensitive containment: "T-Mobile US" vs "T-Mobile".
     nameOverlap(a, b) {
       var n = function (s) { return String(s).toLowerCase().replace(/[^a-z0-9]/g, ""); };
       var x = n(a), y = n(b);
       return !!x && !!y && (x.indexOf(y) !== -1 || y.indexOf(x) !== -1);
     },
-    regLabel(reg) {
-      if (reg === undefined || reg === null) return "—";
-      return ({ 0: "No SIM", 5: "Not registered", 6: "Registered" })[reg] || ("Status " + reg);
-    },
     freqOf(group, b) {
       var t = (group === "LTE") ? this.freq.B : this.freq.n;
       return t[b];
     },
     prefixOf(group) { return group === "LTE" ? "B" : "n"; },
+    // rat/mode string -> band group key (sa | nsa | LTE), null when unknown.
+    groupOf(mode) {
+      var m = mode || "";
+      if (/NR5G-SA/.test(m)) return "sa";
+      if (/NR5G/.test(m)) return "nsa";
+      if (/LTE/.test(m)) return "LTE";
+      return null;
+    },
+    // The one band formatter: "n78" / "B3" from the carrier's RAT.
+    formatBand(rat, band) {
+      if (band === undefined || band === null || band === "") return "—";
+      return (/NR5G/.test(rat || "") ? "n" : "B") + band;
+    },
+    // Channel -> MHz. NR: 3GPP TS 38.104 global raster (no band needed).
+    // LTE: band-aware (TS 36.101); unknown band => null (show the raw EARFCN).
+    chanMhz(rat, band, arfcn) {
+      var n = Number(arfcn);
+      if (!n || isNaN(n)) return null;
+      if (/NR5G/.test(rat || "")) {
+        if (n < 600000) return n * 0.005;
+        if (n < 2016667) return 3000 + (n - 600000) * 0.015;
+        return 24250.08 + (n - 2016667) * 0.06;
+      }
+      var e = this.LTE_EARFCN[Number(band)];
+      if (!e) return null;
+      return e[0] + 0.1 * (n - e[1]);
+    },
+    chanLabel(rat, band, arfcn) {
+      if (arfcn === undefined || arfcn === null || arfcn === "") return null;
+      var mhz = this.chanMhz(rat, band, arfcn);
+      return mhz ? String(arfcn) + " (" + mhz.toFixed(1) + " MHz)" : String(arfcn);
+    },
+    // seconds -> "45 s" / "12 min" / "3 h" for the stale-seed notice.
+    fmtAge(sec) {
+      sec = Number(sec) || 0;
+      if (sec < 90) return Math.round(sec) + " s";
+      if (sec < 5400) return Math.round(sec / 60) + " min";
+      return (sec / 3600).toFixed(sec < 36000 ? 1 : 0) + " h";
+    },
 
     // Open the in-page Tracking tab, lazy-loading its chunk on first use.
     openTracking() { this.tab = "tracking"; this.loadTracking(); },
@@ -453,27 +450,44 @@ module.exports = {
     },
 
     // Fetch the three-layer band model from our backend.
-    fetchBands() {
+    // opts.light: after a cell-lock action only GL's store can have changed
+    // (network_mode, the tower badge) — policy/capability (2-3 AT reads) cannot
+    // — so ask for config+meta only (zero AT) and merge them into the model
+    // already held. Falls back to a full fetch when there is no model yet.
+    fetchBands(opts) {
       var self = this;
+      var light = !!(opts && opts.light) && !!this.bands;
       if (typeof window === "undefined" || !window.$rpcRequest) {
         this.bandsError = "RPC helper unavailable";
         return;
       }
-      this.bandsLoading = true;
-      this.bandsError = "";
+      if (!light) { this.bandsLoading = true; this.bandsError = ""; }
       this.clearResetNote();
-      window.$rpcRequest("call", ["sid", "mudimodem", "get_bands", {}], { timeout: 15000 })
+      window.$rpcRequest("call", ["sid", "mudimodem", "get_bands", light ? { light: 1 } : {}], { timeout: 15000 })
         .then(function (res) {
-          self.bands = res;
+          // A soft error ({error}) RESOLVES through $rpcRequest (it only rejects
+          // on err_msg/err_code). Storing it as `bands` would make renderGroup
+          // dereference d.supported and throw — freezing the tab on the
+          // loading text with no message and no refresh button.
+          if (!res || res.error) {
+            if (!light) self.bandsError = (res && res.error) || "request failed";
+            return;
+          }
+          if (light) {
+            self.bands.config = res.config;
+            self.bands.meta = Object.assign({}, self.bands.meta, res.meta);
+          } else {
+            self.bands = res;
+          }
           // Seed each editable selection from the current config; an empty config
           // means "unrestricted", so start from everything the carrier permits.
           self.sel = { sa: self.seedFor("sa"), nsa: self.seedFor("nsa"), LTE: self.seedFor("LTE") };
           self.selMode = (res.meta && res.meta.mode) || "AUTO";
         })
         .catch(function (e) {
-          self.bandsError = (e && (e.type || e.message)) || "request failed";
+          if (!light) self.bandsError = (e && (e.type || e.message)) || "request failed";
         })
-        .then(function () { self.bandsLoading = false; });
+        .then(function () { if (!light) self.bandsLoading = false; });
     },
     seedFor(group) {
       var cfg = (this.bands.config && this.bands.config[group]) || [];
@@ -489,7 +503,12 @@ module.exports = {
       }
       this.lockLoading = true; this.lockError = "";
       window.$rpcRequest("call", ["sid", "mudimodem", "get_lock", {}], { timeout: 20000 })
-        .then(function (res) { self.lockData = res; })
+        .then(function (res) {
+          // {error} resolves, not rejects — keep the previous picture (if any)
+          // and say why instead of rendering the error object as a lock state.
+          if (!res || res.error) { self.lockError = (res && res.error) || "request failed"; return; }
+          self.lockData = res;
+        })
         .catch(function (e) { self.lockError = (e && (e.type || e.message)) || "request failed"; })
         .then(function () { self.lockLoading = false; });
     },
@@ -498,7 +517,8 @@ module.exports = {
     // this pci+arfcn if we have one, else the band default (flagged assumed).
     pinTarget() {
       var s = this.lockData && this.lockData.serving;
-      if (!s || !s.pci || !s.arfcn) return null;
+      // == null, not falsy: PCI 0 (LTE 0-503 / NR 0-1007) and EARFCN 0 (LTE B1) are real.
+      if (!s || s.pci == null || s.arfcn == null) return null;
       var isNR = /NR5G/.test(s.rat || "");
       var t = { rat: isNR ? "5g" : "4g", pci: s.pci, freq: s.arfcn,
                 band: s.band, label: "current cell PCI " + s.pci };
@@ -601,7 +621,7 @@ module.exports = {
         .then(function (res) {
           if (res && res.error) { self.lockError = res.error; return; }
           self.fetchLock();
-          self.fetchBands();   // refresh meta.lock so the banner tower badge updates
+          self.fetchBands({ light: true });   // meta.lock / mode from GL's store only — no AT
         })
         .catch(function (e) { self.lockError = (e && (e.type || e.message)) || "unlock failed"; })
         .then(function () { self.lockBusy = false; });
@@ -635,72 +655,6 @@ module.exports = {
       return t;
     },
 
-    // ---- SIM tab (Phase 4) ----
-    // Refetch on every tab entry: cheap, and the RMW base must be fresh anyway.
-    loadSimTab() {
-      this.fetchFailover();
-      this.fetchSimCfg(1);
-      this.fetchSimCfg(2);
-    },
-    fetchSimCfg(slot) {
-      var self = this;
-      if (typeof window === "undefined" || !window.$rpcRequest) return;
-      var card = this.slotCards[slot - 1];
-      // No SIM (or stale garbage during a rescan): nothing to fetch or edit.
-      if (!card.present || !card.iccid) { this.simCfgErr[slot] = ""; this.simEdit[slot] = null; return; }
-      window.$rpcRequest("call", ["sid", "modem", "get_sim_config",
-        { slot: slot, bus: this.modem.bus, iccid: card.iccid }], { timeout: 30000 })
-        .then(function (cfg) {
-          self.simCfg[slot] = cfg;
-          self.simEdit[slot] = {
-            apn: cfg.apn || "", auth: cfg.auth || "NONE",
-            username: cfg.username || "", password: cfg.password || "",
-            ip_type: Number(cfg.ip_type || 0), roaming: !!cfg.roaming
-          };
-          self.simCfgErr[slot] = "";
-        })
-        .catch(function (e) {
-          self.simCfgErr[slot] = (e && (e.type || e.message)) || "request failed";
-        });
-    },
-    // RMW guard — the ONLY way a set_sim_config payload may be built. The same
-    // object carries the band config (band_enable/band_filter_mode/band_list);
-    // merging into a fresh read is what keeps the n71 lock unclobberable.
-    mergeSimConfig(fresh, edits) {
-      var out = {};
-      for (var k in fresh) out[k] = fresh[k];
-      out.apn = edits.apn;
-      out.auth = edits.auth;
-      out.username = edits.username;
-      out.password = edits.password;
-      out.ip_type = Number(edits.ip_type);
-      out.roaming = !!edits.roaming;
-      // GL coerces these to Number on its own writes; mirror it.
-      if (out.ttl !== undefined) out.ttl = Number(out.ttl || 0);
-      if (out.hl !== undefined) out.hl = Number(out.hl || 0);
-      if (out.mtu !== undefined) out.mtu = Number(out.mtu || 0);
-      return out;
-    },
-    fetchFailover() {
-      var self = this;
-      if (typeof window === "undefined" || !window.$rpcRequest) return;
-      window.$rpcRequest("call", ["sid", "modem", "get_slot_failover_config",
-        { bus: this.modem.bus }], { timeout: 30000 })
-        .then(function (cfg) {
-          self.failover = cfg;
-          self.failoverEdit = {
-            enable_switch: !!cfg.enable_switch,
-            slot_priority: (cfg.slot_priority || [1, 2]).slice(),
-            enable_timing: !!cfg.enable_timing,
-            hour: cfg.hour != null ? String(cfg.hour) : "00",
-            min: cfg.min != null ? String(cfg.min) : "00"
-          };
-          self.failoverErr = "";
-        })
-        .catch(function (e) {
-          self.failoverErr = (e && (e.type || e.message)) || "request failed";
-        });
-    },
     // ---- Config tab (Phase 5) ----
     modemName() {
       return (this.modem && this.modem.name) || "";   // this.modem already exists (computed)
@@ -752,40 +706,6 @@ module.exports = {
         window.location.reload();
       }
     },
-    fetchLcd() {
-      var self = this;
-      if (typeof window === "undefined" || !window.$rpcRequest) return Promise.resolve();
-      return window.$rpcRequest("call", ["sid", "mudimodem", "get_lcd", {}], { timeout: 8000 })
-        .then(function (r) {
-          self.lcd = r || null;
-          if (r && typeof r.brightness === "number") self.lcdBrightnessDraft = r.brightness;
-          self.lcdErr = (r && r.error) || "";
-        })
-        .catch(function (e) {
-          self.lcdErr = (e && (e.message || e.type)) || "request failed";
-        });
-    },
-    applyLcd(patch) {
-      var self = this;
-      if (this.lcdBusy || typeof window === "undefined" || !window.$rpcRequest) return;
-      this.lcdBusy = true;
-      this.lcdErr = "";
-      return window.$rpcRequest("call", ["sid", "mudimodem", "set_lcd", patch || {}], { timeout: 15000 })
-        .then(function (r) {
-          self.lcdBusy = false;
-          if (r && typeof r.available === "boolean") {
-            self.lcd = r;
-            if (typeof r.brightness === "number") self.lcdBrightnessDraft = r.brightness;
-          }
-          self.lcdErr = (r && r.error) || "";
-        })
-        .catch(function (e) {
-          self.lcdBusy = false;
-          self.lcdErr = (e && (e.message || e.type)) || "request failed";
-        });
-    },
-    // History eMMC backup: live charts still read tmpfs; collectd periodically
-    // appends new samples to /etc/mudimodem/history/ when this is on.
     fetchHistoryPersist() {
       var self = this;
       if (typeof window === "undefined" || !window.$rpcRequest) return Promise.resolve();
@@ -989,419 +909,6 @@ module.exports = {
 
       return h("div", {}, [device, app, hist]);
     },
-    renderLcd(h) {
-      var self = this;
-      var row = function (label, value) {
-        return h("div", { staticClass: "mm-kv" }, [
-          h("span", { staticClass: "mm-k" }, label),
-          h("span", { staticClass: "mm-v" }, value || "—")
-        ]);
-      };
-      var lc = this.lcd;
-      var kids = [h("div", { staticClass: "mm-card-h" }, "LCD Display (front panel)")];
-      if (!lc) {
-        kids.push(h("div", { staticClass: "mm-note" }, this.lcdErr || "Loading…"));
-      } else if (lc.available === false) {
-        kids.push(h("div", { staticClass: "mm-note" }, "Front panel not available on this device."));
-        if (this.lcdErr) kids.push(h("div", { staticClass: "mm-note" }, this.lcdErr));
-      } else {
-        kids.push(h("div", { staticClass: "mm-kv" }, [
-          h("label", { staticClass: "mm-k" }, [
-            h("input", {
-              attrs: { type: "checkbox", disabled: !!self.lcdBusy },
-              domProps: { checked: !!lc.enabled },
-              on: { change: function (e) {
-                self.applyLcd({ enabled: !!(e.target && e.target.checked) });
-              } }
-            }),
-            " Show status on the front LCD"
-          ])
-        ]));
-        kids.push(h("div", { staticClass: "mm-kv" }, [
-          h("span", { staticClass: "mm-k" }, "Brightness"),
-          h("span", { staticClass: "mm-v" }, [
-            h("input", {
-              attrs: { type: "number", min: 20, max: 120, step: 1,
-                       disabled: !lc.enabled || !!self.lcdBusy },
-              domProps: { value: self.lcdBrightnessDraft },
-              on: {
-                input: function (e) { self.lcdBrightnessDraft = Number(e.target && e.target.value); },
-                change: function () { self.applyLcd({ brightness: self.lcdBrightnessDraft }); }
-              }
-            })
-          ])
-        ]));
-        var TO = [["30", "30s"], ["60", "1m"], ["300", "5m"], ["600", "10m"],
-                  ["1200", "20m"], ["3600", "60m"], ["0", "Never"]];
-        kids.push(h("div", { staticClass: "mm-kv" }, [
-          h("span", { staticClass: "mm-k" }, "Screen timeout"),
-          h("span", { staticClass: "mm-v" }, [
-            h("select", {
-              attrs: { disabled: !lc.enabled || !!self.lcdBusy },
-              on: { change: function (e) { self.applyLcd({ screen_timeout: Number(e.target.value) }); } }
-            }, TO.map(function (o) {
-              return h("option",
-                { attrs: { value: o[0], selected: String(lc.screen_timeout) === o[0] } }, o[1]);
-            }))
-          ])
-        ]));
-        var PG = [["0", "Signal"], ["1", "WiFi"], ["2", "System"], ["3", "Ethernet"]];
-        kids.push(h("div", { staticClass: "mm-kv" }, [
-          h("span", { staticClass: "mm-k" }, "Default page"),
-          h("span", { staticClass: "mm-v" }, [
-            h("select", {
-              attrs: { disabled: !lc.enabled || !!self.lcdBusy },
-              on: { change: function (e) { self.applyLcd({ default_page: Number(e.target.value) }); } }
-            }, PG.map(function (o) {
-              return h("option",
-                { attrs: { value: o[0], selected: String(lc.default_page) === o[0] } }, o[1]);
-            }))
-          ])
-        ]));
-        kids.push(row("Status", lc.running ? "Running" : "Stopped"));
-        kids.push(h("div", { staticClass: "mm-note", style: { fontWeight: "700", color: "#000" } },
-          "Enabling takes over the front panel from GL's stock screen. Long-press the panel (~1.6s) to toggle back and forth. GL screen needs to be loaded from scratch, will take a couple of seconds to appear."));
-        if (this.lcdErr) kids.push(h("div", { staticClass: "mm-note" }, this.lcdErr));
-      }
-      return h("div", {}, [h("div", { staticClass: "mm-card" }, kids)]);
-    },
-    askSwitch(slot) { this.switchConfirm = slot; this.switchErr = ""; },
-    clearSwitchState() {
-      this.switchTarget = 0;
-      if (this.switchTimer) { clearTimeout(this.switchTimer); this.switchTimer = null; }
-    },
-    // GL's own UI switches slots by applying the failover config with
-    // current_sim set — QUIMSLOT does not exist on this modem (GL-layer only).
-    doSwitch(slot) {
-      var self = this;
-      if (this.switchTarget || typeof window === "undefined" || !window.$rpcRequest) return;
-      this.switchConfirm = 0;
-      this.switchErr = "";
-      this.switchTarget = slot;
-      window.$rpcRequest("call", ["sid", "modem", "get_slot_failover_config",
-        { bus: this.modem.bus }], { timeout: 30000 })
-        .then(function (cfg) {
-          var payload = {};
-          for (var k in cfg) payload[k] = cfg[k];        // esim2_enable, slot_type… intact
-          payload.bus = self.modem.bus;
-          payload.current_sim = slot;
-          // GL's invariant: with auto-switch on, current_sim == slot_priority[0].
-          if (payload.enable_switch) payload.slot_priority = [slot, slot === 1 ? 2 : 1];
-          return window.$rpcRequest("call", ["sid", "modem", "set_slot_failover_config",
-            payload], { timeout: 30000 });
-        })
-        .then(function () { self.armSwitchFallback(); })
-        .catch(function (e) {
-          // The data link drops mid-switch; a timeout here means "in progress",
-          // not "failed" — keep waiting for the websocket to confirm.
-          if (e && e.type === "timeout") { self.armSwitchFallback(); return; }
-          self.clearSwitchState();
-          self.switchErr = (e && (e.type || e.message)) || "request failed";
-        });
-    },
-    armSwitchFallback() {
-      var self = this;
-      if (this.switchTimer) clearTimeout(this.switchTimer);
-      // If the websocket never confirms (switch failed silently), stop showing
-      // "Switching…" after 90 s and let the cards tell the truth again.
-      this.switchTimer = setTimeout(function () { self.clearSwitchState(); }, 90000);
-    },
-    AUTHS() { return ["NONE", "PAP", "CHAP", "PAP/CHAP"]; },
-    simDirty(slot) {
-      var cfg = this.simCfg[slot], ed = this.simEdit[slot];
-      if (!cfg || !ed) return false;
-      return ed.apn !== (cfg.apn || "") || ed.auth !== (cfg.auth || "NONE") ||
-        ed.username !== (cfg.username || "") || ed.password !== (cfg.password || "") ||
-        Number(ed.ip_type) !== Number(cfg.ip_type || 0) || !!ed.roaming !== !!cfg.roaming;
-    },
-    applySim(slot) {
-      var self = this;
-      if (this.simApplying || typeof window === "undefined" || !window.$rpcRequest) return;
-      var card = this.slotCards[slot - 1];
-      if (!card.iccid || !this.simEdit[slot]) return;
-      this.simApplying = slot;
-      this.simApplyErr[slot] = "";
-      // Fresh read immediately before the write, so every passthrough field
-      // (band config included) is current — never write from a stale base.
-      window.$rpcRequest("call", ["sid", "modem", "get_sim_config",
-        { slot: slot, bus: this.modem.bus, iccid: card.iccid }], { timeout: 30000 })
-        .then(function (fresh) {
-          self.simCfg[slot] = fresh;
-          var payload = self.mergeSimConfig(fresh, self.simEdit[slot]);
-          payload.slot = slot;
-          payload.bus = self.modem.bus;
-          payload.iccid = card.iccid;
-          return window.$rpcRequest("call", ["sid", "modem", "set_sim_config", payload],
-            { timeout: 30000 });
-        })
-        .then(function () {
-          self.simApplying = 0;
-          self.fetchSimCfg(slot);   // re-seed edits from what actually stuck
-        })
-        .catch(function (e) {
-          self.simApplying = 0;
-          self.simApplyErr[slot] = (e && (e.type || e.message)) || "request failed";
-        });
-    },
-    applyFailover(confirmed) {
-      var self = this;
-      if (this.failoverApplying || !this.failoverEdit ||
-          typeof window === "undefined" || !window.$rpcRequest) return;
-      var ed = this.failoverEdit;
-      var base = this.failover || {};
-      var payload = {};
-      for (var k in base) payload[k] = base[k];          // esim2_enable, slot_type… intact
-      payload.bus = this.modem.bus;
-      payload.enable_switch = !!ed.enable_switch;
-      payload.slot_priority = ed.slot_priority.slice();
-      payload.enable_timing = !!ed.enable_timing;
-      payload.hour = String(ed.hour);
-      payload.min = String(ed.min);
-      // GL's invariant: with auto-switch on, the preferred slot IS the current one.
-      if (payload.enable_switch) payload.current_sim = payload.slot_priority[0];
-      // If this apply would change the selected slot, it's a switch — same
-      // consequence, same confirmation, no back door.
-      var wouldSwitch = payload.current_sim &&
-        String(payload.current_sim) !== String(this.activeSlot);
-      if (wouldSwitch && !confirmed) { this.failoverConfirm = true; return; }
-      this.failoverConfirm = false;
-      this.failoverApplying = true;
-      this.failoverErr = "";
-      if (wouldSwitch) this.switchTarget = Number(payload.current_sim);
-      window.$rpcRequest("call", ["sid", "modem", "set_slot_failover_config", payload],
-        { timeout: 30000 })
-        .then(function () {
-          self.failoverApplying = false;
-          if (wouldSwitch) self.armSwitchFallback(); else self.fetchFailover();
-        })
-        .catch(function (e) {
-          self.failoverApplying = false;
-          if (wouldSwitch && e && e.type === "timeout") { self.armSwitchFallback(); return; }
-          if (wouldSwitch) self.clearSwitchState();
-          self.failoverErr = (e && (e.type || e.message)) || "request failed";
-        });
-    },
-    renderFailoverCard(h) {
-      var self = this, ed = this.failoverEdit;
-      var kids = [h("span", { staticClass: "mm-sect" }, "Failover")];
-      if (!ed) {
-        kids.push(h("div", { staticClass: "mm-hint" },
-          this.failoverErr ? "Couldn't load failover config: " + this.failoverErr
-            : "Loading failover config…"));
-        return h("div", { staticClass: "mm-card", staticStyle: { marginTop: "11px" } }, kids);
-      }
-      var frow = function (label, ctl) {
-        return h("div", { staticClass: "mm-frow" }, [h("span", { staticClass: "k" }, label), ctl]);
-      };
-      kids.push(frow("Auto failover", h("button", {
-        staticClass: "mm-apnchip" + (ed.enable_switch ? " on" : ""),
-        attrs: { "aria-pressed": String(!!ed.enable_switch) },
-        on: { click: function () { ed.enable_switch = !ed.enable_switch; } }
-      }, ed.enable_switch ? "On" : "Off")));
-      var names = this.slotCards.map(function (c) {
-        return "Slot " + c.slot + (c.carrier ? " · " + c.carrier : "");
-      });
-      kids.push(frow("Preferred order", h("button", {
-        staticClass: "mm-apnchip",
-        attrs: { title: "Swap priority" },
-        on: { click: function () { ed.slot_priority = ed.slot_priority.slice().reverse(); } }
-      }, ed.slot_priority.map(function (s) { return names[s - 1]; }).join("  →  "))));
-      kids.push(frow("Scheduled switch to preferred", h("button", {
-        staticClass: "mm-apnchip" + (ed.enable_timing ? " on" : ""),
-        attrs: { "aria-pressed": String(!!ed.enable_timing) },
-        on: { click: function () { ed.enable_timing = !ed.enable_timing; } }
-      }, ed.enable_timing ? "On" : "Off")));
-      if (ed.enable_timing) {
-        kids.push(frow("At", h("input", {
-          staticClass: "mm-input",
-          attrs: { type: "time", value: ed.hour + ":" + ed.min },
-          on: { input: function (ev) {
-            var p = String(ev.target.value || "00:00").split(":");
-            ed.hour = p[0] || "00"; ed.min = p[1] || "00";
-          } }
-        })));
-      }
-      if (this.failoverConfirm) {
-        kids.push(h("div", { staticClass: "mm-switchbox" }, [
-          h("div", "This change makes slot " + (ed.slot_priority[0]) + " the active SIM — " +
-            "it drops connectivity for ~30 seconds."),
-          h("div", { staticStyle: { display: "flex", gap: "9px", marginTop: "7px" } }, [
-            h("button", { staticClass: "mm-apply", on: { click: function () { self.applyFailover(true); } } }, "Apply anyway"),
-            h("button", { staticClass: "mm-reveal", on: { click: function () { self.failoverConfirm = false; } } }, "Cancel")
-          ])
-        ]));
-      } else {
-        kids.push(h("button", {
-          staticClass: "mm-apply",
-          attrs: { disabled: this.failoverApplying },
-          on: { click: function () { self.applyFailover(); } }
-        }, this.failoverApplying ? "Applying…" : "Apply"));
-      }
-      if (this.failoverErr && ed) {
-        kids.push(h("div", { staticClass: "mm-hint", staticStyle: { color: "var(--error)" } },
-          "Failover apply failed: " + this.failoverErr));
-      }
-      return h("div", { staticClass: "mm-card", staticStyle: { marginTop: "11px" } }, kids);
-    },
-    maskId(v) { return v ? String(v).slice(0, 4) + "…" : "—"; },
-    renderSlotCard(h, card) {
-      var self = this, slot = card.slot;
-      var revealed = this.simReveal[slot];
-      // Fact badges: Selected (mint) and Carrying data (indigo) are different
-      // facts and never share a colour (spec §4). Registration is neutral/amber.
-      var badges = [];
-      if (card.selected) badges.push(h("span", { staticClass: "mm-badge b-sel" }, "Selected"));
-      if (card.data) badges.push(h("span", { staticClass: "mm-badge b-data" }, "Carrying data"));
-      badges.push(h("span", {
-        staticClass: "mm-badge " + (card.reg === 6 ? "b-reg" : card.reg === 5 ? "b-warn" : "b-off")
-      }, this.regLabel(card.reg)));
-
-      var idRow = function (label, val) {
-        return h("div", { staticClass: "mm-idrow" }, [
-          h("span", { staticClass: "k" }, label),
-          h("b", revealed ? (val || "—") : self.maskId(val))
-        ]);
-      };
-
-      var kids = [
-        h("div", { staticStyle: { display: "flex", justifyContent: "space-between", alignItems: "baseline" } }, [
-          h("span", { staticClass: "mm-sect" }, card.present ? (card.carrier || card.home || ("SIM " + slot)) : "Empty"),
-          h("span", { staticClass: "mm-hint" }, "Slot " + slot)
-        ]),
-        h("div", { staticClass: "mm-badges" }, badges)
-      ];
-
-      // Identity + form only when a SIM is actually present (status 5/6). A
-      // status-0 slot renders as a clean Empty card even if the modem is still
-      // reporting a stale iccid mid-rescan.
-      if (card.present) {
-        if (card.home) {
-          kids.push(h("div", { staticClass: "mm-idrow" }, [
-            h("span", { staticClass: "k" }, "Home operator"),
-            h("b", card.home)
-          ]));
-        }
-        if (card.roaming) {
-          kids.push(h("div", {
-            staticClass: "mm-hint",
-            staticStyle: { color: "var(--warning)", margin: "2px 0 6px" }
-          }, "Roaming on " + card.carrier));
-        }
-        kids.push(idRow("ICCID", card.iccid));
-        kids.push(idRow("IMSI", card.imsi));
-        if (card.phone) kids.push(idRow("Phone", card.phone));
-        kids.push(h("button", {
-          staticClass: "mm-reveal",
-          on: { click: function () { self.simReveal[slot] = !revealed; } }
-        }, revealed ? "Hide identifiers" : "Show identifiers"));
-        kids.push(h("div", { staticClass: "mm-idrow" }, [
-          h("span", { staticClass: "k" }, "APN in use"),
-          h("b", card.apn || "—")
-        ]));
-
-        var ed = self.simEdit[slot];
-        if (ed) {
-          var frow = function (label, ctl) {
-            return h("div", { staticClass: "mm-frow" }, [h("span", { staticClass: "k" }, label), ctl]);
-          };
-          var form = [
-            frow("APN", h("input", {
-              staticClass: "mm-input",
-              attrs: { value: ed.apn, maxlength: 128, placeholder: "APN" },
-              on: { input: function (ev) { ed.apn = ev.target.value; } }
-            })),
-            h("div", { staticClass: "mm-apnchips" }, card.apnList.map(function (a) {
-              return h("button", {
-                key: a,
-                staticClass: "mm-apnchip" + (ed.apn === a ? " on" : ""),
-                on: { click: function () { ed.apn = a; } }
-              }, a);
-            })),
-            frow("Auth", h("select", {
-              staticClass: "mm-select",
-              attrs: { value: ed.auth },
-              on: { change: function (ev) { ed.auth = ev.target.value; } }
-            }, self.AUTHS().map(function (a) {
-              return h("option", { key: a, attrs: { value: a, selected: ed.auth === a } }, a);
-            })))
-          ];
-          if (ed.auth !== "NONE") {
-            form.push(frow("Username", h("input", {
-              staticClass: "mm-input", attrs: { value: ed.username, placeholder: "Username" },
-              on: { input: function (ev) { ed.username = ev.target.value; } }
-            })));
-            form.push(frow("Password", h("input", {
-              staticClass: "mm-input", attrs: { value: ed.password, type: "password", placeholder: "Password" },
-              on: { input: function (ev) { ed.password = ev.target.value; } }
-            })));
-          }
-          form.push(frow("IP type", h("select", {
-            staticClass: "mm-select",
-            attrs: { value: String(ed.ip_type) },
-            on: { change: function (ev) { ed.ip_type = Number(ev.target.value); } }
-          }, self.ipTypeOptions.map(function (o) {
-            return h("option", { key: o.value, attrs: { value: String(o.value), selected: Number(ed.ip_type) === o.value } }, o.label);
-          }))));
-          form.push(frow("Data roaming", h("button", {
-            staticClass: "mm-apnchip" + (ed.roaming ? " on" : ""),
-            attrs: { "aria-pressed": String(!!ed.roaming) },
-            on: { click: function () { ed.roaming = !ed.roaming; } }
-          }, ed.roaming ? "Allowed" : "Blocked")));
-          form.push(h("button", {
-            staticClass: "mm-apply",
-            attrs: { disabled: self.simApplying === slot || !self.simDirty(slot) },
-            on: { click: function () { self.applySim(slot); } }
-          }, self.simApplying === slot ? "Applying…" : "Apply"));
-          if (self.simApplyErr[slot]) {
-            form.push(h("div", { staticClass: "mm-hint", staticStyle: { color: "var(--error)" } },
-              "Apply failed: " + self.simApplyErr[slot]));
-          }
-          kids.push(h("div", { staticClass: "mm-form" }, form));
-        }
-
-        if (!card.selected) {
-          if (self.switchConfirm === slot) {
-            kids.push(h("div", { staticClass: "mm-switchbox" }, [
-              h("div", "Switching drops connectivity for ~30 seconds while slot " + slot +
-                " connects. This admin session will stall until it does."),
-              h("div", { staticStyle: { display: "flex", gap: "9px", marginTop: "7px" } }, [
-                h("button", { staticClass: "mm-apply", on: { click: function () { self.doSwitch(slot); } } }, "Switch"),
-                h("button", { staticClass: "mm-reveal", on: { click: function () { self.switchConfirm = 0; } } }, "Cancel")
-              ])
-            ]));
-          } else {
-            kids.push(h("button", {
-              staticClass: "mm-apply",
-              staticStyle: { marginTop: "9px" },
-              attrs: { disabled: !!self.switchTarget },
-              on: { click: function () { self.askSwitch(slot); } }
-            }, self.switchTarget === slot ? "Switching…" : "Use this SIM"));
-          }
-        }
-        if (self.switchErr && !card.selected) {
-          kids.push(h("div", { staticClass: "mm-hint", staticStyle: { color: "var(--error)" } },
-            "Switch failed: " + self.switchErr));
-        }
-      }
-      if (this.simCfgErr[slot]) {
-        kids.push(h("div", { staticClass: "mm-hint", staticStyle: { color: "var(--error)" } },
-          "Couldn't load dial config: " + this.simCfgErr[slot]));
-      }
-      return h("div", { key: slot, staticClass: "mm-card mm-slot" + (card.selected ? " sel" : "") }, kids);
-    },
-    renderSim(h) {
-      var self = this;
-      return h("div", [
-        h("div", { staticClass: "mm-simgrid" },
-          this.slotCards.map(function (c) { return self.renderSlotCard(h, c); })),
-        this.renderFailoverCard(h),
-        h("div", { staticClass: "mm-hint", staticStyle: { marginTop: "9px" } },
-          "DSDS: both SIMs stay registered; exactly one carries data at a time. " +
-          "The selected slot and the data-carrying slot can differ during failover — " +
-          "both facts are shown above. (AT users: sub_id must follow the active " +
-          "subscription; sub_id=0 answers for the wrong SIM.)")
-      ]);
-    },
 
     // The interactive RATs (each maps to a set_bands arg).
     interactive(group) { return group === "sa" || group === "nsa" || group === "LTE"; },
@@ -1521,24 +1028,17 @@ module.exports = {
       this.sel[group] = perm.filter(function (b) { return cur.indexOf(b) === -1; });
     },
     resetDefault() {
-      // Restore the modem's sane default: AUTO mode + every permitted band in
-      // each group — and ALWAYS write it, even when the grid already matches.
-      // The config often already equals the policy set, so a "stage only" button
-      // would sit there doing visibly nothing; pressing it must reach the modem.
-      // The write goes through the normal confirm-or-revert path (60s countdown).
+      // GL's TRUE default: band filtering OFF + Auto mode (set_band_config
+      // {band_enable:false, network_mode:"AUTO"}) — not "every permitted band"
+      // re-listed. Always written, still through confirm-or-revert.
       if (this.applying) return;
       if (this.pending) return this.flashReset("A change is already pending - Keep or Revert it first.");
       if (!this.bands) return this.flashReset("Bands haven't loaded yet - hit refresh.");
       this.applyError = "";
-      this.setMode("AUTO");
-      this.selectAll("sa");
-      this.selectAll("nsa");
-      this.selectAll("LTE");
-      var differs = this.changedAny();
-      this.applyBands(true);            // clears the note, so flash AFTER it
-      this.flashReset(differs
-        ? "Sending the default to the modem: Auto mode + every carrier-permitted band."
-        : "Already at the default - re-sending Auto mode + every carrier-permitted band to the modem anyway.");
+      this.applyBands({ reset: true });   // clears the note, so flash AFTER it
+      this.flashReset(this.bands.config && this.bands.config.enable === false && this.appliedMode() === "AUTO"
+        ? "Already at the default - re-sending 'filtering off + Auto' to the modem anyway."
+        : "Sending the default to the modem: band filtering off + Auto mode.");
     },
     // Transient one-line feedback under the Bands footer. Any later edit clears
     // it, so the note never describes a state the user has since moved off.
@@ -1562,35 +1062,42 @@ module.exports = {
       for (var i = 0; i < cur.length; i++) if (cur[i] !== sel[i]) return true;
       return false;
     },
+    // A group edit that would actually be SENT: under 4G-only the NR groups are
+    // never sent (GL empties them in its store under LTE mode, so "applying"
+    // them would be a lie the countdown then repeats). They stay edited in the
+    // grid and go out once the mode includes them.
+    sendable(group) { return this.changed(group) && !(this.selMode === "LTE" && group !== "LTE"); },
     changedAny() {
-      return this.changed("sa") || this.changed("nsa") || this.changed("LTE") || this.modeChanged();
+      return this.sendable("sa") || this.sendable("nsa") || this.sendable("LTE") || this.modeChanged();
     },
     emptyChange() {
       // an edited RAT with zero bands selected — not allowed (would drop the RAT)
-      return (this.changed("sa") && this.sel.sa.length === 0) ||
-             (this.changed("nsa") && this.sel.nsa.length === 0) ||
-             (this.changed("LTE") && this.sel.LTE.length === 0);
+      return (this.sendable("sa") && this.sel.sa.length === 0) ||
+             (this.sendable("nsa") && this.sel.nsa.length === 0) ||
+             (this.sendable("LTE") && this.sel.LTE.length === 0);
     },
 
-    // force=true sends every group + the mode even when nothing differs from the
-    // current config — that's the "Reset to default" contract: press it and the
-    // modem is written, so the result is never ambiguous. Still confirm-or-revert.
-    applyBands(force) {
+    // opts.reset=true sends GL's default (filtering off + AUTO) instead of the
+    // grid — the "Reset to default" contract: press it and the modem is written,
+    // so the result is never ambiguous. Still confirm-or-revert. Otherwise only
+    // the changed groups + mode go out; the backend keeps the rest as-is.
+    applyBands(opts) {
       var self = this;
+      var reset = !!(opts && opts.reset);
       if (this.applying || this.pending) return;
-      if (!force && (!this.changedAny() || this.emptyChange())) return;
+      if (!reset && (!this.changedAny() || this.emptyChange())) return;
       if (typeof window === "undefined" || !window.$rpcRequest) return;
       var payload = {};
-      var include = function (group, key) {
-        var sel = self.sel[group] || [];
-        // A forced send still skips an empty group — writing an empty allowlist
-        // would drop that RAT entirely (e.g. a SIM whose SA policy is empty).
-        if (force ? sel.length > 0 : self.changed(group)) payload[key] = sel.slice();
-      };
-      include("sa", "sa");
-      include("nsa", "nsa");
-      include("LTE", "lte");
-      if (force || this.modeChanged()) payload.mode = this.selMode;
+      if (reset) payload.reset = true;
+      else {
+        var include = function (group, key) {
+          if (self.sendable(group)) payload[key] = (self.sel[group] || []).slice();
+        };
+        include("sa", "sa");
+        include("nsa", "nsa");
+        include("LTE", "lte");
+        if (this.modeChanged()) payload.mode = this.selMode;
+      }
       this.applying = true;
       this.applyError = "";
       this.clearResetNote();
@@ -1599,7 +1106,22 @@ module.exports = {
           if (!res || res.error) { self.applyError = (res && res.error) || "apply failed"; return; }
           self.startCountdown(res.window || 60, res.applied);
         })
-        .catch(function (e) { self.applyError = (e && (e.type || e.message)) || "apply failed"; })
+        .catch(function (e) {
+          var t = e && (e.type || e.message);
+          // Auth/param errors mean nothing was written. Anything else (timeout,
+          // rpcCancel, network reset) is AMBIGUOUS: GL's set_band_config may
+          // re-register the modem and drop this very reply after the write took
+          // and the watchdog armed. Offer Keep/Revert without a false timer —
+          // confirm() on a non-pending state is a harmless no-op.
+          if (t === "invalidParams" || t === "accessDenied") { self.applyError = t; return; }
+          var a = { mode: payload.mode };
+          if (payload.reset) a.reset = true;
+          if (payload.sa) a.sa = payload.sa.join(":");
+          if (payload.nsa) a.nsa = payload.nsa.join(":");
+          if (payload.lte) a.lte = payload.lte.join(":");
+          self.clearCountdown();
+          self.pending = { kind: "bands", applied: a, uncertain: true, window: 60, remaining: 60 };
+        })
         .then(function () { self.applying = false; });
     },
     // kind defaults to "bands" so the existing bands call sites keep working
@@ -1618,7 +1140,7 @@ module.exports = {
           var k = self.pending.kind;
           self.clearCountdown();
           self.pending = { kind: k, done: true, reverted: true };
-          self.fetchBands(); if (k === "cell") self.fetchLock();
+          if (k === "cell") { self.fetchLock(); self.fetchBands({ light: true }); } else self.fetchBands();
           setTimeout(function () { self.pending = null; }, 4000);
         }
       }, 1000);
@@ -1634,7 +1156,7 @@ module.exports = {
         .then(function () {
           var k = self.pending && self.pending.kind;
           self.pending = null;
-          self.fetchBands(); if (k === "cell") self.fetchLock();
+          if (k === "cell") { self.fetchLock(); self.fetchBands({ light: true }); } else self.fetchBands();
         });
     },
     revertBands() {
@@ -1646,7 +1168,7 @@ module.exports = {
         .then(function () {}).catch(function () {})
         .then(function () {
           self.pending = null;
-          self.fetchBands(); if (k === "cell") self.fetchLock();
+          if (k === "cell") { self.fetchLock(); self.fetchBands({ light: true }); } else self.fetchBands();
         });
     },
 
@@ -1678,24 +1200,25 @@ module.exports = {
         .catch(function () { return null; });
     },
     stripRpc(params) { return this.rpcSilent("get_history", params, 15000); },
-    // First call asks for the whole window; every later one rides on histLastT
-    // and fetches only the new tail (get_history's `since` is exclusive, so the
-    // merge can't duplicate the boundary sample).
-    //
-    // ⚠️ The window is sent as a DURATION (window_ms), never as a browser-computed
-    // absolute cutoff: box and browser clocks disagree on a travel router, and an
-    // absolute cutoff mis-sizes the window by exactly that skew. `since` is exempt
-    // — it's a timestamp the BOX stamped, so it needs no clock agreement.
+    // Preload the whole strip window once (a DURATION, window_ms, never a
+    // browser-computed cutoff — box and browser clocks disagree on a travel
+    // router). After that, samples arrive as collector pushes (onSamplePush);
+    // the incremental {since} form is only used by the stall safety-poll.
     fetchStripHistory() {
       var self = this;
       if (this.histFetching || this.pollStopped) return;
       if (typeof window === "undefined" || !window.$axios) return;
       var span = this.STRIP_MIN * 60000;
-      var params = this.histLastT > 0 ? { since: this.histLastT } : { window_ms: span };
+      // The FIRST load is always the window: an explicit flag, not `histLastT
+      // > 0` — the `serving.t` watcher is immediate and runs before mounted(),
+      // so a store already holding a collect frame (the /ws seed, or a return
+      // to this route) has moved the cursor before this ever runs.
+      var params = this.histPreloaded ? { since: this.histLastT } : { window_ms: span };
       this.histFetching = true;
       this.stripRpc(params).then(function (res) {
         self.histFetching = false;
         if (self.pollStopped || !res) return;         // teardown, or a failed poll: keep what we have
+        self.histPreloaded = true;
         var fresh = [];
         var ns = res.samples || [];
         for (var i = 0; i < ns.length; i++) {
@@ -1717,12 +1240,37 @@ module.exports = {
         }
       });
     },
-    startStripPoll() {
+    // A live sample from the collector (mudimodem.collect push): append it to
+    // the strip history exactly as get_history would have returned it. The box
+    // stamped `t`, so it slots into the box-time axis directly; the box clock
+    // reference advances with it (no round-trip to re-sync).
+    onSamplePush(s) {
+      if (!s || !s.t) return;
+      if (s.t <= this.histLastT) return;              // replay of the seed / out of order
+      // A seed flagged stale is the collector's LAST sample, not a live push:
+      // keep the reading (real data at its own t) but leave the stall guard
+      // armed so the safety poll keeps looking for a recovery.
+      if (!s.stale) this.pushSeenAt = Date.now();
+      this.histLastT = s.t;
+      this.histNow = s.t; this.histNowAt = Date.now();
+      var v = parseFloat(s.rsrp);
+      if (!isNaN(v)) this.hist.push({ t: s.t, v: v });
+      var cut = s.t - this.STRIP_MIN * 60000;
+      if (this.hist.length && this.hist[0].t < cut) {
+        this.hist = this.hist.filter(function (p) { return p.t >= cut; });
+      }
+    },
+    startStrip() {
       var self = this;
       if (this.histTimer || typeof window === "undefined") return;
       this.fetchStripHistory();
-      this.histTimer = setInterval(function () { self.fetchStripHistory(); }, this.STRIP_POLL_MS);
+      // Safety net only: when pushes have stalled (collector restarting, ws
+      // reconnect), fetch the tail — otherwise this timer does nothing.
+      this.histTimer = setInterval(function () {
+        if (Date.now() - self.pushSeenAt > self.STRIP_STALL_MS) self.fetchStripHistory();
+      }, this.STRIP_POLL_MS);
     },
+    startStripPoll() { this.startStrip(); },   // legacy name (tests)
     stopStripPoll() {
       if (this.histTimer) { clearInterval(this.histTimer); this.histTimer = null; }
     },
@@ -1733,18 +1281,12 @@ module.exports = {
       if (!this.histNow) return Date.now();
       return this.histNow + (Date.now() - this.histNowAt);
     },
-    // Daemon points inside the visible window, or null when there aren't enough
-    // to draw — which is what makes the strip fall back to the websocket trace.
+    // Collector points inside the visible window (may be empty: the line is
+    // simply not drawn until two samples exist).
     stripPoints() {
-      if (!this.hist.length) return null;
       var end = this.stripEnd(), start = end - this.STRIP_MIN * 60000;
-      var out = [];
-      for (var i = 0; i < this.hist.length; i++) {
-        if (this.hist[i].t >= start) out.push(this.hist[i]);
-      }
-      return out.length >= 2 ? out : null;
+      return this.hist.filter(function (p) { return p.t >= start; });
     },
-    stripFromDaemon() { return !!this.stripPoints(); },
     // RSRP field-test base is −120…−80 dBm. Expand (never shrink) when a point
     // sits outside so a strong signal isn't clamped flat to the top of the strip
     // — same rule as Tracking's domainFor. Absolute scale stays absolute for
@@ -1761,13 +1303,11 @@ module.exports = {
       return [FLOOR, CEIL];
     },
     stripAxisDomain() {
-      var pts = this.stripPoints();
-      if (pts) return this.stripRsrpDomain(pts.map(function (p) { return p.v; }));
-      return this.stripRsrpDomain(this.trace);
+      return this.stripRsrpDomain(this.stripPoints().map(function (p) { return p.v; }));
     },
     tracePath() {
       var pts = this.stripPoints();
-      return pts ? this.tracePathTimed(pts) : this.tracePathIndexed();
+      return pts.length >= 2 ? this.tracePathTimed(pts) : "";
     },
     // Daemon path: x is real time across [now-window, now], so an outage or a
     // stopped collector leaves a visible hole instead of a straight line drawn
@@ -1786,24 +1326,6 @@ module.exports = {
         d += ((prev === null || t - prev > this.STRIP_GAP_MS) ? "M" : "L") +
              x.toFixed(1) + "," + y.toFixed(1);
         prev = t;
-      }
-      return d;
-    },
-    // Fallback path: evenly spaced websocket samples, right-aligned. Unchanged
-    // from before the daemon fed the strip (domain now expands for strong RSRP).
-    tracePathIndexed() {
-      var pts = this.trace, n = pts.length;
-      if (n < 2) return "";
-      var dom = this.stripRsrpDomain(pts);
-      var FLOOR = dom[0], CEIL = dom[1], W = 320, H = 40, ySpan = CEIL - FLOOR;
-      var step = W / (this.TRACE_MAX - 1);
-      var y = function (v) {
-        var cl = Math.max(FLOOR, Math.min(CEIL, v));
-        return (ySpan ? H - ((cl - FLOOR) / ySpan) * H : H / 2).toFixed(1);
-      };
-      var off = this.TRACE_MAX - n, d = "";
-      for (var i = 0; i < n; i++) {
-        d += (i === 0 ? "M" : "L") + ((off + i) * step).toFixed(1) + "," + y(pts[i]);
       }
       return d;
     },
@@ -1837,29 +1359,6 @@ module.exports = {
         '.mm-dl .k{display:block;font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge)}.mm-dl b{font-size:13px;font-weight:600;color:var(--text-title)}' +
         '.mm-soon{padding:26px 14px;text-align:center;color:var(--text-hint);font-size:12px;line-height:1.6}' +
         '.mm-empty{padding:30px 14px;text-align:center;color:var(--text-hint);font-size:12.5px}' +
-        // SIM tab
-        '.mm-simgrid{display:grid;grid-template-columns:1fr 1fr;gap:11px}' +
-        '@media (max-width:720px){.mm-simgrid{grid-template-columns:1fr}}' +
-        '.mm-slot.sel{box-shadow:0 0 0 1.5px var(--success) inset}' +
-        '.mm-badges{display:flex;gap:6px;flex-wrap:wrap;margin:7px 0 9px}' +
-        '.mm-badge{font-size:11px;padding:2px 8px;border-radius:9px;border:1px solid var(--divider);color:var(--text-secondary)}' +
-        '.mm-badge.b-sel{border-color:var(--success);color:var(--success)}' +
-        '.mm-badge.b-data{background:var(--primary);border-color:var(--primary);color:#fff}' +
-        '.mm-badge.b-warn{border-color:var(--warning);color:var(--warning)}' +
-        '.mm-badge.b-off{color:var(--text-hint)}' +
-        '.mm-idrow{display:flex;justify-content:space-between;gap:9px;padding:3px 0;font-size:12.5px}' +
-        '.mm-idrow .k{color:var(--text-hint)}' +
-        '.mm-reveal{background:none;border:none;color:var(--primary);font-size:12px;padding:2px 0;cursor:pointer}' +
-        '.mm-form{margin-top:9px;border-top:1px solid var(--divider);padding-top:7px}' +
-        '.mm-frow{display:flex;justify-content:space-between;align-items:center;gap:9px;padding:3px 0;font-size:12.5px}' +
-        '.mm-frow .k{color:var(--text-hint);flex:none}' +
-        '.mm-input,.mm-select{background:var(--background-title);border:1px solid var(--divider);border-radius:6px;color:var(--text-primary);font-size:12.5px;padding:4px 8px;min-width:0;flex:1;max-width:200px}' +
-        '.mm-apnchips{display:flex;gap:5px;flex-wrap:wrap;margin:3px 0 5px}' +
-        '.mm-apnchip{font-size:11px;padding:2px 8px;border-radius:9px;border:1px solid var(--divider);background:none;color:var(--text-secondary);cursor:pointer}' +
-        '.mm-apnchip.on{border-color:var(--primary);color:var(--primary)}' +
-        '.mm-apply{margin-top:7px;padding:5px 14px;border-radius:6px;border:none;background:var(--primary);color:#fff;font-size:12.5px;cursor:pointer}' +
-        '.mm-apply:disabled{opacity:.45;cursor:default}' +
-        '.mm-switchbox{margin-top:9px;padding:9px;border:1px solid var(--warning);border-radius:8px;font-size:12.5px;color:var(--text-secondary)}' +
         // band grid
         '.mm-grp{margin-bottom:15px}.mm-grp:last-child{margin-bottom:2px}' +
         '.mm-grp-h{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px}' +
@@ -1934,8 +1433,10 @@ module.exports = {
       });
       if (supported.length === 0) return null;
       var pre = this.prefixOf(group);
+      var servingHere = {};
+      self.servingBands.forEach(function (sb) { if (sb.group === group) servingHere[sb.band] = sb.role; });
       var chips = supported.map(function (b) {
-        var serving = (self.servingGroup === group && String(self.serving.band) === String(b));
+        var serving = servingHere[b] !== undefined;
         var f = self.freqOf(group, b);
         var cls, tip;
         if (interactive) {
@@ -1952,6 +1453,7 @@ module.exports = {
           tip = pre + b + " " + ({ active: "in use", permitted: "permitted, not active", blocked: "blocked by carrier policy" })[st];
         }
         var clickable = interactive && cls !== "blocked" && !self.pending;
+        if (serving) tip += " — serving now (" + servingHere[b] + ")";
         return h("span", {
           key: b,
           staticClass: "mm-band " + cls + (serving ? " serving" : "") + (clickable ? " clickable" : ""),
@@ -1979,7 +1481,9 @@ module.exports = {
       if (interactive && !this.ratActive(group)) {
         var need = group === "nsa" ? "Auto" : (group === "LTE" ? "Auto or 4G only" : "Auto or 5G only");
         gate = h("div", { staticClass: "mm-gate" },
-          "Off under " + this.selMode + " mode - these won't apply. Set mode to " + need + " to use them.");
+          this.selMode === "LTE" && group !== "LTE"
+            ? "Off under " + this.selMode + " mode - 5G selections are not sent (GL clears them under 4G-only). Set mode to " + need + " to use them."
+            : "Off under " + this.selMode + " mode - these won't apply. Set mode to " + need + " to use them.");
       }
       return h("div", { staticClass: "mm-grp" + (gate ? " mm-grp-off" : ""), key: group }, [
         h("div", { staticClass: "mm-grp-h" }, [
@@ -2049,14 +1553,18 @@ module.exports = {
       // Offer Keep / Revert without a false timer.
       if (p.uncertain) {
         var ua = p.applied || {};
+        var what = p.kind === "cell"
+          ? [" the ", h("b", (ua.rat === "4g" ? "LTE" : "5G") + " lock PCI " + ua.pci + " / ARFCN " + ua.freq), " did apply."]
+          : [" the band change (", h("b", ua.reset ? "filtering off + Auto" :
+              [ua.mode ? "mode " + ua.mode : "", ua.sa ? " SA " + ua.sa : "", ua.nsa ? " NSA " + ua.nsa : "", ua.lte ? " LTE " + ua.lte : ""].join("").trim()),
+             ") most likely applied."];
         return h("div", { staticClass: "mm-revert" }, [
           h("div", { staticClass: "mm-revert-row" }, [
             h("span", [
-              "Your connection dropped during the lock, but the ",
-              h("b", (ua.rat === "4g" ? "LTE" : "5G") + " lock PCI " + ua.pci + " / ARFCN " + ua.freq),
-              " did apply. If the auto-revert is still running it will undo this within ~60s - ",
+              "Your connection dropped while applying, but"].concat(what).concat([
+              " If the auto-revert is still running it will undo this within ~60s - ",
               h("b", "Keep"), " to make it stick, or ", h("b", "Revert"), " to remove it now."
-            ]),
+            ])),
             h("span", { staticStyle: { flex: "none", display: "flex", gap: "6px" } }, [
               h("button", { staticClass: "mm-btn danger", on: { click: function () { self.revertBands(); } } }, "Revert now"),
               h("button", { staticClass: "mm-btn keep", on: { click: function () { self.keepBands(); } } }, "Keep")
@@ -2069,6 +1577,8 @@ module.exports = {
       var a = p.applied || {}, bits = [];
       if (p.kind === "cell") {
         bits.push((a.rat === "4g" ? "LTE" : "5G") + " cell PCI " + a.pci + " / ARFCN " + a.freq);
+      } else if (a.reset) {
+        bits.push("default: band filtering off, mode Auto");
       } else {
         if (a.mode) bits.push("mode " + a.mode);
         if (a.sa) bits.push("5G-SA " + a.sa.split(":").map(function (b) { return "n" + b; }).join(" "));
@@ -2108,6 +1618,13 @@ module.exports = {
         ? h("div", { staticClass: "mm-hint", staticStyle: { color: "var(--warning)", marginTop: "2px" } },
             "Couldn't confirm which SIM answered - values may be for the other slot")
         : null;
+      // GL stores a network mode outside Auto/5G/4G (e.g. the LTE:NR5G a GL 4G
+      // tower lock leaves behind): shown as-is; a band-only apply passes it
+      // through untouched, only an explicit mode pick here replaces it.
+      var modeWarn = (d.meta && d.meta.mode_known === false)
+        ? h("div", { staticClass: "mm-hint", staticStyle: { color: "var(--warning)", marginTop: "2px" } },
+            "GL reports network mode \"" + d.meta.mode_raw + "\", which this panel doesn't offer - it stays as it is unless you pick a mode below.")
+        : null;
       // Network-type lock conflict: the modem is cell-locked to a RAT the current
       // mode excludes, so the lock can't take effect. Name the lock + the fix.
       var lockWarn = this.lockConflict()
@@ -2138,6 +1655,7 @@ module.exports = {
           "Choose the network mode and which 5G/LTE bands the modem may use. Blocked bands are ones " +
           "the module supports but your carrier forbids - they can't be selected because they never take."),
         warn,
+        modeWarn,
         lockWarn,
         (this.pending && this.pending.kind !== "cell") ? this.renderRevert(h) : null
       ];
@@ -2151,6 +1669,8 @@ module.exports = {
         else if (changed) {
           var parts = [];
           if (this.modeChanged()) parts.push("mode -> " + this.selMode);
+          if (this.selMode === "LTE" && (this.changed("sa") || this.changed("nsa")))
+            parts.push("5G selections held back under 4G-only");
           if (this.changed("sa")) parts.push(this.sel.sa.length + " SA");
           if (this.changed("nsa")) parts.push(this.sel.nsa.length + " NSA");
           if (this.changed("LTE")) parts.push(this.sel.LTE.length + " LTE");
@@ -2177,7 +1697,7 @@ module.exports = {
         h("span", [h("i", { staticStyle: { background: "var(--success)" } }), "allowed"]),
         h("span", [h("i", { staticStyle: { background: "transparent", border: "1px solid var(--border)" } }), "permitted, not selected"]),
         h("span", [h("i", { staticStyle: { background: "var(--text-hint)" } }), "blocked by policy"]),
-        h("span", "ring = serving now")
+        h("span", "ring = serving now (every carrier: PCC + SCCs)")
       ])];
       return h("div", { staticClass: "mm-card" }, head.filter(Boolean).concat(groups).concat(footer).concat(legend));
     },
@@ -2191,10 +1711,10 @@ module.exports = {
       var rows = [];
       var push = function (k, v) { if (v !== undefined && v !== null && v !== "") rows.push([k, v]); };
       push("RAT", s.rat); push("PCI", s.pci); push("ARFCN", s.arfcn);
-      push("Band", s.band !== undefined ? ((/NR5G/.test(s.rat || "") ? "n" : "B") + s.band) : null);
+      push("Band", s.band != null ? ((/NR5G/.test(s.rat || "") ? "n" : "B") + s.band) : null);
       push("Cell ID", s.cell_id);
-      push("RSRP", this.serving.rsrp !== undefined ? this.serving.rsrp + " dBm" : null);
-      push("SINR", this.serving.sinr !== undefined ? this.serving.sinr + " dB" : null);
+      push("RSRP", this.serving.rsrp != null ? this.serving.rsrp + " dBm" : null);
+      push("SINR", this.serving.sinr != null ? this.serving.sinr + " dB" : null);
 
       var action;
       if (locked) {
@@ -2414,7 +1934,8 @@ module.exports = {
           "and in GL's store. Every lock made here auto-reverts in 60s unless you keep it, and the ",
           "watchdog fires even if this page is closed. If the router ever becomes unreachable over ",
           "the web, the ssh way back is: ", h("b", "ssh root@<router> /usr/sbin/mudimodem-revert panic"),
-          " - it unlocks both RATs, resets lock persistence, and restores the known-good bands."
+          " - it clears the cell lock on both slots (GL's store and the modem), resets lock persistence ",
+          "and the network mode to Auto, and turns band filtering off."
         ]),
         h("div", { staticClass: "mm-hint", staticStyle: { lineHeight: "1.6", marginTop: "8px", color: "var(--warning-hover)" } }, [
           h("b", "Remote sessions: "),
@@ -2437,11 +1958,11 @@ module.exports = {
       stripKids = [
         h("div", { staticClass: "mm-trace" }, [
           h("div", { staticStyle: { display: "flex", justifyContent: "space-between", alignItems: "center" } }, [
-            h("span", { staticClass: "mm-eyebrow", attrs: {
-              title: this.stripFromDaemon()
-                ? "Sampled every 4s by the MudiModem collector, last " + this.STRIP_MIN + " minutes"
-                : "Live websocket readings since this page opened (collector history unavailable)"
-            } }, this.stripFromDaemon() ? "RSRP · last " + this.STRIP_MIN + " min" : "RSRP live"),
+            h("span", { staticClass: "mm-eyebrow", style: this.staleFor ? { color: "var(--warning)" } : {}, attrs: {
+              title: this.staleFor
+                ? "The collector's last sample is " + this.fmtAge(this.staleFor) + " old - nothing newer has been pushed"
+                : "Sampled every 10s by the MudiModem collector (pushed live), last " + this.STRIP_MIN + " minutes"
+            } }, this.staleFor ? "RSRP · last sample " + this.fmtAge(this.staleFor) + " ago" : "RSRP · last " + this.STRIP_MIN + " min"),
             this.renderLockBadges(h)
           ]),
           h("div", { staticClass: "mm-plot" }, [
@@ -2454,7 +1975,8 @@ module.exports = {
           ]),
           h("div", { staticClass: "mm-axis" }, [
             h("span", String(this.stripAxisDomain()[0])),
-            h("span", (c.mode || "") + (this.servingCarrier ? "  " + this.servingCarrier : "") +
+            h("span", (c.mode || "") + (this.caLabel ? " " + this.caLabel : "") +
+              (this.servingCarrier ? "  " + this.servingCarrier : "") +
               (this.activeSlot ? "  SIM " + this.activeSlot : "")),
             h("span", this.stripAxisDomain()[1] + " dBm")
           ])
@@ -2465,18 +1987,23 @@ module.exports = {
           ]),
           h("div", { staticClass: "mm-facts" }, [
             h("div", [h("span", { staticClass: "k" }, "SINR"),
-              h("b", { style: { color: this.qColor(this.sinrQ) } }, c.sinr !== undefined ? String(c.sinr) : "-")]),
+              h("b", { style: { color: this.qColor(this.sinrQ) } }, c.sinr != null ? String(c.sinr) : "-")]),
             h("div", [h("span", { staticClass: "k" }, "RSRQ"),
-              h("b", { style: { color: this.qColor(this.rsrqQ) } }, c.rsrq !== undefined ? String(c.rsrq) : "-")]),
+              h("b", { style: { color: this.qColor(this.rsrqQ) } }, c.rsrq != null ? String(c.rsrq) : "-")]),
             h("div", [h("span", { staticClass: "k" }, "Band"), h("b", this.bandLabel)])
           ].concat(
-            [["BW", c.dl_bandwidth], ["Cell", c.id], ["Ch", c.tx_channel], ["RSSI", c.rssi]]
+            [["BW", c.dl_bandwidth], ["Cell", c.id], ["Ch", this.chanLabel(this.servingRat, c.band, c.tx_channel)], ["RSSI", c.rssi]]
               .filter(function (f) { return f[1] !== undefined && f[1] !== null && f[1] !== ""; })
               .map(function (f) {
                 return h("div", [h("span", { staticClass: "k" }, f[0]), h("b", String(f[1]))]);
               })
           ))
-        ])
+        ]),
+        this.staleFor
+          ? h("div", { staticClass: "mm-hint mm-stale", staticStyle: { color: "var(--warning)", flexBasis: "100%" } },
+              "The collector has not produced a sample for " + this.fmtAge(this.staleFor) +
+              " (modem resetting, or mudimodem-collectd stopped) - these are its last known values, not live readings.")
+          : null
       ];
     } else {
       var slot = this.activeSlot;
@@ -2484,16 +2011,16 @@ module.exports = {
         (slot && this.anyNetwork)
           ? "SIM " + slot + " (active) is not registered on a network right now" +
             (this.servingCarrier ? " - " + this.servingCarrier : "") + "."
-          : "Waiting for the modem's first status push over the websocket...")];
+          : "Waiting for the collector's first sample (mudimodem-collectd pushes every 10s)...")];
     }
     var strip = h("div", { staticClass: "mm-strip" }, stripKids);
 
     // ---- tabs ----
     // "tracking" is an in-page tab like the rest — the strip + tab bar stay put;
     // its graph chunk is lazy-loaded into the panel on first open.
-    var TABS = [["tracking", "Tracking"], ["sim", "SIM"], ["lock", "Cell lock"],
+    var TABS = [["tracking", "Tracking"], ["lock", "Cell lock"],
       ["bands", "Bands"], ["at", "AT console"], ["speedtest", "Speedtest"],
-      ["battery", "Battery"], ["config", "Config"], ["lcd", "LCD Display"]];
+      ["battery", "Battery"], ["config", "Config"]];
     var tabs = h("div", { staticClass: "mm-tabs" }, TABS.map(function (t) {
       return h("button", {
         key: t[0], staticClass: "mm-tab" + (self.tab === t[0] ? " on" : ""),
@@ -2524,14 +2051,12 @@ module.exports = {
       }
     } else if (this.tab === "at") {
       if (this.consoleComp) {
-        panel = h(this.consoleComp);
+        panel = h(this.consoleComp, { props: { cell: { slot: this.activeSlot, carrier: this.servingCarrier } } });
       } else {
         panel = h("div", { staticClass: "mm-card" }, [h("div", { staticClass: "mm-soon" },
           this.consoleErr ? "Couldn't load the AT console: " + this.consoleErr
             : "Loading the AT console…")]);
       }
-    } else if (this.tab === "sim") {
-      panel = this.renderSim(h);
     } else if (this.tab === "config") {
       panel = this.renderConfig(h);
     } else if (this.tab === "speedtest") {
@@ -2550,8 +2075,6 @@ module.exports = {
           this.batteryErr ? "Couldn't load the battery view: " + this.batteryErr
             : "Loading the battery view…")]);
       }
-    } else if (this.tab === "lcd") {
-      panel = this.renderLcd(h);
     } else {
       panel = h("div", { staticClass: "mm-card" }, [h("div", { staticClass: "mm-soon" }, "Unknown tab.")]);
     }

@@ -1,112 +1,47 @@
 #!/usr/bin/env python3
 """MudiModem's own AT channel — an independent, compile-free AT client.
 
-Talks to the modem over /dev/at_mdm0, a free, world-accessible AT port SEPARATE
-from GL's /dev/smd9 (which GL's modem_AT holds). Because it's our own channel,
-responses never cross with GL's background polling — the failure that garbles
-`ubus call modem.CPU.AT` when the modem is churning (reference §8).
+Talks to the modem over /dev/at_mdm0, a free, world-accessible AT port that is
+SEPARATE from the port GL's `modem_AT` holds for `cellular_manager`'s polling
+(GL 4.10: `cellular_manager` spawns `/usr/bin/modem_AT -B cpu -P <port>` and
+drives every AT request of its own through it). Because this is our own
+channel, our responses never cross with GL's traffic.
 
-CPython stdlib only (os, select, fcntl, signal). No pyserial, no compiler — the
-box ships Python 3.11. This is the transport for the Phase 3 AT console.
+CPython stdlib only (os, select, fcntl). No pyserial, no compiler.
 
-Backend usage (one command per invocation):
-    python3 mudimodem-at.py --envelope --timeout 8 'AT+QSPN'
-  stdout line 1:  MM-AT:<status>:<elapsed_ms>     status: ok|timeout|busy|openfail
-  then:           the raw response, verbatim (URCs included; may be empty)
-  exit code:      0 ok/timeout, 2 busy, 3 openfail
+Backend usage (one invocation, one or more commands):
+    python3 mudimodem-at.py --envelope --timeout 8 -- 'AT+QSPN'
+  stdout, per step:  MM-AT:<status>:<elapsed_ms>:<idx>/<count>   status: ok|error|timeout
+                     then the raw response, verbatim (URCs included; may be empty)
+  channel failure:   MM-AT:busy:<ms> | MM-AT:openfail:<ms> as the ONLY line
+  exit code:         0 ok/timeout, 2 busy, 3 openfail
 
 Serialization + GL coexistence:
   - fcntl.flock on /tmp/mudimodem/at.lock serializes concurrent invocations
-    (nginx has 4 workers). Lock not acquired within --lock-wait (5 s) => busy.
-  - While sending, every `gl_modem` process (GL's AT traffic source) is
-    SIGSTOPped, and SIGCONTed in a finally. On startup, any gl_modem already
-    in state T is CONTed first — recovery from a killed predecessor. modem_AT
-    and cellular_manager are deliberately left alone (spec 2026-07-18 §2).
-  - /dev/at_mdm0 is also held by GL's port-bridge (USB-AT passthrough). Probed
-    coexistence is clean; drain-before-send + strict terminator matching are
-    the defense against stray bytes.
+    (nginx runs several workers). Lock not acquired within --lock-wait (5 s)
+    => busy.
+  - /dev/at_mdm0 is bridged by GL's `port-bridge at_mdm0 at_usb0 0` (the
+    USB-AT passthrough). Coexistence is clean; drain-before-send + strict
+    terminator matching are the defense against stray bytes.
+  - Nothing of GL's is ever stopped or signalled. (1.x SIGSTOPped the 4.8
+    `gl_modem` poller; on 4.10 that process does not exist.)
 
-⚠️ Caveats (reference §8):
+⚠️ Caveats:
   - Open BLOCKING: the SMD channel returns EBUSY on a non-blocking write.
   - /dev/at_mdm0 is NOT a tty, so no termios setup (it's a raw byte stream).
   - No sub_id: the direct port operates in the ACTIVE subscription's context
-    only (probed 2026-07-18: no subscription selector exists on this port).
-    For per-SIM data (the other SIM's policy_band) use GL's modem.CPU.AT.
-  - Writes hit modem NV the same as any AT path — and GL re-applies its own
-    stored config on cellular_manager restart, so raw-AT band writes are not
-    durable on their own (reference §9).
+    only. For per-SIM data (the other SIM's policy_band) the backend uses
+    GL's modem.CPU.AT with an explicit sub_id.
+  - Writes hit modem NV like any AT path; band/mode changes made here bypass
+    GL's config store — use the Bands tab for durable changes.
 """
-import fcntl, os, select, signal, sys, time
+import fcntl, os, select, sys, time
 
 DEFAULT_PORT = "/dev/at_mdm0"
 DEFAULT_LOCK = "/tmp/mudimodem/at.lock"
 # Unsolicited result codes that arrive unprompted, unrelated to our command.
 URC_PREFIXES = ("RDY", "+CPIN:", "+QUSIM:", "+QUSIM", "+CPINDS:", "+QIND:",
                 "+CFUN:", "+CGEV:", "+QNETDEVSTATUS:", "POWERED DOWN")
-
-
-def gl_modem_pids():
-    """PIDs of GL's gl_modem daemon(s) — the AT traffic source we quiet."""
-    pids = []
-    try:
-        names = os.listdir("/proc")
-    except OSError:
-        return pids   # no /proc (e.g. the macOS dev box) -> nothing to recover/sleep
-    for name in names:
-        if not name.isdigit():
-            continue
-        try:
-            with open("/proc/%s/comm" % name) as f:
-                if f.read().strip() == "gl_modem":
-                    pids.append(int(name))
-        except OSError:
-            pass
-    return pids
-
-
-def proc_state(pid):
-    """Single-letter process state from /proc/<pid>/stat (comm-safe split)."""
-    try:
-        with open("/proc/%d/stat" % pid) as f:
-            return f.read().rsplit(") ", 1)[1].split()[0]
-    except (OSError, IndexError):
-        return None
-
-
-def recover_stopped():
-    """CONT any gl_modem left stopped by a killed predecessor. Run at startup —
-    a stopped gl_modem that never wakes is worse than a crossed response."""
-    for pid in gl_modem_pids():
-        if proc_state(pid) == "T":
-            try:
-                os.kill(pid, signal.SIGCONT)
-            except OSError:
-                pass
-
-
-class GlModemSleep:
-    """SIGSTOP gl_modem for the duration of the send; ALWAYS SIGCONT on exit."""
-    def __init__(self, enabled=True):
-        self.enabled, self.stopped = enabled, []
-
-    def __enter__(self):
-        if self.enabled:
-            for pid in gl_modem_pids():
-                try:
-                    os.kill(pid, signal.SIGSTOP)
-                    self.stopped.append(pid)
-                except OSError:
-                    pass
-        return self
-
-    def __exit__(self, *exc):
-        for pid in self.stopped:
-            try:
-                os.kill(pid, signal.SIGCONT)
-            except OSError:
-                pass
-        self.stopped = []
-        return False
 
 
 class ChannelBusy(Exception):
@@ -132,13 +67,6 @@ class ATChannel:
                         self.lockf = None
                         raise ChannelBusy()
                     time.sleep(0.2)
-            # Only NOW do we exclusively hold the lock, so any gl_modem still
-            # in state T is provably stale (a live holder would be inside its
-            # own GlModemSleep, and a dead one's flock auto-releases on close)
-            # — this is the only safe moment to recover it. Recovering before
-            # acquiring the lock would race a legitimately-stopped gl_modem
-            # under another worker's in-flight send.
-            recover_stopped()
         # BLOCKING open (non-blocking writes return EBUSY on this SMD channel);
         # reads are gated by select() for the timeout.
         try:
@@ -202,7 +130,7 @@ class ATChannel:
 
 def main(argv):
     envelope, timeout, port = False, 8, DEFAULT_PORT
-    lock, lock_wait, glsleep = DEFAULT_LOCK, 5.0, True
+    lock, lock_wait = DEFAULT_LOCK, 5.0
     cmds, i = [], 0
     while i < len(argv):
         a = argv[i]
@@ -220,8 +148,6 @@ def main(argv):
         elif a == "--lock-wait":
             i += 1
             lock_wait = float(argv[i])
-        elif a == "--no-glsleep":
-            glsleep = False
         elif a == "--":
             cmds.extend(argv[i + 1:])
             break
@@ -230,7 +156,7 @@ def main(argv):
         i += 1
     if not cmds:
         print("usage: mudimodem-at.py [--envelope] [--timeout N] [--port P]"
-              " [--lock PATH] [--lock-wait S] [--no-glsleep] CMD...", file=sys.stderr)
+              " [--lock PATH] [--lock-wait S] CMD...", file=sys.stderr)
         return 1
 
     t0 = time.time()
@@ -255,37 +181,33 @@ def main(argv):
 
     try:
         try:
-            with GlModemSleep(glsleep):
-                count = len(cmds)
-                if envelope:
-                    for idx, cmd in enumerate(cmds, 1):
-                        s0 = time.time()
-                        resp, kind = ch.send(cmd, timeout)
-                        step_ms = int((time.time() - s0) * 1000)
-                        print("MM-AT:%s:%d:%d/%d" % (kind, step_ms, idx, count))
-                        sys.stdout.write(resp)
-                        if not resp.endswith("\n"):
-                            sys.stdout.write("\n")
-                        if kind != "ok":
-                            break          # stop-on-error: emit no further frames
-                    return 0
-                for cmd in cmds:
-                    t1 = time.time()
+            count = len(cmds)
+            if envelope:
+                for idx, cmd in enumerate(cmds, 1):
+                    s0 = time.time()
                     resp, kind = ch.send(cmd, timeout)
-                    for l in [x.strip() for x in resp.replace("\r", "\n").split("\n")
-                              if x.strip() and not x.strip().startswith(URC_PREFIXES)]:
-                        print("    " + l)
-                    print(">>> %s   (%.2fs) [%s]" % (cmd, time.time() - t1, kind))
+                    step_ms = int((time.time() - s0) * 1000)
+                    print("MM-AT:%s:%d:%d/%d" % (kind, step_ms, idx, count))
+                    sys.stdout.write(resp)
+                    if not resp.endswith("\n"):
+                        sys.stdout.write("\n")
                     if kind != "ok":
-                        break              # stop-on-error in the shell path too
+                        break          # stop-on-error: emit no further frames
                 return 0
+            for cmd in cmds:
+                t1 = time.time()
+                resp, kind = ch.send(cmd, timeout)
+                for l in [x.strip() for x in resp.replace("\r", "\n").split("\n")
+                          if x.strip() and not x.strip().startswith(URC_PREFIXES)]:
+                    print("    " + l)
+                print(">>> %s   (%.2fs) [%s]" % (cmd, time.time() - t1, kind))
+                if kind != "ok":
+                    break              # stop-on-error in the shell path too
+            return 0
         except OSError as e:
-            # e.g. os.write() failing mid-send (port yanked, EIO, ...). The
-            # GlModemSleep context above has already unwound (its __exit__
-            # ran and resumed gl_modem) by the time we get here, since it
-            # does not suppress the exception. Still must yield a defined
-            # envelope line + an exit code in {0,2,3} — never let a bare
-            # traceback replace stdout line 1 that Task 2's Lua parses.
+            # e.g. os.write() failing mid-send (port yanked, EIO, ...). Must
+            # still yield a defined envelope line + an exit code in {0,2,3} —
+            # never let a bare traceback replace stdout line 1 the Lua parses.
             if envelope:
                 print("MM-AT:openfail:%d" % ms())
             else:

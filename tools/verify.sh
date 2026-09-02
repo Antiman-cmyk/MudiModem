@@ -1,5 +1,5 @@
 #!/bin/sh
-# tools/verify.sh - assert Phase 0 landed correctly on the device.
+# tools/verify.sh - assert MudiModem 2.x (GL firmware 4.10) landed correctly on the device.
 set -eu
 HOST="${MUDI_HOST:-mudi}"
 # MM_PW: admin password, required only for /rpc round-trip steps (7c, 9b, 14b).
@@ -42,6 +42,27 @@ print(sid)
 PY'
 }
 
+echo "0. firmware is 4.10+ (MudiModem 2.x is 4.10-only)"
+# Numeric major.minor compare — the same expression install.sh uses (a glob
+# like `4.[2-9]*` would accept 4.8.5).
+GLVER=$(ssh -o BatchMode=yes "root@$HOST" 'cat /etc/glversion' 2>/dev/null | tr -d '\r\n')
+GLMAJ=${GLVER%%.*}; GLREST=${GLVER#*.}; GLMIN=${GLREST%%.*}
+case "$GLMAJ$GLMIN" in *[!0-9]*|"") GLMAJ=0; GLMIN=0 ;; esac
+if [ -z "${GLVER:-}" ] || [ "${GLMAJ:-0}" -lt 4 ] || { [ "${GLMAJ:-0}" -eq 4 ] && [ "${GLMIN:-0}" -lt 10 ]; }; then
+  fail "firmware '${GLVER:-unknown}' is not 4.10+"
+fi
+echo "   firmware $GLVER"
+ssh -o BatchMode=yes "root@$HOST" 'ubus list gl-session >/dev/null && test -f /usr/share/gl-ngx/websocket/cellular.lua' \
+  || fail "4.10 ws stack (gl-session + websocket/cellular.lua) not present"
+
+echo "0b. 4.10 helper files present"
+ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/lib/mudimodem/cellular_compat.py && test -x /usr/lib/mudimodem/mudimodem-detach && test -s /usr/share/gl-ngx/websocket/mudimodem.lua' \
+  || fail "cellular_compat.py / mudimodem-detach / websocket/mudimodem.lua missing (run ./tools/deploy.sh)"
+# Script shipped as a file, never inlined into ssh '...' (CLAUDE.md §8).
+ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-ws-seed.test.lua' < test/ws-seed.test.lua
+ssh -o BatchMode=yes "root@$HOST" 'lua /tmp/mm-ws-seed.test.lua; rc=$?; rm -f /tmp/mm-ws-seed.test.lua; exit $rc' \
+  || fail "websocket/mudimodem.lua seed module failed its self-test (collect/battery/event + stale flag)"
+
 echo "1. files present"
 ssh -o BatchMode=yes "root@$HOST" 'test -s /www/views/gl-sdk4-ui-mudimodem.common.js.gz' \
   || fail "chunk .gz missing"
@@ -70,10 +91,14 @@ printf '%s' "$BODY" | node -e '
     // Harness the component exactly as Vue would, with a stub websocket store.
     const h=(t,d,ch)=>((Array.isArray(d)||typeof d==="string")&&(ch=d,d={}),{t,d:d||{},ch});
     const txt=n=>n==null?"":typeof n==="string"?n:Array.isArray(n)?n.map(txt).join(""):txt(n.ch);
+    // 4.10 sockets + our collector push (docs/cellular-api-4.10.md).
     const S={"cellular.modems_info":{modems:[{bus:"cpu",name:"RG650V-NA",type:0,band:{"NR-SA":[71]}}]},
-             "cellular.modems_status":{modems:[{bus:"cpu",current_sim_slot:"1"}]},
-             "cellular.networks_info":{networks:[{slot:"1",cell_info:{band:71,mode:"NR5G-SA FDD",rsrp:"-101",rsrp_level:3,sinr:"4",sinr_level:2,rsrq:"-14",rsrq_level:3,dl_bandwidth:"15MHz"}}]},
-             "cellular.sims_info":{sims:[{slot:"1",mcc:"310",mnc:"260"}]}};
+             "cellular.modems_status":{modems:[{bus:"cpu",current_sim_slot:1,simcard:[{slot:1,status:6,dial_status:0}]}]},
+             "cellular.networks_info":{networks:[{bus:"cpu",slot:1,carrier:"T-Mobile",mcc:"310",mnc:"260"}]},
+             "mudimodem.collect":{t:1700000000000,slot:1,registered:true,carrier:"T-Mobile",rat:"NR5G-SA",network_type:5,
+               cell_id:"187461035",signals:[{role:"PCC",ca:0,rat:"NR5G-SA",band:71,earfcn:127490,pci:516,rsrp:-101,rsrp_level:3}],
+               id:"187461035",band:71,mode:"NR5G-SA",pci:516,tx_channel:127490,dl_bandwidth:"15MHz",
+               rsrp:-101,rsrp_level:3,sinr:4,sinr_level:2,rsrq:-14,rsrq_level:3}};
     const vm=Object.assign({},c.data());
     vm.$store={getters:{moduleStatus:n=>S[n]||{}}};
     for(const[k,f]of Object.entries(c.methods||{}))vm[k]=f.bind(vm);
@@ -122,16 +147,16 @@ if [ -f src/sbin/mudimodem-revert ]; then
   ssh -o BatchMode=yes "root@$HOST" 'MUDIMODEM_HIST=/tmp/mmv-hist sh /tmp/mm-revert.test.sh /usr/sbin/mudimodem-revert >/dev/null; rc=$?; rm -rf /tmp/mm-revert.test.sh /tmp/mmv-hist; exit $rc' \
     || fail "watchdog isolation tests failed"
   ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-w.test.lua' < test/backend-write.test.lua
-  ssh -o BatchMode=yes "root@$HOST" 'MUDIMODEM_PENDING=/tmp/mmv-pending MUDIMODEM_ARMED=/tmp/mmv-armed MUDIMODEM_BIN=/usr/sbin/mudimodem-revert MUDIMODEM_HIST=/tmp/mmv-hist lua /tmp/mm-w.test.lua >/dev/null; rc=$?; rm -rf /tmp/mm-w.test.lua /tmp/mmv-pending /tmp/mmv-armed /tmp/mmv-hist; exit $rc' \
+  ssh -o BatchMode=yes "root@$HOST" 'MM_PLUGIN=/usr/lib/oui-httpd/rpc/mudimodem MUDIMODEM_PENDING=/tmp/mmv-pending MUDIMODEM_ARMED=/tmp/mmv-armed MUDIMODEM_BIN=/usr/sbin/mudimodem-revert MUDIMODEM_HIST=/tmp/mmv-hist MUDIMODEM_LATEST=/tmp/mmv-latest.json lua /tmp/mm-w.test.lua >/dev/null; rc=$?; rm -rf /tmp/mm-w.test.lua /tmp/mmv-pending /tmp/mmv-armed /tmp/mmv-hist /tmp/mmv-latest.json; exit $rc' \
     || fail "set_bands interlock test failed"
 
   echo "6b. cell-lock backend + watchdog cell revert (isolation, on-device)"
   ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-l.test.lua'  < test/backend-lock.test.lua
   ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-lw.test.lua' < test/backend-lock-write.test.lua
-  ssh -o BatchMode=yes "root@$HOST" 'MM_PLUGIN=/usr/lib/oui-httpd/rpc/mudimodem MUDIMODEM_PENDING=/tmp/mml-p MUDIMODEM_ARMED=/tmp/mml-a MUDIMODEM_STALE=/tmp/mml-s MUDIMODEM_HIST=/tmp/mml-h lua /tmp/mm-l.test.lua >/dev/null && MM_PLUGIN=/usr/lib/oui-httpd/rpc/mudimodem MUDIMODEM_PENDING=/tmp/mml-p MUDIMODEM_ARMED=/tmp/mml-a MUDIMODEM_STALE=/tmp/mml-s MUDIMODEM_BIN=/usr/sbin/mudimodem-revert MUDIMODEM_HIST=/tmp/mml-h lua /tmp/mm-lw.test.lua >/dev/null; rc=$?; rm -rf /tmp/mm-l.test.lua /tmp/mm-lw.test.lua /tmp/mml-p /tmp/mml-a /tmp/mml-s /tmp/mml-h; exit $rc' \
+  ssh -o BatchMode=yes "root@$HOST" 'MM_PLUGIN=/usr/lib/oui-httpd/rpc/mudimodem MUDIMODEM_PENDING=/tmp/mml-p MUDIMODEM_ARMED=/tmp/mml-a MUDIMODEM_HIST=/tmp/mml-h MUDIMODEM_LATEST=/tmp/mml-latest.json lua /tmp/mm-l.test.lua >/dev/null && MM_PLUGIN=/usr/lib/oui-httpd/rpc/mudimodem MUDIMODEM_PENDING=/tmp/mml-p MUDIMODEM_ARMED=/tmp/mml-a MUDIMODEM_BIN=/usr/sbin/mudimodem-revert MUDIMODEM_HIST=/tmp/mml-h MUDIMODEM_LATEST=/tmp/mml-latest.json lua /tmp/mm-lw.test.lua >/dev/null; rc=$?; rm -rf /tmp/mm-l.test.lua /tmp/mm-lw.test.lua /tmp/mml-p /tmp/mml-a /tmp/mml-h /tmp/mml-latest.json; exit $rc' \
     || fail "cell-lock isolation tests failed on-device"
-  ssh -o BatchMode=yes "root@$HOST" 'grep -q "\"\$KIND\" = \"cell\"" /usr/sbin/mudimodem-revert' \
-    || fail "deployed watchdog lacks cell revert"
+  ssh -o BatchMode=yes "root@$HOST" 'grep -q "\"\$KIND\" = \"cell\"" /usr/sbin/mudimodem-revert && grep -q "set_band_config" /usr/sbin/mudimodem-revert' \
+    || fail "deployed watchdog lacks cell revert / GL band-config restore"
 fi
 
 echo "6c. clear_cell_lock restores mode to AUTO (static — never call it on the live link)"
@@ -153,6 +178,13 @@ if [ -f src/sbin/mudimodem-collectd ]; then
   ssh -o BatchMode=yes "root@$HOST" 'for i in 1 2 3 4 5 6; do [ -s /tmp/mudimodem/samples.jsonl ] && exit 0; sleep 5; done; exit 1' \
     || fail "no samples.jsonl written after ~30s"
   echo "   collector is sampling ($(ssh -o BatchMode=yes "root@$HOST" 'wc -l < /tmp/mudimodem/samples.jsonl' | tr -d " ") lines)"
+  # AT budget: cell_info executes QENG/QCAINFO per call, so the cadence must be
+  # the 4.10 default (10 s => <=6 reads/min), never the 1.x 4 s.
+  ssh -o BatchMode=yes "root@$HOST" 'grep -q "MUDIMODEM_POLL\", \"10\"" /usr/sbin/mudimodem-collectd && ! pgrep -f "MUDIMODEM_POLL=[0-9]" >/dev/null' \
+    || fail "collector cadence is not the 10 s default (AT budget)"
+  # The newest sample must be 4.10-normalized: signals[] + PCC aliases.
+  ssh -o BatchMode=yes "root@$HOST" 'python3 -c "import json;d=json.load(open(\"/tmp/mudimodem/latest.json\"));assert isinstance(d.get(\"signals\"),list);assert \"rat\" in d and \"cell_id\" in d and \"rsrp\" in d"' \
+    || fail "latest.json is not the 4.10 normalized sample (signals[] / rat / cell_id)"
   # get_history parses the jsonl (fixtures under a temp HIST dir; ngx-stubbed).
   ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-hist.test.lua' < test/backend-history.test.lua
   ssh -o BatchMode=yes "root@$HOST" 'MUDIMODEM_HIST=/tmp/mmhist-test lua /tmp/mm-hist.test.lua; rc=$?; rm -f /tmp/mm-hist.test.lua; exit $rc' \
@@ -249,15 +281,15 @@ ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mmtest/t.lua' < test/backend-conso
 ssh -o BatchMode=yes "root@$HOST" 'MUDIMODEM_AT_TOOL=/tmp/mmtest/fake-at.py lua /tmp/mmtest/t.lua >/dev/null; rc=$?; rm -rf /tmp/mmtest; exit $rc' \
   || fail "at_console backend test failed on-device"
 
-echo "8d. LIVE: one read-only AT through the real tool (per-step envelope + gl_modem sleep)"
+echo "8d. LIVE: one read-only AT through the real tool (per-step envelope)"
 ssh -o BatchMode=yes "root@$HOST" \
   'python3 /usr/lib/mudimodem/mudimodem-at.py --envelope --timeout 6 "AT" | head -1 | grep -qE "^MM-AT:ok:[0-9]+:1/1$"' \
   || fail "live AT through /dev/at_mdm0 did not return a per-step MM-AT:ok frame"
 
-echo "8e. gl_modem alive and NOT left stopped (the one failure that must never survive)"
+echo "8e. GL's AT server (modem_AT) alive and untouched after our AT call"
 ssh -o BatchMode=yes "root@$HOST" \
-  'pids=$(pidof gl_modem); [ -n "$pids" ] || exit 1; for p in $pids; do s=$(cut -d" " -f3 "/proc/$p/stat"); [ "$s" = "T" ] && exit 1; done; exit 0' \
-  || fail "gl_modem missing or left in state T after the AT call"
+  'pids=$(pidof modem_AT); [ -n "$pids" ] || exit 1; for p in $pids; do s=$(cut -d" " -f3 "/proc/$p/stat"); [ "$s" = "T" ] && exit 1; done; exit 0' \
+  || fail "modem_AT missing or left stopped (our tool must never signal GL processes)"
 
 echo "8f. library check/refresh tool installed + backend methods present"
 ssh -o BatchMode=yes "root@$HOST" 'test -x /usr/lib/mudimodem/mudimodem-lib' \
@@ -418,51 +450,51 @@ if [ -f src/sbin/glbattlimit ]; then
     || fail "battlimit paths not in sysupgrade.conf (need bin+hotplug+init+json)"
 fi
 
-echo "13. LCD renderer files installed"
+echo "14. collectd latest.json + battery-latest.json are live (the ws seeds)"
 ssh -o BatchMode=yes "root@$HOST" \
-  '[ -f /usr/bin/mudi.py ] && [ -f /usr/bin/mudi-watch.py ] && [ -f /etc/init.d/mudi ] && [ -f /etc/init.d/mudi-watch ]' \
-  || fail "LCD renderer files missing"
+  '[ -f /tmp/mudimodem/latest.json ] && python3 -c "import json; json.load(open(\"/tmp/mudimodem/latest.json\")); json.load(open(\"/tmp/mudimodem/battery-latest.json\"))"' \
+  || fail "latest.json / battery-latest.json missing or invalid (is the collector on the new build?)"
+ssh -o BatchMode=yes "root@$HOST" '[ ! -S /tmp/mudimodem/collectd.sock ]' \
+  || fail "stale collectd.sock present (2.x has no socket consumer; old collector still running?)"
 
-echo "13b. LCD files registered in sysupgrade.conf"
-ssh -o BatchMode=yes "root@$HOST" 'for p in \
-    /usr/bin/mudi.py \
-    /usr/bin/mudi-watch.py \
-    /etc/init.d/mudi \
-    /etc/init.d/mudi-watch; do
-    grep -qxF "$p" /etc/sysupgrade.conf || { echo "missing: $p"; exit 1; }
-  done' \
-  || fail "LCD files not in sysupgrade.conf"
-
-echo "14. collectd broadcast socket + latest.json are live"
-ssh -o BatchMode=yes "root@$HOST" \
-  '[ -S /tmp/mudimodem/collectd.sock ] && [ -f /tmp/mudimodem/latest.json ] && python3 -c "import json,sys; json.load(open(\"/tmp/mudimodem/latest.json\"))"' \
-  || fail "collectd socket or latest.json missing/invalid (is the collector on the new build?)"
-
-# 14b. LIVE /rpc round-trip: get_lcd must pass the arg validator and return an
-#      availability snapshot. Needs an authenticated sid, so it runs only when
-#      MM_PW is provided (mirrors step 9b).
+# 14b. LIVE /rpc round-trip: get_bands must pass the arg validator and return
+#      the three-layer model. Needs an authenticated sid (MM_PW), like 9b.
 if [ -n "${MM_PW:-}" ]; then
-  echo "14b. get_lcd survives the /rpc validator and returns availability"
+  echo "14b. get_bands survives the /rpc validator and returns the three layers"
   SID=$(rpc_login) || fail "login for /rpc round-trip failed (is MM_PW correct?)"
   [ -n "$SID" ] || fail "login for /rpc round-trip failed (is MM_PW correct?)"
   RESP=$(ssh -o BatchMode=yes "root@$HOST" \
     'curl -sk -X POST https://127.0.0.1/rpc -H "Content-Type: application/json" \
-       -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"call\",\"params\":[\"'"$SID"'\",\"mudimodem\",\"get_lcd\",{}]}"')
+       -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"call\",\"params\":[\"'"$SID"'\",\"mudimodem\",\"get_bands\",{}]}"')
   printf '%s' "$RESP" | grep -q -- '-32602' \
-    && fail "get_lcd was rejected by the arg validator (-32602): $RESP"
-  printf '%s' "$RESP" | grep -q '"available"' \
-    || fail "get_lcd did not return an availability snapshot (got: $RESP)"
-  echo "   get_lcd round-trip OK"
+    && fail "get_bands was rejected by the arg validator (-32602): $RESP"
+  printf '%s' "$RESP" | grep -q '"policy"' \
+    || fail "get_bands did not return the three-layer model (got: $RESP)"
+  echo "   get_bands round-trip OK"
+  # {light:1} — the store-only view the page refetches after a cell-lock action.
+  # A number rides through oui's validator untouched (oui-lib-rpc.lua
+  # valid_rpc_args: only strings are pattern-matched); prove it end to end.
   RESP=$(ssh -o BatchMode=yes "root@$HOST" \
     'curl -sk -X POST https://127.0.0.1/rpc -H "Content-Type: application/json" \
-       -d "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"call\",\"params\":[\"'"$SID"'\",\"mudimodem\",\"set_lcd\",{\"default_page\":0}]}"')
-  printf '%s' "$RESP" | grep -q -- '-32602' \
-    && fail "set_lcd was rejected by the arg validator (-32602): $RESP"
-  printf '%s' "$RESP" | grep -q '"available"' \
-    || fail "set_lcd did not return an availability snapshot (got: $RESP)"
-  echo "   set_lcd round-trip OK"
+       -d "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"call\",\"params\":[\"'"$SID"'\",\"mudimodem\",\"get_bands\",{\"light\":1}]}"')
+  printf '%s' "$RESP" | grep -q '"light":true' \
+    || fail "get_bands {light:1} did not return the light view (got: $RESP)"
+  printf '%s' "$RESP" | grep -q '"policy"' \
+    && fail "get_bands {light:1} must not carry the AT-derived layers"
+  echo "   get_bands light round-trip OK"
 else
-  echo "14b. SKIPPED — set MM_PW=<admin-password> to run the get_lcd/set_lcd /rpc round-trip"
+  echo "14b. SKIPPED — set MM_PW=<admin-password> to run the get_bands /rpc round-trip"
 fi
+
+echo "15. websocket push bus: gl-session is up (4.10 ws stack); our socket names are subscribed by the menu"
+# has_websocket is only a liveness probe here: the collector pushes on every
+# tick regardless of browsers (gl-session's notify is a no-op with none).
+ssh -o BatchMode=yes "root@$HOST" 'ubus call gl-session has_websocket | grep -q has_ws' \
+  || fail "gl-session has_websocket unavailable (the 4.10 push bus is not up)"
+ssh -o BatchMode=yes "root@$HOST" 'for n in mudimodem.collect mudimodem.battery mudimodem.event; do grep -q "$n" /usr/share/oui/menu.d/mudimodem.json || exit 1; done' \
+  || fail "menu does not subscribe every mudimodem.* push name"
+ssh -o BatchMode=yes "root@$HOST" 'ubus call gl-session notify "{\"name\":\"mudimodem.selftest\",\"data\":{\"ok\":1}}"' \
+  || fail "gl-session notify refused a test frame"
+echo "   push bus reachable"
 
 echo "ALL CHECKS PASSED"

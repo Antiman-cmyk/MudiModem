@@ -1,10 +1,14 @@
--- MudiModem RPC backend.  Loaded by oui.rpc via dofile(); returns a table of
--- functions.  ubus.call() here may use DOTTED object names (server-side, past
--- the /rpc dot gate), which is the whole reason this backend exists.
+-- MudiModem RPC backend (GL firmware 4.10).  Loaded by oui.rpc via dofile();
+-- returns a table of functions.  ubus.call() here may use DOTTED object names
+-- (server-side, past the /rpc dot gate).
 --
--- Reads: get_bands (three-layer model). Writes: set_bands (SA allowlist) +
--- confirm, both behind the /usr/sbin/mudimodem-revert confirm-or-revert
--- watchdog. set_bands refuses to write unless the watchdog has ARMED first.
+-- Reads: get_bands (three-layer model: module ∩ carrier policy ∩ your config).
+-- Writes: set_bands through GL's own per-slot band API (modem.set_band_config,
+-- reached via glc) — fail-closed and durable by construction — behind the
+-- /usr/sbin/mudimodem-revert confirm-or-revert watchdog. Every write refuses
+-- to happen unless the watchdog has ARMED first.
+--
+-- Firmware shapes are documented in docs/cellular-api-4.10.md.
 --
 -- ACL: admin session is aclgroup "root" => always allowed (oui/rpc.lua:87). No
 -- ACL file needed; do NOT expose any no-auth method.
@@ -18,7 +22,11 @@ local M = {}
 local PENDING    = os.getenv("MUDIMODEM_PENDING") or "/etc/mudimodem/pending"
 local ARMED      = os.getenv("MUDIMODEM_ARMED")   or "/etc/mudimodem/armed"
 local REVERT_BIN = os.getenv("MUDIMODEM_BIN")     or "/usr/sbin/mudimodem-revert"
-local STALE      = os.getenv("MUDIMODEM_STALE")   or "/etc/mudimodem/gl-stale"
+-- Detached children (watchdog, speed test, self-update) go through this
+-- wrapper so they never inherit nginx's listening sockets (see the script).
+local DETACH     = os.getenv("MUDIMODEM_DETACH")  or "/usr/lib/mudimodem/mudimodem-detach"
+local LATEST     = os.getenv("MUDIMODEM_LATEST")  or "/tmp/mudimodem/latest.json"
+local BUS        = "cpu"                      -- the built-in modem's bus
 -- History telemetry lives in tmpfs (volatile), separate from the durable /etc
 -- pending state. samples.jsonl is written by mudimodem-collectd; events.jsonl by
 -- us (user events) + the watchdog (dog events). get_history serves both.
@@ -27,12 +35,21 @@ local SAMPLES    = HIST_DIR .. "/samples.jsonl"
 local EVENTS     = HIST_DIR .. "/events.jsonl"
 local BATTERY    = HIST_DIR .. "/battery.jsonl"
 
--- An empty Lua table encodes as {} (object); GL's set_feature_config wants []
+-- An empty Lua table encodes as {} (object); GL's set_band_config wants []
 -- for empty band lists. cjson.empty_array is the sentinel that encodes as [].
+-- (Older lua-cjson builds lack the sentinel — the dev box's, not the router's —
+-- so fall back to a plain table there rather than emitting a nil field.)
+local EMPTY_ARRAY = cjson.empty_array or {}
 local function arr(t)
   if type(t) == "table" and #t > 0 then return t end
-  return cjson.empty_array
+  return EMPTY_ARRAY
 end
+
+-- JSON null decodes to cjson.null, a lightuserdata that is TRUTHY in Lua — a
+-- bare `if obj.pci then` passes on "pci": null. Launder every decoded field
+-- that gates a decision through nn() first.
+local function nullish(v) return v == nil or v == cjson.null end
+local function nn(v) if nullish(v) then return nil end return v end
 
 -- Editable RATs: our key <-> the AT param <-> GL's band_list key.
 local RATS = {
@@ -40,10 +57,15 @@ local RATS = {
   { key = "nsa", param = "nsa_nr5g_band", gl = "NR-NSA" },
   { key = "lte", param = "lte_band",      gl = "LTE" },
 }
--- Network mode: our label <-> mode_pref (AT) == network_mode (GL config) value.
--- Only these three are exposed (GL's own choices). NSA needs an LTE anchor, so
--- it is usable only under AUTO; SA under AUTO/NR5G; LTE under AUTO/LTE.
+-- Network mode: GL's network_mode value (== the modem's mode_pref). Only these
+-- three are exposed (GL's own choices). NSA needs an LTE anchor, so it is
+-- usable only under AUTO; SA under AUTO/NR5G; LTE under AUTO/LTE.
 local MODES = { AUTO = true, NR5G = true, LTE = true }
+
+-- Launch a command detached from this nginx worker (fds closed, own session).
+local function spawn_detached(cmd)
+  os.execute(DETACH .. " " .. cmd .. " >/dev/null 2>&1 &")
+end
 
 -- Call a dotted ubus object, returning (table|nil, err).
 --
@@ -104,10 +126,46 @@ local function pending_get(key)
   if not file_exists(PENDING) then return nil end
   for line in io.lines(PENDING) do
     local k, v = line:match("^([%w_]+)=(.*)$")
-    if k == key then return v end
+    if k == key then
+      local q = v:match("^'(.*)'$")           -- JSON values are single-quoted for sh
+      return q or v
+    end
   end
   return nil
 end
+
+-- The collector's newest sample (cellular_compat schema) when it is fresh,
+-- else nil. Lets get_lock skip its own QENG read: the collector already paid
+-- for that AT round-trip within the last few seconds.
+local function read_latest(max_age_s)
+  local f = io.open(LATEST, "r")
+  if not f then return nil end
+  local body = f:read("*a") or ""
+  f:close()
+  local ok, obj = pcall(cjson.decode, body)          -- pure C decode; cannot yield
+  if not ok or type(obj) ~= "table" or type(obj.t) ~= "number" then return nil end
+  if os.time() - obj.t / 1000 > (max_age_s or 30) then return nil end
+  return obj
+end
+
+-- The built-in modem's object out of `cellular.modem status/info` called WITHOUT
+-- arguments — GL's canonical form, which its own consumers parse as modems[]
+-- (lib/functions/modem.sh get_current_sim_slot, websocket/cellular.lua,
+-- internet.js). No other shape is accepted.
+local function pick_modem(payload)
+  local mods = type(payload) == "table" and payload.modems or nil
+  if type(mods) ~= "table" then return nil end
+  for _, m in ipairs(mods) do
+    if type(m) == "table" and (m.bus == BUS or m.type == 0) then return m end
+  end
+  return mods[1]
+end
+
+-- sub_id resolution costs 1-3 QSPN round-trips; the slot<->sub_id mapping is
+-- stable while the active SIM stays the same, so remember it per worker
+-- (keyed by slot + home PLMN) for a while.
+local SUBID_TTL = 300
+local subid_cache = { key = nil, sub_id = nil, plmn = nil, at = 0 }
 
 -- Append one user/watchdog event to the shared telemetry log (spec §4.1). Net
 -- (handover/failover) events are NOT written here — the page derives those from
@@ -115,10 +173,12 @@ end
 -- multiple appenders (us + the watchdog) don't corrupt each other.
 local function append_event(kind, label, detail)
   os.execute("mkdir -p " .. HIST_DIR .. " 2>/dev/null")
+  local ev = { t = os.time() * 1000, kind = kind, label = label, detail = detail or "" }
   local f = io.open(EVENTS, "a")
-  if not f then return end
-  f:write(cjson.encode({ t = os.time() * 1000, kind = kind, label = label, detail = detail or "" }) .. "\n")
-  f:close()
+  if f then f:write(cjson.encode(ev) .. "\n"); f:close() end
+  -- Same push bus the collector uses: the Tracking timeline gets the event now
+  -- instead of at its next history fetch. Bare ucall — never pcall a cosocket.
+  ucall("gl-session", "notify", { name = "mudimodem.event", data = ev })
 end
 
 -- Extract the RPLMN (last quoted field) from a QSPN response:
@@ -147,19 +207,36 @@ end
 
 -- Resolve the active subscription end-to-end: find the serving slot's PLMN from
 -- ubus, then the sub_id whose QSPN matches it. Returns (sub_id, plmn, matched, slot).
+-- ⚠️ `slot` is nil when GL has no active slot (no SIM, modem resetting): every
+-- caller must REFUSE to write in that case — never fall back to slot 1, which
+-- would mis-target SIM2/eSIM.
+-- GL's active slot (current_sim_slot of the built-in modem), nil when none.
+-- One ubus read, no AT — enough for every slot-addressed GL call.
+local function active_slot()
+  local st = pick_modem(ucall("cellular.modem", "status", {}))
+  return st and tonumber(st.current_sim_slot) or nil
+end
+
 local function resolve_active()
   local want_plmn
-  local st = ucall("cellular.modem", "status", {})
-  local slot = st and st.modems and st.modems[1] and st.modems[1].current_sim_slot
+  local slot = active_slot()
   local sims = ucall("cellular.sim", "info", {})
-  if sims and sims.sims then
-    for _, s in ipairs(sims.sims) do
-      if tostring(s.slot) == tostring(slot) and s.mcc and s.mnc then
-        want_plmn = tostring(s.mcc) .. tostring(s.mnc)
-      end
+  for _, s in ipairs((sims and sims.sims) or {}) do
+    if slot and tonumber(s.slot) == slot and s.mcc and s.mnc then
+      want_plmn = tostring(s.mcc) .. tostring(s.mnc)
     end
   end
+  local key = tostring(slot) .. ":" .. tostring(want_plmn)
+  if subid_cache.key == key and os.time() - subid_cache.at < SUBID_TTL then
+    return subid_cache.sub_id, subid_cache.plmn, true, slot
+  end
   local sub_id, plmn, matched = resolve_sub_id(want_plmn)
+  -- Cache only a PLMN-matched answer, and never sub_id 0: it is documented to
+  -- answer for different subscriptions minutes apart (CLAUDE.md §6), so it
+  -- must be re-verified by QSPN on every call rather than pinned for 5 min.
+  if matched and sub_id ~= 0 then
+    subid_cache = { key = key, sub_id = sub_id, plmn = plmn, at = os.time() }
+  end
   return sub_id, plmn, matched, slot
 end
 
@@ -181,6 +258,80 @@ local function glc(object, method, args)
   local ok, obj = pcall(cjson.decode, msg)               -- decode can't yield; pcall fine
   if not ok or type(obj) ~= "table" then return nil, "glc bad json" end
   return obj
+end
+
+-- GL 4.10's per-slot band config (modem.get_band_config {bus,slot}):
+--   { band_enable, network_mode: "AUTO"|"NR5G"|"LTE", band_list?: {LTE,NR-SA,NR-NSA} }
+-- Normalized to { enable, mode, mode_raw, LTE, nsa, sa } (band_list only present
+-- when filtering is enabled; absent => every supported band). band_enable is a
+-- JSON boolean in GL's own C code (libcm_modem.so get_band_config emits
+-- json_true/json_false), so the strict test is right.
+--
+-- `mode` is the tri-state the page edits; `mode_raw` is GL's stored string
+-- verbatim. They differ only if GL ever stores something outside the enum —
+-- a colon combo such as the mode_pref=LTE:NR5G GL's own 4G tower lock leaves
+-- behind (reference/quectel-at-reference.md §6a). A band-only apply and the
+-- revert snapshot pass mode_raw through untouched, so an unrecognised mode
+-- is never silently rewritten to AUTO; get_bands flags it (meta.mode_known).
+local function band_cfg_get(slot)
+  local raw, err = glc("modem", "get_band_config", { bus = BUS, slot = slot })
+  if not raw then return nil, err end
+  local bl = raw.band_list or {}
+  local mode_raw = raw.network_mode
+  if type(mode_raw) ~= "string" or mode_raw == "" then mode_raw = nil end
+  return {
+    enable   = raw.band_enable == true,
+    mode     = MODES[mode_raw] and mode_raw or "AUTO",
+    mode_raw = mode_raw,
+    LTE = bl.LTE or {}, nsa = bl["NR-NSA"] or {}, sa = bl["NR-SA"] or {},
+  }
+end
+
+-- The exact payload GL's own UI sends to modem.set_band_config: nothing more
+-- (no band_filter_mode), lists as JSON arrays, NR lists emptied under LTE
+-- mode (GL's rule). `lists` is { LTE=, nsa=, sa= }; nil lists => filtering off.
+local function band_cfg_payload(slot, mode, lists)
+  local out = { bus = BUS, slot = slot, band_enable = lists ~= nil, network_mode = mode }
+  if lists then
+    local nr_ok = (mode ~= "LTE")
+    out.band_list = {
+      LTE = arr(lists.LTE),
+      ["NR-NSA"] = nr_ok and arr(lists.nsa) or EMPTY_ARRAY,
+      ["NR-SA"]  = nr_ok and arr(lists.sa)  or EMPTY_ARRAY,
+    }
+  end
+  return out
+end
+
+local function band_cfg_set(payload)
+  return glc("modem", "set_band_config", payload)
+end
+
+-- Clear GL's stored cell lock for one slot (slot-addressed, no sub_id). The
+-- stored tower fields ride along with lock=false, as GL's own unlock does, so
+-- modem.so sees the record it wrote. The ONE GL-side unlock, used by
+-- clear_cell_lock and revert_now alike. Returns (result|nil, err).
+local function gl_unlock(slot)
+  local gl = glc("modem", "get_cell_tower", { bus = BUS })
+  local tower = (gl and gl["slot" .. tostring(slot)]) or {}
+  local payload = { bus = BUS, slot = slot, lock = false }
+  for k, v in pairs(tower) do if payload[k] == nil then payload[k] = v end end
+  return glc("modem", "set_cell_tower", payload)
+end
+
+-- Run the watchdog's own restore synchronously (src/sbin/mudimodem-revert
+-- restore-now): the ONE implementation of "undo what PENDING describes" on the
+-- modem side, shared with the window-end revert so the two can never drift.
+-- Returns the JSON object it prints, or nil when it gave no answer.
+local function restore_now()
+  local f = io.popen(REVERT_BIN .. " restore-now 2>/dev/null")
+  if not f then return nil end
+  local out = f:read("*a") or ""
+  f:close()
+  local line = out:match("(%b{})")
+  if not line then return nil end
+  local ok, obj = pcall(cjson.decode, line)       -- pure C decode; cannot yield
+  return (ok and type(obj) == "table") and obj or nil
 end
 
 -- AT read with the crossed-reply guard (reference §10): the shared channel can
@@ -282,70 +433,70 @@ end
 -- READ: the three-layer band picture for the active subscription.
 -- { supported={LTE,nsa,sa}, config={enable,mode,LTE,nsa,sa},
 --   policy={LTE,nsa,sa}, capability={LTE,nsa,sa},
---   meta={bus,slot,plmn,sub_id,plmn_matched} }
+--   meta={bus,slot,plmn,sub_id,plmn_matched,mode,lock} }
+-- config+mode: ONE glc read of GL's per-slot store (get_band_config). policy +
+-- capability: raw AT (the only place they exist). No AT is spent on config.
+-- args.light = 1: config + mode + lock ONLY (GL's store, two glc reads, ZERO
+-- AT). The page uses it after a cell-lock action — a GL lock changes the
+-- stored network_mode and the tower badge, but policy/capability (the two AT
+-- reads) cannot have changed, so refetching the full model would spend 2-3 AT
+-- round-trips on the shared channel for nothing.
 function M.get_bands(args)
-  local bus = (args and args.bus) or "cpu"
+  local light = args and (args.light == 1 or args.light == true or args.light == "1") or false
 
-  -- 1. supported (module) — clean ubus, no AT.
-  -- NB: info/status are called with {} (no bus). Passing bus changes what they
-  -- return; get_feature_config below DOES want bus. (Verified on-box 2026-07-17.)
+  -- 1. active slot; the PLMN-matched sub_id is needed only for the AT reads.
+  local sub_id, plmn, matched, slot
+  if light then
+    slot = active_slot()
+  else
+    sub_id, plmn, matched, slot = resolve_active()
+  end
+  if not slot then return { error = "no active SIM slot (modem not ready)" } end
+
+  -- 2. config + mode — GL's per-slot store.
+  local config, cfg_err = band_cfg_get(slot)
+  if not config then
+    return { error = "get_band_config failed: " .. tostring(cfg_err) }
+  end
+
+  -- Cell/tower lock (GL's store) — the RAT the modem is locked to. The Bands
+  -- tab warns/blocks when the mode excludes that RAT.
+  local gl = glc("modem", "get_cell_tower", { bus = BUS })
+  local tw = gl and gl["slot" .. tostring(slot)] or nil
+  local lock = { active = false }
+  if tw and tw.cellid and tw.cellid ~= "" then
+    lock = { active = true, rat = (tostring(tw.network_type or ""):find("LTE")) and "4g" or "5g",
+             pci = tw.pci, freq = tw.freq, band = tw.band }
+  end
+
+  local meta = {
+    bus = BUS,
+    slot = slot,
+    mode = config.mode,       -- AUTO | NR5G | LTE — GL's network_mode for this slot
+    mode_raw = config.mode_raw,
+    -- false => GL stores a mode outside AUTO/NR5G/LTE; the page shows it and
+    -- leaves it alone (a band-only apply passes it through verbatim).
+    mode_known = (config.mode_raw == nil) or (MODES[config.mode_raw] == true),
+    lock = lock,              -- { active, rat, pci, freq, band } — network-type lock
+  }
+  if light then
+    meta.light = true
+    return { config = config, meta = meta }
+  end
+
+  -- 3. supported (module) — cache read, no AT.
   local supported = { LTE = {}, nsa = {}, sa = {} }
-  local info = ucall("cellular.modem", "info", {})
-  local modem = info and info.modems and info.modems[1]
+  local modem = pick_modem(ucall("cellular.modem", "info", {}))
   if modem and modem.band then
     supported.LTE = modem.band.LTE or {}
     supported.nsa = modem.band["NR-NSA"] or {}
     supported.sa  = modem.band["NR-SA"] or {}
   end
 
-  -- 2. active subscription (PLMN-matched sub_id), to target the AT queries.
-  local sub_id, plmn, matched, slot = resolve_active()
-
-  -- 3. config + mode — from GL's stored view (ONE ubus call, no AT).
-  --    The AT channel is shared with GL's polling; too many raw-AT reads here
-  --    make get_bands slow enough to trip the admin's request-timeout banner and
-  --    congest GL's own polling. Reading get_feature_config instead drops FOUR
-  --    AT round-trips. Safe now: Path B (confirm -> set_feature_config) keeps
-  --    GL's stored config in sync with the modem on every Keep, so this is
-  --    accurate whenever the user can edit — it lags only during a pending
-  --    revert, when editing is locked. (This reverses the earlier "read raw AT"
-  --    workaround, whose whole reason — GL not seeing our writes — Path B fixed.)
-  local config = { enable = true, mode = 0, LTE = {}, nsa = {}, sa = {} }
-  local feat = ucall("cellular.modem", "get_feature_config", { bus = bus })
-  local fb = feat and feat.band and feat.band.band_list
-  if fb then
-    config.sa  = fb["NR-SA"] or {}
-    config.nsa = fb["NR-NSA"] or {}
-    config.LTE = fb.LTE or {}
-  end
-  -- Network mode: the modem's AUTHORITATIVE mode_pref (AT), NOT feat.network_mode.
-  -- get_feature_config returns network_mode TWICE (the modem's real value AND GL's
-  -- stored default); the ubus->lua flatten keeps the trailing one, which can read
-  -- "AUTO" while the modem is genuinely NR5G. The config bands above are fine from
-  -- feat; the mode is not — read mode_pref directly.
-  local mode_blob = at('AT+QNWPREFCFG="mode_pref"', sub_id)
-  local mode_pref
-  if mode_blob then
-    local v = mode_blob:match('"mode_pref",%s*([%u%d:_]+)')
-    if v then
-      -- a colon combo naming both RATs (e.g. "LTE:NR5G") == Auto for our selector.
-      mode_pref = (v:find("LTE") and v:find("NR5G")) and "AUTO" or v
-    end
-  end
-  mode_pref = mode_pref or (feat and feat.network_mode) or nil   -- fallback if AT unreadable
-
-  -- Cell/tower lock (from feat.tower, already in hand) — the RAT the modem is
-  -- locked to. The Bands tab warns/blocks when the mode excludes that RAT.
-  local tw = feat and feat.tower
-  local lock
-  if tw and tw.lock then
-    lock = { active = true, rat = (tw.network_type == "LTE") and "4g" or "5g",
-             pci = tw.pci, freq = tw.freq, band = tw.band }
-  else
-    lock = { active = false }
-  end
-
   -- 4. policy + capability — AT only, at the resolved sub_id.
+  meta.plmn = plmn
+  meta.sub_id = sub_id
+  meta.plmn_matched = matched   -- false => sub_id resolution is a best guess
   local pol_blob = at('AT+QNWPREFCFG="policy_band"', sub_id)
   local cap_blob = at('AT+QNWPREFCFG="ue_capability_band"', sub_id)
   local policy = {
@@ -364,40 +515,75 @@ function M.get_bands(args)
     config = config,
     policy = policy,
     capability = capability,
-    meta = {
-      bus = bus,
-      slot = slot,
-      plmn = plmn,
-      sub_id = sub_id,
-      plmn_matched = matched,   -- false => sub_id resolution is a best guess
-      mode = mode_pref,         -- AUTO | NR5G | LTE — the RAT gate (from AT mode_pref)
-      lock = lock,              -- { active, rat, pci, freq, band } — network-type lock
-    },
+    meta = meta,
   }
+end
+
+-- The serving cell out of a fresh collector sample, or nil when the sample
+-- cannot answer and the QENG read must. Every field is laundered through nn():
+-- a no-service sample is written with "pci": null, and cjson.null is truthy.
+-- Under NSA the flattened aliases describe the LTE ANCHOR while rat says
+-- NR5G-NSA — a 5G lock built from them would target a non-existent NR cell —
+-- so the NR leg is taken from signals[] (the row cellular_compat tags NR5G),
+-- exactly what parse_serving returns from a multi-line QENG (`sa or nsa or
+-- lte`); with no NR row in the sample we decline and let the AT read answer.
+local function serving_from_sample(latest)
+  local rat = nn(latest.rat) or nn(latest.mode)
+  local cell_id = nn(latest.cell_id) or nn(latest.id)
+  if type(rat) == "string" and rat:find("NSA", 1, true) then
+    local sigs = type(latest.signals) == "table" and latest.signals or {}
+    for _, sg in ipairs(sigs) do
+      local r = type(sg) == "table" and nn(sg.rat) or nil
+      local pci, arfcn = tonumber(nn(sg and sg.pci)), tonumber(nn(sg and sg.earfcn))
+      if type(r) == "string" and r:find("NR5G", 1, true) and pci and arfcn then
+        return { rat = rat, cell_id = cell_id, pci = pci, arfcn = arfcn,
+                 band = tonumber(nn(sg.band)), source = "collector" }
+      end
+    end
+    return nil
+  end
+  local pci, arfcn = tonumber(nn(latest.pci)), tonumber(nn(latest.tx_channel))
+  if not pci or not arfcn then return nil end
+  return { rat = rat, cell_id = cell_id, pci = pci, arfcn = arfcn,
+           band = tonumber(nn(latest.band)), source = "collector" }
 end
 
 -- READ: cell-lock picture — modem truth (QNWLOCK), GL's store (get_cell_tower),
 -- the serving cell (lock target for pin-current), and stale/pending flags.
 function M.get_lock(args)
   local sub_id, plmn, matched, slot = resolve_active()
+  -- Same rule as every other resolve_active() caller: with no active slot
+  -- there is nothing to read FOR — the AT reads would go to the fallback
+  -- sub_id and be presented as the active SIM's lock state.
+  if not slot then return { error = "no active SIM slot (modem not ready)" } end
   local l4 = parse_qnwlock4(at_expect('AT+QNWLOCK="common/4g"', '"common/4g"', sub_id))
   local l5 = parse_qnwlock5(at_expect('AT+QNWLOCK="common/5g"', '"common/5g"', sub_id))
   local sc = parse_savectrl(at_expect('AT+QNWLOCK="save_ctrl"', '"save_ctrl"', sub_id))
-  local serving = parse_serving(at_expect('AT+QENG="servingcell"', '"servingcell"', sub_id))
+  -- Serving cell: the collector's fresh sample already carries rat/pci/arfcn/
+  -- band/cell_id for the active slot (it paid the QENG round-trip); only when
+  -- that is stale, null, or lacks the NR leg do we spend our own AT read.
+  local serving
+  local latest = read_latest(30)
+  if latest and tonumber(nn(latest.slot)) == slot then serving = serving_from_sample(latest) end
+  if not serving then
+    serving = parse_serving(at_expect('AT+QENG="servingcell"', '"servingcell"', sub_id))
+  end
 
-  local gl = glc("modem", "get_cell_tower", { bus = "cpu" })
+  local gl = glc("modem", "get_cell_tower", { bus = BUS })
   local tower = gl and gl["slot" .. tostring(slot)] or nil
   local gl_locked = (tower and tower.cellid and tower.cellid ~= "") and true or false
   local modem_locked = (l4 and l4.locked) or (l5 and l5.locked) or false
 
-  -- Shape unknown until Task 7 captures it; returned raw for the UI to inspect.
-  local opcfg = glc("modem", "get_operator_config", { bus = "cpu" })
+  local opcfg = glc("modem", "get_operator_config", { bus = BUS, slot = slot })
 
   return {
     lock = { l4g = l4, l5g = l5, save_ctrl = sc },
     gl = { locked = gl_locked, tower = tower },
     serving = serving,
-    stale = file_exists(STALE) or (gl_locked and not modem_locked),
+    -- GL's store remembers a lock the modem no longer has (a watchdog or
+    -- revert_now raw-AT unlock whose GL reconcile failed): derived live, no
+    -- marker file — the two stores are the only truth.
+    stale = (gl_locked and not modem_locked),
     pending_kind = pending_get("KIND") or (file_exists(PENDING) and "bands" or nil),
     operator_config = opcfg,
     meta = { sub_id = sub_id, slot = slot, plmn = plmn, plmn_matched = matched },
@@ -409,7 +595,8 @@ end
 -- behind an explicit warning; never call it as part of a read.
 function M.scan_cells(args)
   local _, _, _, slot = resolve_active()
-  local res, err = glc("modem", "scan_cell_tower", { bus = "cpu", slot = tonumber(slot) or 1 })
+  if not slot then return { error = "no active SIM slot (modem not ready)" } end
+  local res, err = glc("modem", "scan_cell_tower", { bus = BUS, slot = slot })
   if not res then return { error = "scan failed: " .. tostring(err) } end
   append_event("user", "Cell scan", "")
   return { towers = arr(res.towers or {}), ts = os.time() * 1000 }
@@ -436,7 +623,15 @@ function M.set_cell_lock(args)
     return { error = "another change is pending; keep or revert it first" }
   end
 
-  local sub_id, _, _, slot = resolve_active()
+  local sub_id, _, matched, slot = resolve_active()
+  if not slot then return { error = "no active SIM slot (modem not ready)" } end
+  -- The PREV snapshot and the watchdog's revert both address `sub_id`: an
+  -- unconfirmed one (PLMN unknown — SIM still searching, the §12 status-0
+  -- wedge) would snapshot and later "revert" the OTHER subscription while the
+  -- real lock stayed in place. Refuse rather than guess.
+  if not matched then
+    return { error = "could not confirm which subscription answers for the active SIM (sub_id); not locking — retry once the SIM is registered" }
+  end
 
   -- One lock at a time (keeps the revert target = "unlocked", always). Fail
   -- CLOSED: at_expect returns nil when it exhausts its retries (crossed AT
@@ -475,7 +670,7 @@ function M.set_cell_lock(args)
 
   -- Arm the watchdog; no arm, no write (same interlock as set_bands).
   os.remove(ARMED)
-  os.execute(REVERT_BIN .. " watch >/dev/null 2>&1 &")
+  spawn_detached(REVERT_BIN .. " watch")
   os.execute("sleep 1")
   if not file_exists(ARMED) then
     os.remove(PENDING)
@@ -483,7 +678,7 @@ function M.set_cell_lock(args)
   end
 
   -- Write through GL so its store and the modem agree (spec §3).
-  local payload = { bus = "cpu", slot = tonumber(slot) or 1, lock = true,
+  local payload = { bus = BUS, slot = slot, lock = true,
                     network_type = (rat == "5g") and "NR5G" or "LTE",
                     pci = pci, freq = freq }
   if rat == "5g" then payload.scs = scs; payload.band = band
@@ -507,12 +702,9 @@ end
 
 -- Unlock (risk-reducing — no revert window). Also the stale-store reconciler.
 function M.clear_cell_lock(args)
-  local sub_id, _, _, slot = resolve_active()
-  local gl = glc("modem", "get_cell_tower", { bus = "cpu" })
-  local tower = (gl and gl["slot" .. tostring(slot)]) or {}
-  local payload = { bus = "cpu", slot = tonumber(slot) or 1, lock = false }
-  for k, v in pairs(tower) do if payload[k] == nil then payload[k] = v end end
-  local res, err = glc("modem", "set_cell_tower", payload)
+  local sub_id, _, matched, slot = resolve_active()
+  if not slot then return { error = "no active SIM slot (modem not ready)" } end
+  local res, err = gl_unlock(slot)
   if not res then return { error = "GL unlock failed: " .. tostring(err) } end
   -- GL clears QNWLOCK but leaves the lock's mode side-effect in place, so a 5G
   -- unlock would strand the modem on 5G-only (a 4G lock forces LTE:NR5G +
@@ -520,99 +712,177 @@ function M.clear_cell_lock(args)
   -- mode — because the manual-unlock path has no PREV snapshot: PENDING is
   -- deleted on Keep, and Unlock is disabled while a revert pends. Mirrors panic.
   -- Bare at() only — never pcall a cosocket (CLAUDE.md §8).
+  -- The GL unlock above is slot-addressed and needs no sub_id; these AT writes
+  -- do. Sent to an unconfirmed sub_id they would reset the OTHER SIM's mode
+  -- and leave this one stranded — so they wait for a confirmed one.
+  if not matched then
+    append_event("user", "Cell lock cleared", "unlocked via GL; mode not reset (sub_id unconfirmed)")
+    return { ok = true, mode = nil,
+             warning = "unlocked, but the network-mode preference was not reset: the active SIM's subscription could not be confirmed. If the link stays on one RAT, retry Unlock once the SIM is registered, or run `mudimodem-revert panic` over ssh." }
+  end
   at('AT+QNWPREFCFG="mode_pref",AUTO', sub_id)
   at('AT+QNWPREFCFG="nr5g_disable_mode",0', sub_id)
   at('AT+QNWLOCK="save_ctrl",0,0', sub_id)
-  os.remove(STALE)
   append_event("user", "Cell lock cleared", "unlocked + mode restored to AUTO")
   return { ok = true, mode = "AUTO" }
 end
 
--- WRITE: set band allowlists and/or the network mode, protected by
--- confirm-or-revert. args = { sa={..}, nsa={..}, lte={..}, mode="AUTO"|"NR5G"|"LTE" }
--- — each optional; any provided band list must be non-empty. Returns
--- { ok, window, applied={sa=..,nsa=..,lte=..,mode=..}, sub_id } or { error }.
+-- WRITE: band allowlists and/or the network mode, protected by
+-- confirm-or-revert. args = { sa={..}, nsa={..}, lte={..}, mode="AUTO"|"NR5G"|"LTE",
+-- reset=bool } — each optional. A provided list must be non-empty (an empty
+-- allowlist would drop that RAT). Omitted RATs keep their current list, or —
+-- when filtering was off — every band the module supports. reset=true ignores
+-- the lists and writes GL's true default: filtering OFF + AUTO.
+--
+-- Single write path, fail-closed by construction: the ONE write is GL's
+-- modem.set_band_config, which both applies to the modem and persists in GL's
+-- store; a failed call changes nothing, a successful one is already durable,
+-- and the watchdog restores the previous get_band_config snapshot verbatim.
+-- Returns { ok, window, applied={sa=..,nsa=..,lte=..,mode=..}, sub_id } or { error }.
 function M.set_bands(args)
-  -- Validate + collect the RATs being changed.
-  local changes = {}
+  args = args or {}
+  local reset = args.reset == true
+  local lists = {}
+  local any_list = false
   for _, rat in ipairs(RATS) do
-    local sel = args and args[rat.key]
+    local sel = args[rat.key]
     if type(sel) == "table" then
       if #sel == 0 then
         return { error = "refusing to write an empty " .. rat.key .. " list (would drop that RAT)" }
       end
-      local parts = {}
+      local out = {}
       for _, b in ipairs(sel) do
         local n = tonumber(b)
         if not n or n < 1 or n ~= math.floor(n) then
           return { error = "invalid band value: " .. tostring(b) }
         end
-        parts[#parts + 1] = tostring(n)
+        out[#out + 1] = n
       end
-      changes[#changes + 1] = { key = rat.key, param = rat.param, list = table.concat(parts, ":") }
+      table.sort(out)
+      lists[rat.key] = out
+      any_list = true
     end
   end
-  local mode = args and args.mode
+  local mode = args.mode
   if mode ~= nil and not MODES[mode] then
     return { error = "invalid mode: " .. tostring(mode) }
   end
-  if #changes == 0 and not mode then return { error = "no changes provided" } end
+  if not any_list and not mode and not reset then return { error = "no changes provided" } end
 
   if file_exists(PENDING) then
     return { error = "another change is pending; keep or revert it first" }
   end
 
   local sub_id, _, _, slot = resolve_active()
+  if not slot then return { error = "no active SIM slot (modem not ready)" } end
 
-  -- Capture PREV (the revert target) and stash APPLIED for confirm()'s durable commit.
-  local lines = { "SUB_ID=" .. sub_id, "SLOT=" .. tostring(slot) }
-  for _, c in ipairs(changes) do
-    local prev = pref_raw(at('AT+QNWPREFCFG="' .. c.param .. '"', sub_id), c.param)
-    lines[#lines + 1] = "PREV_" .. c.param .. "=" .. prev
-    lines[#lines + 1] = "APPLIED_" .. c.param .. "=" .. c.list
+  -- Snapshot the revert target: GL's stored config for this slot, verbatim.
+  local prev, perr = band_cfg_get(slot)
+  if not prev then return { error = "could not read current band config: " .. tostring(perr) } end
+  -- GL's stored mode string verbatim (mode_raw) so a band-only apply and the
+  -- snapshot never rewrite a mode we did not recognise.
+  local prev_mode = prev.mode_raw or prev.mode
+
+  -- Build the new config.
+  local payload, applied
+  if reset then
+    payload = band_cfg_payload(slot, "AUTO", nil)
+    applied = { mode = "AUTO", reset = true }
+  else
+    local new_mode = mode or prev_mode
+    -- NR lists cannot take effect under 4G-only: GL empties them in its store
+    -- (band_cfg_payload's nr_ok rule), so accepting them would report bands
+    -- as applied that GL never received. Refuse. The page never sends them
+    -- under LTE (applyBands skips the NR groups) — this is the backstop.
+    if new_mode == "LTE" and (lists.sa or lists.nsa) then
+      return { error = "5G band lists cannot be applied under 4G-only mode; set the mode to Auto or 5G first" }
+    end
+    if not prev.enable and not any_list then
+      -- Filtering is OFF and only the mode changes: keep it off. Materialising
+      -- an allowlist here would silently switch filtering ON with every
+      -- module-supported band pinned (policy-blocked ones included).
+      payload = band_cfg_payload(slot, new_mode, nil)
+      applied = { mode = new_mode }
+    else
+      -- An omitted RAT keeps its current allowlist. An EMPTY current list is
+      -- NOT an allowlist (GL empties the NR lists under LTE mode, and an empty
+      -- table is truthy in Lua) — that RAT, like every RAT when filtering was
+      -- off, falls back to every band the module supports (= no restriction).
+      local supported
+      local function supported_for(ck)
+        if not supported then
+          local modem = pick_modem(ucall("cellular.modem", "info", {}))
+          local band = (modem and modem.band) or {}
+          supported = { LTE = band.LTE or {}, nsa = band["NR-NSA"] or {}, sa = band["NR-SA"] or {} }
+        end
+        return supported[ck] or {}
+      end
+      local final = {}
+      for _, rat in ipairs(RATS) do
+        local ck = (rat.key == "lte") and "LTE" or rat.key    -- config/supported key
+        local cur = prev.enable and prev[ck] or nil
+        if lists[rat.key] then final[ck] = lists[rat.key]
+        elseif type(cur) == "table" and #cur > 0 then final[ck] = cur
+        else final[ck] = supported_for(ck) end
+      end
+      payload = band_cfg_payload(slot, new_mode, final)
+      applied = { mode = new_mode }
+      -- Report the lists GL is actually asked to store (what band_cfg_payload
+      -- arrays), never the request — the countdown text and the Tracking
+      -- event can then never claim a list GL did not receive.
+      for _, rat in ipairs(RATS) do
+        if lists[rat.key] then
+          local ck = (rat.key == "lte") and "LTE" or rat.key
+          local parts = {}
+          for _, n in ipairs(final[ck]) do parts[#parts + 1] = tostring(n) end
+          applied[rat.key] = table.concat(parts, ":")
+        end
+      end
+    end
   end
-  if mode then
-    local mblob = at('AT+QNWPREFCFG="mode_pref"', sub_id)
-    local pmode = (mblob and mblob:match('"mode_pref",([%w:]+)')) or ""
-    lines[#lines + 1] = "PREV_mode_pref=" .. pmode
-    lines[#lines + 1] = "APPLIED_mode_pref=" .. mode
-  end
+
+  -- The snapshot GL will be asked to restore: its own get_band_config answer,
+  -- re-keyed to the set_band_config shape (only the fields GL's UI sends),
+  -- with the mode string verbatim.
+  local prev_payload = band_cfg_payload(slot, prev_mode,
+    prev.enable and { LTE = prev.LTE, nsa = prev.nsa, sa = prev.sa } or nil)
 
   os.execute("mkdir -p /etc/mudimodem 2>/dev/null")
   local f = io.open(PENDING, "w")
   if not f then return { error = "cannot write pending state" } end
-  f:write(table.concat(lines, "\n") .. "\n")
+  f:write(table.concat({
+    "KIND=bands", "SUB_ID=" .. sub_id, "SLOT=" .. tostring(slot),
+    "PREV_BAND_CONFIG='" .. cjson.encode(prev_payload) .. "'",
+    "APPLIED_BAND_CONFIG='" .. cjson.encode(payload) .. "'",
+  }, "\n") .. "\n")
   f:close()
 
-  -- Arm the watchdog, and CONFIRM it is live before the writes. No net, no write.
+  -- Arm the watchdog, and CONFIRM it is live before the write. No net, no write.
   os.remove(ARMED)
-  os.execute(REVERT_BIN .. " watch >/dev/null 2>&1 &")
+  spawn_detached(REVERT_BIN .. " watch")
   os.execute("sleep 1")
   if not file_exists(ARMED) then
     os.remove(PENDING)
     return { error = "revert watchdog failed to arm; no change written" }
   end
 
-  -- Safe to write: a bad change now self-reverts within the window.
-  local applied = {}
-  for _, c in ipairs(changes) do
-    at('AT+QNWPREFCFG="' .. c.param .. '",' .. c.list, sub_id)
-    applied[c.key] = c.list
-  end
-  if mode then
-    at('AT+QNWPREFCFG="mode_pref",' .. mode, sub_id)
-    applied.mode = mode
+  -- The one write. Fail CLOSED: on error nothing changed — stand the watchdog down.
+  local res, err = band_cfg_set(payload)
+  if not res then
+    os.remove(PENDING)
+    return { error = "set_band_config failed: " .. tostring(err) }
   end
 
   -- Persist a "You applied bands" event for the Tracking timeline.
   local bits = {}
+  if applied.reset then bits[#bits + 1] = "reset: filtering off, mode AUTO" end
   if applied.sa  then bits[#bits + 1] = "SA "  .. applied.sa:gsub(":", " n"):gsub("^", "n") end
   if applied.nsa then bits[#bits + 1] = "NSA " .. applied.nsa:gsub(":", " n"):gsub("^", "n") end
   if applied.lte then bits[#bits + 1] = "LTE " .. applied.lte:gsub(":", " B"):gsub("^", "B") end
-  if applied.mode then bits[#bits + 1] = "mode " .. applied.mode end
+  if applied.mode and not applied.reset then bits[#bits + 1] = "mode " .. applied.mode end
   append_event("user", "Bands applied", table.concat(bits, "; "))
 
-  return { ok = true, window = 60, applied = applied, sub_id = sub_id }
+  return { ok = true, window = 60, applied = applied, sub_id = sub_id, slot = slot }
 end
 
 -- READ: the recorded history (samples + user/dog events) for the Tracking page.
@@ -707,72 +977,15 @@ function M.get_battery_history(args)
   return { samples = arr(read_window(BATTERY, window_since(args, now))), now = now }
 end
 
--- Commit a pending change durably (Path B). Two things happen here:
---   1. stop the watchdog (remove pending) so it won't revert; and
---   2. write the kept bands into GL's OWN stored config via
---      cellular.modem set_feature_config — because `cellular_manager`
---      re-applies its stored config on restart/reboot, overwriting our raw-AT
---      write. Committing to GL's config makes the change survive that
---      (reference §11). Our raw-AT write already made it live, so nothing
---      re-registers here.
+-- Keep a pending change: stand the watchdog down. The change itself was
+-- written through GL's store (set_band_config / set_cell_tower) when it was
+-- applied, so it is ALREADY durable — cellular_manager re-applies GL's store on
+-- restart. Nothing here can fail, which is exactly what makes Keep honest.
 function M.confirm(args)
-  if pending_get("KIND") == "cell" then
-    -- GL wrote its own store when the lock was applied; keeping it needs no
-    -- Path-B commit — just stand the watchdog down.
-    os.remove(PENDING)
-    append_event("user", "Kept", "Cell lock confirmed")
-    return { ok = true, confirmed = true, durable = true }
-  end
-
-  local slot = pending_get("SLOT")
-  local durable = false
-
-  if slot and slot ~= "nil" then
-    local all = ucall("cellular.modem", "get_all_config", { bus = "cpu" })
-    local sf = all and all.slot_feature
-    if sf then
-      local loc, cur
-      for key, val in pairs(sf) do
-        if key:match("^s" .. slot .. "_") then loc, cur = key, val end
-      end
-      if loc then
-        local cb = (cur and cur.band) or {}
-        local bl = cb.band_list or {}
-        -- Start from GL's current band_list, then override each RAT we applied.
-        local band_list = {
-          LTE = arr(bl.LTE), ["NR-SA"] = arr(bl["NR-SA"]), ["NR-NSA"] = arr(bl["NR-NSA"]),
-        }
-        local any = false
-        for _, rat in ipairs(RATS) do
-          local ap = pending_get("APPLIED_" .. rat.param)
-          if ap and ap ~= "" then
-            local list = {}
-            for n in ap:gmatch("(%d+)") do
-              local v = tonumber(n); if v and v > 0 then list[#list + 1] = v end
-            end
-            band_list[rat.gl] = arr(list)
-            any = true
-          end
-        end
-        -- Mode: GL's network_mode == the mode_pref value (AUTO/NR5G/LTE).
-        local nm = pending_get("APPLIED_mode_pref")
-        if not nm or nm == "" then nm = (cur and cur.network_mode) or "AUTO" else any = true end
-        if any then
-          local data = {
-            network_mode = nm,
-            band = { band_enable = true, band_filter_mode = cb.band_filter_mode or 0, band_list = band_list },
-          }
-          local res = ucall("cellular.modem", "set_feature_config",
-                            { bus = "cpu", location_id = loc, data = data })
-          durable = (type(res) == "table" and res.ok == true) or false
-        end
-      end
-    end
-  end
-
+  local kind = pending_get("KIND") or "bands"
   os.remove(PENDING)
-  append_event("user", "Kept", "Change confirmed" .. (durable and " (durable)" or ""))
-  return { ok = true, confirmed = true, durable = durable }
+  append_event("user", "Kept", kind == "cell" and "Cell lock confirmed" or "Band change confirmed")
+  return { ok = true, confirmed = true, durable = true }
 end
 
 -- Revert a pending change NOW (don't wait out the window). Writes the previous
@@ -782,72 +995,60 @@ function M.revert_now(args)
   if not file_exists(PENDING) then return { ok = true, note = "nothing pending" } end
 
   if pending_get("KIND") == "cell" then
-    local slot = tonumber(pending_get("SLOT")) or 1
-    local sub  = tonumber(pending_get("SUB_ID")) or 1
-    local rat  = pending_get("RAT") or "5g"
+    local slot = tonumber(pending_get("SLOT"))
 
-    -- GL-INDEPENDENT unlock FIRST (Finding C1): this is what actually frees
-    -- the link. set_cell_tower can fail (GL error code 20002050, or a
-    -- refusal while an operator lock exists) -- a manual revert must not
-    -- leave the modem locked with the watchdog already torn down, which
-    -- would defeat the whole safety guarantee. Mirrors what the watchdog's
-    -- own cell-revert does (mudimodem-revert restore_from_pending).
-    at('AT+QNWLOCK="common/' .. rat .. '",0', sub)
-    local pm = pending_get("PREV_mode_pref")
-    if pm and pm ~= "" then at('AT+QNWPREFCFG="mode_pref",' .. pm, sub) end
-    local pd = pending_get("PREV_nr5g_disable_mode")
-    if pd and pd ~= "" then at('AT+QNWPREFCFG="nr5g_disable_mode",' .. pd, sub) end
-    local psc = pending_get("PREV_SAVE_CTRL")
-    if psc and psc ~= "" then at('AT+QNWLOCK="save_ctrl",' .. psc, sub) end
-
-    -- THEN reconcile GL's store, best-effort -- the link is already safe by
-    -- this point regardless of whether this succeeds. If it fails, drop the
-    -- STALE marker so the frontend offers a reconcile instead of silently
-    -- disagreeing with the modem.
-    local gl = glc("modem", "get_cell_tower", { bus = "cpu" })
-    local tower = (gl and gl["slot" .. slot]) or {}
-    local payload = { bus = "cpu", slot = slot, lock = false }
-    for k, v in pairs(tower) do if payload[k] == nil then payload[k] = v end end
-    local res = glc("modem", "set_cell_tower", payload)
-    if not res then
-      os.execute("mkdir -p /etc/mudimodem 2>/dev/null")
-      local sf = io.open(STALE, "w")
-      if sf then sf:close() end
+    -- The modem-side undo — GL-INDEPENDENT raw-AT unlock FIRST (it is what
+    -- actually frees the link), then the three pref restores — is the
+    -- watchdog's restore_from_pending, run synchronously. One implementation
+    -- for the manual and the window-end revert, so they cannot drift. It
+    -- clears PENDING and stands the sleeping watchdog down on success; on
+    -- failure it keeps both, and so do we.
+    local r = restore_now()
+    if not r or not r.ok then
+      return { error = "restore failed: " .. tostring((r and r.error) or "restore-now gave no answer")
+                       .. " (pending kept, watchdog still armed)" }
     end
 
-    os.remove(PENDING)
-    os.remove(ARMED)
-    append_event("user", "Reverted", "Cell lock removed")
-    return { ok = true, reverted = true }
+    -- THEN reconcile GL's store, best-effort — the link is already safe by
+    -- this point regardless of whether this succeeds. If it fails, get_lock's
+    -- derived `stale` (GL locked, modem unlocked) has the page offer "Clear
+    -- it" instead of silently disagreeing with the modem.
+    local res, gerr
+    if slot then res, gerr = gl_unlock(slot) else gerr = "no SLOT in pending" end
+    return { ok = true, reverted = true, gl_reconciled = res and true or false,
+             gl_error = (not res) and tostring(gerr) or nil }
   end
 
-  local sub = tonumber(pending_get("SUB_ID")) or 1
-  local restored = {}
-  for _, rat in ipairs(RATS) do
-    local prev = pending_get("PREV_" .. rat.param)
-    if prev and prev ~= "" then
-      at('AT+QNWPREFCFG="' .. rat.param .. '",' .. prev, sub)
-      restored[rat.key] = prev
-    end
+  -- Bands: write GL's own previous config back (the snapshot set_bands took).
+  -- Deliberately in-process (ngx.location.capture) rather than via restore-now:
+  -- from inside an nginx worker the shell's route (gl-session -> HTTP POST to
+  -- /rpc) would need ANOTHER free worker to serve it, and the manual revert
+  -- must not fall to the watchdog's open-state fallback — the user is here to
+  -- decide, and a failure keeps the watchdog armed to retry at window end.
+  local prev_json = pending_get("PREV_BAND_CONFIG")
+  local ok, prev = pcall(cjson.decode, prev_json or "")   -- pure C decode; cannot yield
+  if not ok or type(prev) ~= "table" then
+    return { error = "pending file has no usable band snapshot; use the ssh panic restore" }
   end
-  local pmode = pending_get("PREV_mode_pref")
-  if pmode and pmode ~= "" then
-    at('AT+QNWPREFCFG="mode_pref",' .. pmode, sub)
-    restored.mode = pmode
+  local res, err = band_cfg_set(prev)
+  if not res then
+    -- Leave PENDING + the watchdog in place: it will retry the same restore
+    -- at the window's end, and the page keeps offering Revert.
+    return { error = "restore failed: " .. tostring(err) .. " (watchdog still armed)" }
   end
   os.remove(PENDING)
   os.remove(ARMED)
   append_event("user", "Reverted", "Restored previous bands")
-  return { ok = true, reverted = true, restored = restored }
+  return { ok = true, reverted = true, restored = prev }
 end
 
 -- ============================ Phase 3: AT console ============================
 -- Raw AT over OUR OWN channel (/dev/at_mdm0), NOT GL's modem.CPU.AT. The heavy
--- lifting — flock serialization, gl_modem SIGSTOP with paired SIGCONT +
--- startup recovery, drain/terminator read loop, timeout — lives in the Python
--- tool; this method only clamps args, spawns it, and parses the one-line
--- envelope (MM-AT:<status>:<elapsed_ms>). The port has NO sub_id: it answers
--- for the ACTIVE subscription only (spec 2026-07-18 §0).
+-- lifting — flock serialization, drain/terminator read loop, timeout — lives
+-- in the Python tool; this method only clamps args, spawns it, and parses the
+-- per-step envelope (MM-AT:<status>:<elapsed_ms>:<i>/<n>). The port has NO
+-- sub_id: it answers for the ACTIVE subscription only. Nothing of GL's is
+-- stopped (4.10's poller is cellular_manager via modem_AT on another port).
 --
 -- io.popen blocks this nginx worker until the tool exits. The tool self-limits
 -- to timeout + lock-wait, so the block is bounded (consistent with the
@@ -965,8 +1166,6 @@ local SPEEDTEST_SCHEDULE = os.getenv("MUDIMODEM_ST_SCHEDULE")        or "/etc/mu
 local SCHEDULE_SECONDS = { [1800] = true, [3600] = true, [7200] = true,
                            [21600] = true, [43200] = true, [86400] = true }
 
-local function nullish(v) return v == nil or v == cjson.null end
-
 -- Resolve an outbound interface ("cellular"|"wired") to its LIVE Linux device
 -- via ubus network.interface dump -- NEVER hardcoded. This box's own eth0 is
 -- bridged into LAN rather than acting as WAN, and the cellular device index
@@ -1039,7 +1238,7 @@ function M.run_speedtest(args)
   os.execute("mkdir -p /etc/mudimodem /tmp/mudimodem 2>/dev/null")
   write_json_file(SPEEDTEST_STATUS, { running = true, phase = "starting", iface = iface })
   local quoted_bin = "'" .. SPEEDTEST_BIN:gsub("'", "'\\''") .. "'"
-  os.execute("python3 " .. quoted_bin .. " --trigger manual --iface " .. iface .. " >/dev/null 2>&1 &")
+  spawn_detached("python3 " .. quoted_bin .. " --trigger manual --iface " .. iface)
   return { started = true }
 end
 
@@ -1107,25 +1306,35 @@ end
 -- around a ubus cosocket call). The URL is a fixed constant — no RPC arg reaches
 -- the shell. Fail-silent: any network/parse failure sets error + checked=false.
 local VERSION_FILE = os.getenv("MUDIMODEM_VERSION_FILE") or "/etc/mudimodem/version.json"
-local VERSION_URL  = os.getenv("MUDIMODEM_VERSION_URL")
-  or "https://raw.githubusercontent.com/kevinherzig/MudiModem/main/version.json"
+local DEFAULT_BASE = "https://raw.githubusercontent.com/Antiman-cmyk/MudiModem/main"
 local CURL         = os.getenv("MUDIMODEM_CURL") or "curl"
 
+-- { version, base } from the file install.sh wrote. `base` is the raw-URL root
+-- the install came from (fork/branch aware); the update check follows it so a
+-- fork install is never offered upstream's version as an "update".
 local function read_version_file()
   local f = io.open(VERSION_FILE, "r")
-  if not f then return "unknown" end
+  if not f then return "unknown", DEFAULT_BASE end
   local s = f:read("*a") or ""
   f:close()
   local ok, obj = pcall(cjson.decode, s)   -- cjson.decode can't yield; pcall safe (§8)
-  if ok and type(obj) == "table" and obj.version then return tostring(obj.version) end
-  return "unknown"
+  if ok and type(obj) == "table" then
+    -- Same allowlist mudimodem-selfupdate applies (keep the two in sync): a
+    -- plain URL charset incl. ':' for a port — a dev box serving its own tree
+    -- over http://host:8000 is a legitimate base both readers must agree on.
+    local base = (type(obj.base) == "string" and obj.base:match("^https?://[%w%.%-_:/]+$")) and obj.base or DEFAULT_BASE
+    return (obj.version and tostring(obj.version)) or "unknown", base
+  end
+  return "unknown", DEFAULT_BASE
 end
 
 function M.app_version(args)
-  local out = { installed = read_version_file(), latest = nil,
+  local installed, base = read_version_file()
+  local out = { installed = installed, latest = nil, source = base,
                 update_available = false, checked = false }
-  -- Fixed URL, shell-escaped defensively even though it never contains user input.
-  local q = "'" .. VERSION_URL:gsub("'", "'\\''") .. "'"
+  local url = os.getenv("MUDIMODEM_VERSION_URL") or (base .. "/version.json")
+  -- Shell-escaped defensively; the base is validated to a plain URL charset above.
+  local q = "'" .. url:gsub("'", "'\\''") .. "'"
   local f = io.popen(CURL .. " -fsS --max-time 8 " .. q .. " 2>/dev/null")
   if not f then out.error = "curl spawn failed"; return out end
   local body = f:read("*a") or ""
@@ -1162,7 +1371,7 @@ function M.self_update(args)
   os.execute("mkdir -p /etc/mudimodem 2>/dev/null")
   -- Fresh run: clear any stale result so update_status reflects THIS attempt.
   os.remove(UPDATE_RESULT)
-  os.execute(SELFUPDATE_BIN .. " >/dev/null 2>&1 &")
+  spawn_detached(SELFUPDATE_BIN)
   return { ok = true, started = true }
 end
 
@@ -1372,111 +1581,6 @@ function M.set_battlimit(args)
     return out
   end
   return snapshot_battlimit()
-end
-
--- ---- LCD front-panel (MudiUI) --------------------------------------------
--- Toggles the mudi/mudi-watch procd services and mirrors config into uci
--- 'mudi' (section 'main') — the same store mudi.py's Settings reads. No ubus.
--- Written via the uci CLI (backend has no uci binding); config knobs also
--- SIGHUP the running renderer so brightness/timeout apply without a restart.
-
-local LCD_TIMEOUTS = { [0]=true, [30]=true, [60]=true, [300]=true,
-                       [600]=true, [1200]=true, [3600]=true }
-
-local function lcd_available()
-  -- The Mudi front panel is a 240x320 framebuffer; headless GL boxes lack it.
-  local f = io.open("/sys/class/graphics/fb0/virtual_size", "r")
-  if not f then return false end
-  local g = f:read("*l") or ""
-  f:close()
-  return g == "240,320"
-end
-
-local function uci_get(key)                     -- key like "mudi.main.brightness"
-  local f = io.popen("uci -q get " .. key .. " 2>/dev/null")
-  if not f then return nil end
-  local v = f:read("*l")
-  f:close()
-  return v
-end
-
-local function shell_ok(cmd)
-  local r = os.execute(cmd)
-  return r == 0 or r == true                    -- Lua 5.1 int vs 5.2+ boolean
-end
-
-local function lcd_running()
-  return shell_ok("pgrep -f /usr/bin/mudi.py >/dev/null 2>&1")
-end
-
-local function lcd_enabled()
-  -- procd 'enabled' == an rc.d start symlink exists for the mudi service. The
-  -- glob ends in 'mudi', so it never matches S98mudi-watch.
-  return shell_ok("ls /etc/rc.d/S*mudi >/dev/null 2>&1")
-end
-
-local function snapshot_lcd()
-  local out = { available = false, enabled = false, running = false,
-                brightness = 90, screen_timeout = 600, default_page = 0,
-                error = nil }
-  if not lcd_available() then
-    out.error = "no front panel on this device"
-    return out
-  end
-  out.available = true
-  out.enabled = lcd_enabled()
-  out.running = lcd_running()
-  out.brightness = tonumber(uci_get("mudi.main.brightness")) or 90
-  out.screen_timeout = tonumber(uci_get("mudi.main.screen_timeout")) or 600
-  out.default_page = tonumber(uci_get("mudi.main.default_page")) or 0
-  return out
-end
-
-local function uci_set_main(key, val)
-  -- ensure the section exists, set the option, commit. val is a validated
-  -- integer, so string-building it is shell-safe.
-  os.execute("uci -q get mudi.main >/dev/null 2>&1 || uci set mudi.main=settings")
-  os.execute("uci set mudi.main." .. key .. "='" .. tostring(val) .. "'; uci commit mudi")
-end
-
-function M.get_lcd(args)
-  return snapshot_lcd()
-end
-
-function M.set_lcd(args)
-  args = args or {}
-  if not lcd_available() then
-    return snapshot_lcd()
-  end
-
-  local b = tonumber(args.brightness)
-  if b and b == math.floor(b) and b >= 20 and b <= 120 then
-    uci_set_main("brightness", b)
-  end
-  local st = tonumber(args.screen_timeout)
-  if st and LCD_TIMEOUTS[st] then
-    uci_set_main("screen_timeout", st)
-  end
-  local dp = tonumber(args.default_page)
-  if dp and dp == math.floor(dp) and dp >= 0 and dp <= 3 then
-    uci_set_main("default_page", dp)
-  end
-
-  -- Nudge a running renderer to re-read uci (brightness/timeout live).
-  os.execute("pkill -HUP -f /usr/bin/mudi.py >/dev/null 2>&1")
-
-  if type(args.enabled) == "boolean" then
-    uci_set_main("start_on_boot", args.enabled and 1 or 0)
-    if args.enabled then
-      os.execute("/etc/init.d/mudi enable 2>/dev/null; /etc/init.d/mudi-watch enable 2>/dev/null")
-      os.execute("/etc/init.d/mudi-watch start 2>/dev/null; /etc/init.d/mudi start 2>/dev/null")
-    else
-      os.execute("/etc/init.d/mudi stop 2>/dev/null; /etc/init.d/mudi-watch stop 2>/dev/null")
-      os.execute("/etc/init.d/mudi disable 2>/dev/null; /etc/init.d/mudi-watch disable 2>/dev/null")
-    end
-  end
-
-  return snapshot_lcd()
 end
 
 -- ---- History eMMC backup (Config tab) ------------------------------------

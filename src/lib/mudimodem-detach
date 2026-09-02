@@ -1,0 +1,22 @@
+#!/bin/sh
+# /usr/lib/mudimodem/mudimodem-detach — run a child fully detached from nginx.
+#
+# The backend spawns long-lived helpers (the revert watchdog, a speed test,
+# the self-updater) from inside an nginx worker with os.execute("… &"). The
+# child inherits every open descriptor — including nginx's listening sockets
+# (80/443) — and would pin those ports across an nginx restart (the self-
+# updater restarts nginx while it is itself such a child). Close every fd
+# above stderr, detach from the session, then exec the real command.
+#
+# Usage: mudimodem-detach <command> [args…]   (caller appends '&')
+set -u
+fd=3
+while [ "$fd" -le 255 ]; do
+  eval "exec $fd>&-" 2>/dev/null
+  fd=$((fd + 1))
+done
+exec </dev/null >/dev/null 2>&1
+if command -v setsid >/dev/null 2>&1; then
+  exec setsid "$@"
+fi
+exec "$@"

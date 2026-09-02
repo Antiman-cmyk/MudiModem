@@ -44,10 +44,14 @@ module.exports = (function () {
   var TICKSTEP = { 15: 2, 60: 10, 360: 60, 1440: 240 };
   // The collector samples every 20 s; 3 missed samples is an outage, not jitter.
   var GAP_MS = 60000;
-  // Consecutive failed 10 s polls before we say so on the page. One dropped
-  // poll on a travel router's cellular link is normal and must not alarm;
-  // three in a row (~30 s) means the chart is stale and the user should know.
+  // Consecutive failed history fetches before we say so on the page. One
+  // dropped fetch on a travel router's cellular link is normal and must not
+  // alarm; three in a row means the chart is stale and the user should know.
+  // (Fetches only run when pushes have stalled — every 30 s after STALL_MS —
+  // so the note reports real elapsed time since the last good data, not a
+  // count multiplied by a poll interval that no longer exists.)
   var FAIL_NOTE_AFTER = 3;
+  var STALL_MS = 60000;            // no push for this long => one catch-up fetch
   // TOP is headroom for plug/unplug tick labels. Lane value/range headers live
   // in HTML above the SVG (jayck88 layout) so they are never clipped by the
   // outermost-svg overflow:hidden default or lost in preserveAspectRatio stretch.
@@ -113,15 +117,29 @@ module.exports = (function () {
         // from "we have never reached the box"; `failStreak` keeps one dropped
         // poll on a flaky cellular link from raising an alarm.
         okCount: 0, failStreak: 0,
+        lastGoodAt: 0,          // browser clock of the last successful fetch/push (stale-note arithmetic)
         // Bumped on every fetchHistory call; late replies for a superseded
         // range request are dropped so a 24 h click mid-15 m load cannot
         // repaint the short window (jayck88 requestSeq pattern).
         histRequestSeq: 0,
-        pendingWindow: null, poll: null, tick: 0, live: true,
+        pendingWindow: null, poll: null, tick: 0, live: true, pushSeenAt: 0,
         width: 900, styleId: "mmb-css-v4", cursor: null, pinnedM: null,
         // charge-limit form state (moved here from the Config tab)
         bl: null, blBusy: false, blErr: "", blDraft: 80
       };
+    },
+
+    computed: {
+      // The collector's battery pushes (mudimodem.battery) land in the SPA's
+      // status store; watching them is how this chart stays live.
+      pushedSample: function () {
+        var g = this.$store && this.$store.getters;
+        var s = g && g.moduleStatus ? g.moduleStatus("mudimodem.battery") : null;
+        return (s && s.t) ? s : null;
+      }
+    },
+    watch: {
+      "pushedSample.t": function () { this.onPush(this.pushedSample); }
     },
 
     created: function () { this.injectStyle(); },
@@ -133,9 +151,12 @@ module.exports = (function () {
       window.addEventListener("resize", this._onResize);
       this.fetchBattLimit();
       this.fetchHistory();
+      // No polling: samples arrive as pushes every 20 s. The timer is only a
+      // stall guard (collector restart / websocket reconnect).
+      this.pushSeenAt = Date.now();
       this.poll = setInterval(function () {
-        if (self.live) self.fetchHistory({ since: self.lastT, merge: true });
-      }, 10000);
+        if (self.live && Date.now() - self.pushSeenAt > STALL_MS) self.fetchHistory({ since: self.lastT, merge: true });
+      }, 30000);
     },
     updated: function () { this.measure(); },
     beforeDestroy: function () {
@@ -205,15 +226,17 @@ module.exports = (function () {
               // One dropped poll on a cellular link is weather, not news. A run
               // of them means the chart is quietly going stale, and the user
               // has to be told — without GL's global banner.
-              if (self.failStreak >= FAIL_NOTE_AFTER)
-                self.err = "Can't reach the router — battery history stopped updating "
-                  + (self.failStreak * 10) + " s ago.";
+              if (self.failStreak >= FAIL_NOTE_AFTER) {
+                var stale = self.lastGoodAt ? Math.round((Date.now() - self.lastGoodAt) / 1000) : 0;
+                self.err = "Can't reach the router — battery history stopped updating"
+                  + (stale ? " " + (stale >= 120 ? Math.round(stale / 60) + " min" : stale + " s") + " ago." : ".");
+              }
               self.loading = false;
               self.tick++;                       // re-render so the note appears
               self.drainPending();
               return;
             }
-            self.okCount++; self.failStreak = 0;
+            self.okCount++; self.failStreak = 0; self.lastGoodAt = Date.now();
             var ns = res.samples || [];
             var merged = merge && self.samples && self.samples.length
               ? self.samples.concat(ns) : ns;
@@ -242,6 +265,21 @@ module.exports = (function () {
         if (this.pendingWindow == null) return;
         var w = this.pendingWindow; this.pendingWindow = null;
         this.fetchHistory({ window: w });
+      },
+      // A live battery sample (mudimodem.battery push): append it exactly as an
+      // incremental fetch would have; a push also proves the box is reachable,
+      // so it clears the stale-history note.
+      onPush: function (s) {
+        if (!s || !s.t || s.t <= this.lastT) return;
+        this.pushSeenAt = Date.now(); this.lastGoodAt = Date.now();
+        var merged = this.samples.concat([s]);
+        var cut = s.t - 24 * 3600 * 1000;
+        if (merged.length && merged[0].t < cut) merged = merged.filter(function (x) { return x.t >= cut; });
+        this.samples = (typeof Object.freeze === "function") ? Object.freeze(merged) : merged;
+        this.lastT = s.t;
+        this.serverNow = s.t; this.serverNowAt = Date.now();
+        this.okCount++; this.failStreak = 0; this.err = "";
+        this.tick++;
       },
       setRange: function (w) {
         this.winW = w; this.pinnedM = null; this.cursor = null;

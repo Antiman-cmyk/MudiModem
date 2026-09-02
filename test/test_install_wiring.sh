@@ -4,30 +4,44 @@ set -eu
 cd "$(dirname "$0")/.."
 fail() { echo "FAIL: $1" >&2; exit 1; }
 
-# --- LCD (default off) ---
-# pillow is installed --nodeps (libfreetype clash with gl-sdk4-screen-large), so
-# the shared libs it needs must be listed explicitly. Missing libtiff6 is issue #3.
-grep -q 'libtiff6' install.sh                   || fail "install.sh must install libtiff6 (pillow --nodeps dep; issue #3)"
-grep -q 'src/lcd/mudi.py' install.sh            || fail "install.sh does not deploy mudi.py"
-grep -q 'src/lcd/mudi-watch.py' install.sh      || fail "install.sh does not deploy mudi-watch.py"
-grep -q 'src/lcd/mudi.init' install.sh          || fail "install.sh does not deploy mudi.init"
-grep -q 'src/lcd/mudi-watch.init' install.sh    || fail "install.sh does not deploy mudi-watch.init"
-grep -q 'src/lcd/mudi.config' install.sh        || fail "install.sh does not seed mudi.config"
-# default OFF: installer must NOT enable/start the mudi service
-grep -q '/etc/init.d/mudi enable' install.sh    && fail "install.sh must NOT enable mudi (default off)"
-grep -q '/etc/init.d/mudi start'  install.sh    && fail "install.sh must NOT start mudi (default off)"
-for p in /usr/bin/mudi.py /usr/bin/mudi-watch.py /etc/init.d/mudi /etc/init.d/mudi-watch; do
-  grep -q "$p" install.sh || fail "install.sh missing sysupgrade entry: $p"
-done
-grep -q '/etc/init.d/gl_screen start' uninstall.sh || fail "uninstall.sh must restore gl_screen"
-grep -q '/usr/bin/mudi.py' uninstall.sh            || fail "uninstall.sh must remove mudi.py"
-grep -qE 'rm.*etc/config/mudi' uninstall.sh        && fail "uninstall.sh must NOT delete user config /etc/config/mudi"
+# --- no LCD renderer in 2.x; python3 for the daemons is ensured explicitly ---
+grep -qE 'src/lcd|cp_install .*(mudi\.py|mudi-watch|init\.d/mudi[^m]|config/mudi)' install.sh && fail "install.sh must not ship the LCD renderer (removed in 2.0)"
+grep -q 'rm -f /usr/bin/mudi.py' install.sh      || fail "install.sh must purge a 1.x LCD renderer left on the box"
+grep -q 'python3-light' install.sh              || fail "install.sh must ensure python3-light (collector/speedtest/AT tool)"
+grep -q '/etc/init.d/gl_screen start' uninstall.sh || fail "uninstall.sh must hand the panel back if a 1.x renderer is left"
+
+# --- 4.10 shared helpers (2.0.0) ---
+grep -q 'src/lib/cellular_compat.py' install.sh   || fail "install.sh must install cellular_compat.py"
+grep -q 'src/lib/mudimodem-detach' install.sh     || fail "install.sh must install mudimodem-detach"
+grep -q 'src/ws/mudimodem.lua' install.sh         || fail "install.sh must install the ws seed module"
+grep -q '/usr/share/gl-ngx/websocket/mudimodem.lua' uninstall.sh || fail "uninstall.sh must remove the ws seed module"
+grep -q '/etc/glversion' install.sh               || fail "install.sh must enforce the 4.10 firmware floor"
+grep -q 'pkill -' src/rpc/mudimodem               && fail "backend must not use pkill (absent from 4.10 busybox)"
+# (grep -q prints nothing, so it can never feed a second grep — match, then filter.)
+if grep 'gl_modem' tools/mudimodem-at.py | grep -v poller | grep -q .; then fail "AT tool must not touch gl_modem"; fi
+grep -q 'init.d/mudi' install.sh                  || fail "install.sh must purge 1.x LCD leftovers (mudi/mudi-watch) on upgrade"
+grep -q 'set_cell_tower' src/sbin/mudimodem-revert || fail "panic must clear GL's stored cell lock per slot (sub_id-agnostic)"
+grep -q 'gl-stale\|MUDIMODEM_STALE' src/rpc/mudimodem src/sbin/mudimodem-revert && fail "gl-stale marker file was removed in 2.0.0; stale is derived live" || true
 
 # --- selfupdate + version (previous leaks) ---
 grep -q 'src/sbin/mudimodem-selfupdate' install.sh || fail "install.sh must install selfupdate"
 grep -q '/usr/sbin/mudimodem-selfupdate' uninstall.sh || fail "uninstall.sh must remove selfupdate"
 grep -q '/etc/mudimodem/version.json' install.sh      || fail "install.sh must place version.json"
+grep -q '"base":"%s"' install.sh                       || fail "install.sh must record its install source (base) in version.json"
+grep -q 'MUDIMODEM_BASE=' src/sbin/mudimodem-selfupdate || fail "self-update must pass the recorded base to install.sh"
 grep -q '/etc/mudimodem/version.json' uninstall.sh    || fail "uninstall.sh must list version.json (sysupgrade de-register)"
+
+# --- deploy.sh must register every file it pushes (parity with install.sh) ---
+# Extract both /etc/sysupgrade.conf lists (the `for p in ... ; do` blocks) and
+# require deploy.sh's to be a superset of install.sh's minus nothing.
+inst_list=$(sed -n '/registering files in \/etc\/sysupgrade.conf/,/done/p' install.sh | grep -o '^\s*/[^ \\]*' | tr -d ' \t' | sort -u)
+dep_list=$(sed -n '/f=\/etc\/sysupgrade.conf; touch/,/done/p' tools/deploy.sh | grep -o '^\s*/[^ \\]*' | tr -d ' \t' | sort -u)
+for p in $inst_list; do
+  echo "$dep_list" | grep -qxF "$p" || fail "deploy.sh sysupgrade list is missing $p (install.sh has it)"
+done
+# The firmware gate must be the numeric compare, never a glob (4.[2-9]* matches 4.8.5).
+grep -hv '^[[:space:]]*#' tools/deploy.sh tools/verify.sh | grep -q '4\.\[2-9\]' && fail "deploy/verify firmware gate must not be a glob" || true
+grep -q 'GLMIN' tools/deploy.sh && grep -q 'GLMIN' tools/verify.sh || fail "deploy/verify must use install.sh's numeric firmware compare"
 
 # --- speedtest (parity with deploy.sh) ---
 grep -q 'src/views/mudimodem-speedtest.js' install.sh || fail "install.sh must install speedtest chunk"
@@ -63,9 +77,5 @@ for p in $install_paths; do
   echo "$uninstall_paths" | grep -qxF "$p" \
     || fail "install sysupgrade path missing from uninstall FILES: $p"
 done
-
-# No accidental enable of LCD on install
-grep -E '/etc/init\.d/mudi(-watch)? (enable|start)' install.sh \
-  && fail "install must not enable/start mudi services" || true
 
 echo "install wiring OK"

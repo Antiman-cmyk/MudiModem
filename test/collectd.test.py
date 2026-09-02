@@ -1,140 +1,203 @@
 #!/usr/bin/env python3
-"""Unit tests for mudimodem-collectd's pure parts (build_sample, trim).
-Run: python3 -m unittest test.collectd.test  (or python3 test/collectd.test.py)"""
+"""Unit tests for mudimodem-collectd's pure parts (build_sample, trim, battery,
+persist). GL 4.10 shapes ONLY. Run: python3 test/collectd.test.py"""
 import importlib.util
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, "..", "src", "sbin", "mudimodem-collectd")
+sys.path.insert(0, os.path.join(HERE, "..", "src", "lib"))
+import cellular_compat as cc  # noqa: E402
 spec = importlib.util.spec_from_loader("collectd", loader=None)
 collectd = importlib.util.module_from_spec(spec)
+collectd.__dict__["__file__"] = SRC
 with open(SRC) as f:
     exec(compile(f.read(), SRC, "exec"), collectd.__dict__)
 
-# Real captured shapes (box, 2026-07-17).
-MODEM = {"modems": [{"bus": "cpu", "status": 0, "current_sim_slot": "1"}]}
-NET = {"networks": [
-    {"bus": "cpu", "slot": "1", "cell_info": {
-        "id": "D43B70D", "band": 2, "mode": "LTE FDD",
-        "rsrp": "-118", "rsrp_level": 1, "rsrq": "-16", "rsrq_level": 1,
-        "rssi": "-88", "sinr": "10", "sinr_level": 3,
-        "dl_bandwidth": "5MHz", "tx_channel": "8701"}},
-    {"bus": "cpu", "slot": "2", "cell_info": {
-        "id": "AD4B60A", "band": 2, "mode": "LTE FDD", "rsrp": "-113"}}]}
-SIMS = {"sims": [
-    {"slot": "1", "bus": "cpu", "carrier": "T-Mobile"},
-    {"slot": "2", "bus": "cpu", "carrier": "AT&T"}]}
-
-
-# Firmware 4.10 shapes from issue #5 (ChiliApple / will.qiu).
-# cellular.modem status is flat (no modems[]); signal moved to
-# cellular.network cell_info {bus,slot} → signal[], with cell_id/tac
-# on the parent, not inside signal[0].
-MODEM_410 = {
-    "bus": "cpu",
-    "current_sim_slot": 1,
-    "slot_switch_enable": True,
+# ---- GL 4.10 captured shapes -------------------------------------------------
+# cellular.modem status (no args) — GL's canonical form: modems[] (what
+# lib/functions/modem.sh, websocket/cellular.lua and internet.js all parse).
+MODEM_STATUS_410 = {"modems": [{"bus": "cpu", "current_sim_slot": 1, "slot_switch_enable": True,
+                                "status": 0}]}
+# A second (USB) modem in the list must not be picked over the built-in one.
+MODEM_STATUS_410_TWO = {"modems": [{"bus": "1-1.2", "type": 1, "current_sim_slot": 2},
+                                   {"bus": "cpu", "type": 0, "current_sim_slot": 1}]}
+# cellular.network cell_info {bus,slot} — NR-SA n78 (EU unit), single carrier.
+CELL_INFO_410_SA = {
+    "bus": "cpu", "slot": 1, "network_type": 5, "tac": "DE0000", "cell_id": "DE017C015",
+    "signal": [{"band": 78, "earfcn": 627264, "pci": 142, "bandwidth": 100,
+                "rsrp": -94, "rsrq": -10, "sinr": 12, "rssi": -32768,
+                "rsrp_level": 4, "rsrq_level": 3, "sinr_level": 3}],
+    "ret": 0, "resp": "Success",
 }
-NET_410 = {
-    "bus": "cpu",
-    "slot": 1,
-    "network_type": 51,
-    "tac": "41",
-    "cell_id": "DF30C",
-    "signal": [{
-        "band": 3,
-        "earfcn": 1700,
-        "rsrp": -97,
-        "rsrq": -9,
-        "rssi": -67,
-        "sinr": 17,
-        "rsrp_level": 4,
-        "strength": 4,
-    }],
-    "ret": 0,
-    "resp": "Success",
+# NSA: issue #5 capture (LTE anchor B3) — network_type 51.
+CELL_INFO_410_NSA = {
+    "bus": "cpu", "slot": 1, "network_type": 51, "tac": "41", "cell_id": "DF30C",
+    "signal": [{"band": 3, "earfcn": 1700, "rsrp": -97, "rsrq": -9, "rssi": -67,
+                "sinr": 17, "rsrp_level": 4, "strength": 4}],
+    "ret": 0, "resp": "Success",
 }
+# EN-DC with a NR secondary carrier (contract-derived until a real trace lands).
+CELL_INFO_410_NSA_CA = dict(CELL_INFO_410_NSA, signal=[
+    dict(CELL_INFO_410_NSA["signal"][0], ca=0),
+    {"ca": 1, "network_type": 5, "band": 78, "earfcn": 627264, "pci": 142,
+     "bandwidth": 100, "rsrp": -99, "rsrq": -11, "sinr": 8},
+])
+# No service (slot 2, no SIM registered): the sentinel payload.
+CELL_INFO_410_NO_SERVICE = {
+    "bus": "cpu", "slot": 2, "network_type": 0, "tac": "", "cell_id": "",
+    "signal": [{"band": 0, "earfcn": 0, "pci": 0, "bandwidth": 0,
+                "rsrp": -32768, "rsrq": -32768, "rssi": -32768, "sinr": -32768}],
+    "ret": 0, "resp": "Success",
+}
+# cellular.network info — carrier + identity per {bus,slot} (the ws merge source).
+NETWORK_INFO_410 = {"networks": [
+    {"bus": "cpu", "slot": 1, "carrier": "CHN-UNICOM", "iccid": "8986011", "imsi": "460011",
+     "mcc": "460", "mnc": "01", "apn": "3gnet"},
+    {"bus": "cpu", "slot": 2, "carrier": "", "iccid": ""},
+]}
 
 
 class BuildSample(unittest.TestCase):
-    def test_active_slot_cell_and_carrier(self):
-        s = collectd.build_sample(MODEM, NET, SIMS, t=1000)
-        self.assertEqual(s["slot"], "1")
-        self.assertEqual(s["id"], "D43B70D")        # active slot's cell, not slot 2
-        self.assertEqual(s["carrier"], "T-Mobile")
-        self.assertEqual(s["tx_channel"], "8701")
+    def test_sa_sample_has_pcc_aliases_and_signals(self):
+        s = collectd.build_sample(MODEM_STATUS_410, CELL_INFO_410_SA, NETWORK_INFO_410, t=1000)
+        self.assertEqual(s["slot"], 1)
+        self.assertEqual(s["id"], "DE017C015")
+        self.assertEqual(s["cell_id"], "DE017C015")
+        self.assertEqual(s["tac"], "DE0000")
+        self.assertEqual(s["carrier"], "CHN-UNICOM")
+        self.assertEqual(s["band"], 78)
+        self.assertEqual(s["mode"], "NR5G-SA")
+        self.assertEqual(s["rat"], "NR5G-SA")
+        self.assertEqual(s["network_type"], 5)
+        self.assertEqual(s["tx_channel"], 627264)
+        self.assertEqual(s["pci"], 142)
+        self.assertEqual(s["dl_bandwidth"], "100MHz")
+        self.assertEqual(s["rsrp"], -94)
+        self.assertEqual(s["rsrq"], -10)
+        self.assertEqual(s["sinr"], 12)
+        self.assertIsNone(s["rssi"], "-32768 sentinel -> null, never a number")
+        self.assertEqual(s["rsrp_level"], 4)
+        self.assertEqual(len(s["signals"]), 1)
+        self.assertEqual(s["signals"][0]["role"], "PCC")
+        self.assertEqual(s["signals"][0]["bandwidth_mhz"], 100)
+        self.assertTrue(s["registered"])
 
-    def test_metric_strings_parsed_to_numbers(self):
-        s = collectd.build_sample(MODEM, NET, SIMS, t=1000)
-        self.assertEqual(s["rsrp"], -118)           # "-118" -> int
-        self.assertEqual(s["sinr"], 10)
-        self.assertEqual(s["rsrp_level"], 1)         # level buckets preserved
+    def test_picks_the_built_in_modem_by_bus(self):
+        s = collectd.build_sample(MODEM_STATUS_410_TWO, CELL_INFO_410_SA, NETWORK_INFO_410, t=1)
+        self.assertEqual(s["slot"], 1)
 
-    def test_active_slot_2_picks_the_other_cell(self):
-        modem2 = {"modems": [{"bus": "cpu", "current_sim_slot": "2"}]}
-        s = collectd.build_sample(modem2, NET, SIMS, t=1000)
-        self.assertEqual(s["id"], "AD4B60A")
-        self.assertEqual(s["carrier"], "AT&T")
+    def test_flat_object_is_not_a_modem_list(self):
+        # No second shape: a payload without modems[] resolves no slot.
+        self.assertIsNone(collectd.build_sample({"bus": "cpu", "current_sim_slot": 1}, CELL_INFO_410_SA, NETWORK_INFO_410))
 
-    def test_unregistered_active_slot_yields_null_metrics_not_none(self):
-        net = {"networks": [{"bus": "cpu", "slot": "1"}]}   # no cell_info
-        s = collectd.build_sample(MODEM, net, SIMS, t=1000)
+    def test_nsa_decodes_51_and_keeps_rssi(self):
+        s = collectd.build_sample(MODEM_STATUS_410, CELL_INFO_410_NSA, NETWORK_INFO_410, t=1)
+        self.assertEqual(s["mode"], "NR5G-NSA")          # the CELL's RAT
+        self.assertEqual(s["band"], 3)
+        self.assertEqual(s["rssi"], -67)
+        self.assertEqual(s["id"], "DF30C")
+
+    def test_nsa_anchor_row_is_lte_not_nr(self):
+        # Issue #5 capture: cell network_type 51, signal[0] = the LTE B3 anchor
+        # (EARFCN 1700) with no per-row network_type. It must be tagged LTE —
+        # GL keys the n/B prefix off the ROW — never inherit the cell's 51
+        # (which printed "n3" and decoded 1700 on the NR raster as 8.5 MHz).
+        s = collectd.build_sample(MODEM_STATUS_410, CELL_INFO_410_NSA, NETWORK_INFO_410, t=1)
+        self.assertEqual(s["signals"][0]["rat"], "LTE")
+        self.assertEqual(s["signals"][0]["network_type"], 4)
+        self.assertEqual(s["pcc_rat"], "LTE", "flattened aliases describe the LTE anchor")
+        self.assertEqual(s["pcc_network_type"], 4)
+        self.assertEqual(s["mode"], "NR5G-NSA", "the cell is still EN-DC")
+        self.assertEqual(cc.format_band(s["pcc_rat"], s["band"]), "B3")
+        self.assertAlmostEqual(cc.channel_mhz(s["pcc_rat"], s["band"], s["tx_channel"]), 1855.0)
+
+    def test_nsa_implicit_nr_row_keeps_the_nsa_tag(self):
+        # An EN-DC secondary carrier without its own network_type: its channel
+        # is an NR-ARFCN (>> 65535), so it is the NR leg, tagged with the cell's 51.
+        net = dict(CELL_INFO_410_NSA, signal=[
+            dict(CELL_INFO_410_NSA["signal"][0], ca=0),
+            {"ca": 1, "band": 78, "earfcn": 627264, "pci": 142, "rsrp": -99, "rsrq": -11, "sinr": 8},
+        ])
+        s = collectd.build_sample(MODEM_STATUS_410, net, NETWORK_INFO_410, t=1)
+        self.assertEqual([x["rat"] for x in s["signals"]], ["LTE", "NR5G-NSA"])
+        self.assertEqual(s["signals"][1]["network_type"], 51)
+
+    def test_pci_zero_and_earfcn_zero_are_kept(self):
+        # PCI 0 (LTE 0-503) and EARFCN 0 (LTE B1, 2110.0 MHz) are valid; band 0 is not.
+        net = dict(CELL_INFO_410_SA, network_type=4, signal=[
+            {"band": 1, "earfcn": 0, "pci": 0, "bandwidth": 20, "rsrp": -90, "rsrq": -9, "sinr": 10}])
+        s = collectd.build_sample(MODEM_STATUS_410, net, NETWORK_INFO_410, t=1)
+        self.assertEqual(s["pci"], 0)
+        self.assertEqual(s["tx_channel"], 0)
+        self.assertEqual(s["band"], 1)
+        self.assertTrue(s["registered"])
+        self.assertEqual(len(s["signals"]), 1)
+
+    def test_id_comes_from_cell_info_not_signal(self):
+        net = dict(CELL_INFO_410_NSA)
+        net["signal"] = [dict(CELL_INFO_410_NSA["signal"][0], id="WRONG")]
+        s = collectd.build_sample(MODEM_STATUS_410, net, NETWORK_INFO_410, t=1)
+        self.assertEqual(s["id"], "DF30C")
+
+    def test_ca_preserves_every_carrier_with_roles(self):
+        s = collectd.build_sample(MODEM_STATUS_410, CELL_INFO_410_NSA_CA, NETWORK_INFO_410, t=1)
+        self.assertEqual([x["role"] for x in s["signals"]], ["PCC", "SCC1"])
+        self.assertEqual(s["signals"][1]["rat"], "NR5G-SA")   # per-row network_type honoured
+        self.assertEqual(s["signals"][1]["band"], 78)
+        self.assertEqual(s["band"], 3, "flattened aliases are the PCC")
+
+    def test_no_service_normalizes_to_nulls_and_empty_signals(self):
+        modem2 = {"modems": [dict(MODEM_STATUS_410["modems"][0], current_sim_slot=2)]}
+        s = collectd.build_sample(modem2, CELL_INFO_410_NO_SERVICE, NETWORK_INFO_410, t=1)
         self.assertIsNotNone(s, "still a sample (gap), not dropped")
+        self.assertEqual(s["slot"], 2)
+        self.assertFalse(s["registered"])
+        self.assertIsNone(s["mode"])
+        self.assertIsNone(s["network_type"])
+        self.assertIsNone(s["id"])
+        self.assertIsNone(s["band"])
+        self.assertIsNone(s["tx_channel"])
         self.assertIsNone(s["rsrp"])
-        self.assertEqual(s["slot"], "1")
+        self.assertEqual(s["signals"], [])
+
+    def test_empty_signal_is_a_gap_sample(self):
+        net = dict(CELL_INFO_410_SA, signal=[], cell_id=None)
+        s = collectd.build_sample(MODEM_STATUS_410, net, NETWORK_INFO_410, t=1)
+        self.assertIsNotNone(s)
+        self.assertIsNone(s["rsrp"])
+        self.assertEqual(s["slot"], 1)
 
     def test_no_active_slot_returns_none(self):
-        self.assertIsNone(collectd.build_sample({"modems": [{}]}, NET, SIMS))
-        self.assertIsNone(collectd.build_sample({}, NET, SIMS))
+        self.assertIsNone(collectd.build_sample({"modems": [{"bus": "cpu"}]}, CELL_INFO_410_SA, NETWORK_INFO_410))
+        self.assertIsNone(collectd.build_sample({}, CELL_INFO_410_SA, NETWORK_INFO_410))
+        self.assertIsNone(collectd.build_sample(None, CELL_INFO_410_SA, NETWORK_INFO_410))
 
-    def test_firmware_410_flat_modem_and_cell_info_signal(self):
-        # Issue #5: 4.10 drops the modems[] wrapper and moves metrics into
-        # cell_info.signal[0]. cell_id lives on the parent, not the signal
-        # entry. earfcn is the 4.10 name for tx_channel. mode falls back to
-        # the parent network_type.
-        s = collectd.build_sample(MODEM_410, NET_410, SIMS, t=1000)
-        self.assertIsNotNone(s, "flat modem must still resolve the active slot")
-        self.assertEqual(int(s["slot"]), 1)
-        self.assertEqual(s["id"], "DF30C")
-        self.assertEqual(s["carrier"], "T-Mobile")
-        self.assertEqual(s["band"], 3)
-        self.assertEqual(s["rsrp"], -97)
-        self.assertEqual(s["sinr"], 17)
-        self.assertEqual(s["rsrq"], -9)
-        self.assertEqual(s["rssi"], -67)
-        self.assertEqual(s["rsrp_level"], 4)
-        self.assertEqual(s["tx_channel"], 1700)
-        self.assertEqual(str(s["mode"]), "51")
+    def test_network_type_enum_matches_gl_and_the_captures(self):
+        cc = collectd.cc
+        self.assertEqual([cc.NETWORK_TYPE[k] for k in (1, 2, 3, 4, 41, 5, 51, 6)],
+                         ["GSM", "2G", "3G", "LTE", "LTE+", "NR5G-SA", "NR5G-NSA", "EVDO"])
+        self.assertIsNone(cc.NETWORK_TYPE[0])
 
-    def test_firmware_410_id_comes_from_cell_info_not_signal(self):
-        # Follow-up on #5: a consumer that takes id from signal[0] gets null
-        # (or, if signal happens to carry an id, the wrong one).
-        net = dict(NET_410)
-        net["signal"] = [dict(NET_410["signal"][0], id="WRONG")]
-        s = collectd.build_sample(MODEM_410, net, SIMS, t=1000)
-        self.assertEqual(s["id"], "DF30C")
+    def test_unknown_network_type_is_labelled_not_invented(self):
+        net = dict(CELL_INFO_410_SA, network_type=7)
+        s = collectd.build_sample(MODEM_STATUS_410, net, NETWORK_INFO_410, t=1)
+        self.assertEqual(s["mode"], "type 7")
+        self.assertEqual(s["network_type"], 7)
 
-    def test_firmware_410_empty_signal_is_a_gap_sample(self):
-        net = dict(NET_410, signal=[], cell_id=None)
-        s = collectd.build_sample(MODEM_410, net, SIMS, t=1000)
-        self.assertIsNotNone(s, "still a sample (gap), not dropped")
-        self.assertIsNone(s["rsrp"])
-        self.assertEqual(int(s["slot"]), 1)
-
-    def test_flat_modem_still_reads_legacy_networks(self):
-        # 4.10-flat modem + 4.8 networks[] (cell_info method missing → fallback).
-        s = collectd.build_sample(MODEM_410, NET, SIMS, t=1000)
-        self.assertEqual(s["id"], "D43B70D")
-        self.assertEqual(s["rsrp"], -118)
-        self.assertEqual(s["mode"], "LTE FDD")
+    def test_sample_is_stamped_with_box_clock_when_t_omitted(self):
+        s = collectd.build_sample(MODEM_STATUS_410, CELL_INFO_410_SA, NETWORK_INFO_410)
+        self.assertIsInstance(s["t"], int)
+        self.assertGreater(s["t"], 1_600_000_000_000)
 
 
 class UbusCall(unittest.TestCase):
-    def test_passes_optional_json_arg(self):
+    def test_passes_json_arg(self):
         seen = {}
 
         def fake_run(cmd, **_kw):
@@ -148,84 +211,130 @@ class UbusCall(unittest.TestCase):
         old = collectd.subprocess.run
         collectd.subprocess.run = fake_run
         try:
-            r = collectd.ubus_call("cellular.network", "cell_info",
-                                   {"bus": "cpu", "slot": 1})
+            r = collectd.ubus_call("cellular.network", "cell_info", {"bus": "cpu", "slot": 1})
         finally:
             collectd.subprocess.run = old
         self.assertEqual(r, {"ok": 1})
-        self.assertEqual(seen["cmd"][:4],
-                         ["ubus", "call", "cellular.network", "cell_info"])
+        self.assertEqual(seen["cmd"][:4], ["ubus", "call", "cellular.network", "cell_info"])
         self.assertEqual(json.loads(seen["cmd"][4]), {"bus": "cpu", "slot": 1})
 
-    def test_omitted_args_still_sends_empty_object(self):
+
+class CollectSample(unittest.TestCase):
+    def _run(self, table, calls):
+        def fake(obj, method, args=None):
+            calls.append((obj, method, args))
+            return table.get((obj, method))
+        old = collectd.ubus_call
+        collectd.ubus_call = fake
+        collectd._carrier = collectd.CarrierCache()
+        try:
+            return collectd.collect_sample()
+        finally:
+            collectd.ubus_call = old
+
+    def test_one_cell_info_per_tick_no_arg_status(self):
+        calls = []
+        s = self._run({("cellular.modem", "status"): MODEM_STATUS_410,
+                       ("cellular.network", "cell_info"): CELL_INFO_410_SA,
+                       ("cellular.network", "info"): NETWORK_INFO_410}, calls)
+        self.assertEqual(s["id"], "DE017C015")
+        self.assertEqual(s["carrier"], "CHN-UNICOM")
+        st = [c for c in calls if c[1] == "status"]
+        self.assertIn(st[0][2], (None, {}), "status is GL's no-arg form")
+        cell = [c for c in calls if c[1] == "cell_info"]
+        self.assertEqual(len(cell), 1, "exactly one AT-backed cell_info per tick")
+        self.assertEqual(cell[0][2], {"bus": "cpu", "slot": 1})
+        self.assertFalse(any(c[0] == "cellular.sim" for c in calls), "no sim status read")
+
+    def test_carrier_is_cached_across_ticks(self):
+        calls = []
+        table = {("cellular.modem", "status"): MODEM_STATUS_410,
+                 ("cellular.network", "cell_info"): CELL_INFO_410_SA,
+                 ("cellular.network", "info"): NETWORK_INFO_410}
+        self._run(table, calls)
+        # second tick, same cache object
+        def fake(obj, method, args=None):
+            calls.append((obj, method, args))
+            return table.get((obj, method))
+        old = collectd.ubus_call
+        collectd.ubus_call = fake
+        try:
+            collectd.collect_sample()
+        finally:
+            collectd.ubus_call = old
+        self.assertEqual(len([c for c in calls if c[1] == "info"]), 1, "info read once, then cached")
+        self.assertEqual(len([c for c in calls if c[1] == "cell_info"]), 2)
+
+    def test_no_active_slot_skips_cell_info(self):
+        calls = []
+        s = self._run({("cellular.modem", "status"): {"modems": [{"bus": "cpu"}]}}, calls)
+        self.assertIsNone(s)
+        self.assertFalse(any(c[1] == "cell_info" for c in calls))
+
+
+class WsPublish(unittest.TestCase):
+    def _capture(self, name, payload):
         seen = {}
+        old_run = collectd.subprocess.run
 
         def fake_run(cmd, **_kw):
             seen["cmd"] = cmd
 
             class R:
                 returncode = 0
-                stdout = '{}'
+                stdout = ""
             return R()
-
-        old = collectd.subprocess.run
         collectd.subprocess.run = fake_run
         try:
-            collectd.ubus_call("cellular.modem", "status")
+            ok = collectd.ws_publish(name, payload)
         finally:
-            collectd.subprocess.run = old
-        self.assertEqual(json.loads(seen["cmd"][4]), {})
+            collectd.subprocess.run = old_run
+        return ok, seen["cmd"]
 
+    def test_notifies_gl_session_unconditionally(self):
+        ok, cmd = self._capture(collectd.WS_NAME, {"t": 1, "rsrp": -94})
+        self.assertTrue(ok)
+        self.assertEqual(cmd[:4], ["ubus", "call", "gl-session", "notify"])
+        msg = json.loads(cmd[4])
+        self.assertEqual(msg["name"], "mudimodem.collect")
+        self.assertEqual(msg["data"]["rsrp"], -94)
 
-class CollectSample(unittest.TestCase):
-    def _swap(self, fake):
-        old = collectd.ubus_call
-        collectd.ubus_call = fake
-        return old
+    def test_nonzero_exit_is_a_logged_failure(self):
+        # gl-session's notify returns 0 even with no browser attached, so a
+        # non-zero rc is always a fault: report False AND say so on stderr
+        # (procd forwards it to logd) — never a silent True.
+        import io
+        old_run, old_err = collectd.subprocess.run, sys.stderr
+        collectd._ws_fail["n"] = 0
 
-    def test_prefers_cell_info_when_firmware_has_it(self):
-        calls = []
-
-        def fake(obj, method, args=None):
-            calls.append((obj, method, args))
-            table = {
-                ("cellular.modem", "status"): MODEM_410,
-                ("cellular.network", "cell_info"): NET_410,
-                ("cellular.sim", "status"): SIMS,
-            }
-            return table.get((obj, method))
-
-        old = self._swap(fake)
+        def failing_run(cmd, **_kw):
+            class R:
+                returncode = 4
+                stdout = ""
+                stderr = "Command failed: Not found"
+            return R()
+        collectd.subprocess.run = failing_run
+        sys.stderr = io.StringIO()
         try:
-            s = collectd.collect_sample()
+            ok = collectd.ws_publish(collectd.WS_NAME, {"t": 1})
+            logged = sys.stderr.getvalue()
         finally:
-            collectd.ubus_call = old
-        self.assertEqual(s["id"], "DF30C")
-        self.assertEqual(s["rsrp"], -97)
-        cell_calls = [c for c in calls if c[1] == "cell_info"]
-        self.assertEqual(len(cell_calls), 1)
-        self.assertEqual(cell_calls[0][2]["bus"], "cpu")
-        self.assertEqual(int(cell_calls[0][2]["slot"]), 1)
-        self.assertFalse(any(c[1] == "info" for c in calls),
-                         "must not fall back when cell_info worked")
+            collectd.subprocess.run, sys.stderr = old_run, old_err
+        self.assertFalse(ok)
+        self.assertIn("gl-session notify failed", logged)
+        self.assertIn("Not found", logged)
+        self.assertEqual(collectd._ws_fail["n"], 1)
+        collectd._ws_fail["n"] = 0
 
-    def test_falls_back_to_network_info_when_cell_info_missing(self):
-        def fake(obj, method, args=None):
-            table = {
-                ("cellular.modem", "status"): MODEM,
-                ("cellular.network", "cell_info"): None,   # 4.8: no such method
-                ("cellular.network", "info"): NET,
-                ("cellular.sim", "status"): SIMS,
-            }
-            return table.get((obj, method))
+    def test_battery_frames_use_their_own_name(self):
+        _, cmd = self._capture(collectd.WS_BATT_NAME, {"t": 1, "cap": 80})
+        self.assertEqual(json.loads(cmd[4])["name"], "mudimodem.battery")
 
-        old = self._swap(fake)
-        try:
-            s = collectd.collect_sample()
-        finally:
-            collectd.ubus_call = old
-        self.assertEqual(s["id"], "D43B70D")
-        self.assertEqual(s["rsrp"], -118)
+    def test_push_names_are_subscribed_by_the_menu(self):
+        with open(os.path.join(HERE, "..", "src", "menu", "mudimodem.json")) as f:
+            socks = json.load(f)["global_sockets"]
+        for n in (collectd.WS_NAME, collectd.WS_BATT_NAME, "mudimodem.event"):
+            self.assertIn(n, socks)
 
 
 class Trim(unittest.TestCase):

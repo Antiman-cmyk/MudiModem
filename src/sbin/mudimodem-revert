@@ -1,31 +1,46 @@
 #!/bin/sh
 # /usr/sbin/mudimodem-revert — MudiModem confirm-or-revert watchdog + panic restore.
 #
-# WHY this exists (CLAUDE.md §5): band lock persists in modem NV and a bad lock
-# can drop the cellular link you are administering over. So every band write is
-# confirm-or-revert. nginx runs 4 workers with no shared state, so a timer there
-# is unreliable — instead set_bands launches THIS as a detached process.
+# WHY this exists (CLAUDE.md §5): band/cell locks persist in modem NV and a bad
+# one can drop the cellular link you are administering over. So every write is
+# confirm-or-revert. nginx runs several workers with no shared state, so a
+# timer there is unreliable — set_bands/set_cell_lock launch THIS, detached.
+#
+# GL 4.10: band config is written and restored through GL's own per-slot API
+# (`modem.set_band_config`, reached from a shell via the local root test path
+# `ubus call gl-session call {module,func,params}` — no web session needed).
+# Because that is GL's config store, a restored/kept value is what
+# cellular_manager re-applies on restart — durable by construction.
 #
 # Modes:
-#   watch              sleep the revert window, then restore the previous band
-#                      config UNLESS mudimodem.confirm removed the pending file.
-#   boot-check         run from init at boot; if a pending revert survived a
-#                      reboot (file still present), restore now — the NV lock
-#                      would otherwise outlive the (dead) watchdog.
-#   panic [sub_id]     immediate restore to the known-good full band lists,
-#                      clear cell locks, and reset save_ctrl + mode_pref to
-#                      AUTO. ssh-callable when the web UI is down:
+#   watch              sleep the revert window, then restore the previous config
+#                      UNLESS mudimodem.confirm removed the pending file.
+#   boot-check         run at boot; a pending revert that survived a reboot
+#                      (file still present) is restored now.
+#   restore-now        synchronous restore for the page's "Revert now" (the
+#                      backend's revert_now runs it): the SAME restore the
+#                      watchdog performs at window end, then stands the
+#                      sleeping watchdog down. Prints one JSON line.
+#   panic [slot]       immediate open state: band filtering OFF + mode AUTO on
+#                      the given slot (default: both slots), cell locks cleared
+#                      in GL's store (per slot) AND in the modem (AT, at
+#                      MUDIMODEM_SUB_ID), save_ctrl + nr5g_disable_mode reset.
+#                      ssh-callable when the web UI is down:
 #                        ssh root@mudi /usr/sbin/mudimodem-revert panic
 #
-# Safety:
-#   - State lives in /etc (survives reboot), never /tmp.
-#   - Band writes hit NV immediately (no commit step), so revert = write the
-#     previous list back.
-#   - Env overrides for testing (the isolation tests set all three):
-#       MUDIMODEM_DRY=1        log intended AT writes instead of running them
-#       MUDIMODEM_WINDOW=<s>   revert window (default 60)
-#       MUDIMODEM_PENDING=<f>  pending-state path (default /etc/mudimodem/pending)
-#       MUDIMODEM_LOG=<f>      log path
+# Pending file (key=value, sourced by sh):
+#   KIND=bands  SLOT=<n>  SUB_ID=<n>  PREV_BAND_CONFIG='<json: get_band_config snapshot>'
+#   KIND=cell   SLOT=<n>  SUB_ID=<n>  RAT=4g|5g  PREV_SAVE_CTRL=  PREV_mode_pref=  PREV_nr5g_disable_mode=
+#
+# Env overrides:
+#   MUDIMODEM_SUB_ID=<n>   sub_id for panic's AT clears (default 1 — the T-Mobile/
+#                          slot-1 subscription on the reference box; sub_id 0 is
+#                          unstable, see CLAUDE.md §6). The per-slot GL unlock
+#                          panic also issues needs no sub_id.
+#   (testing) MUDIMODEM_DRY=1  log intended writes instead of running them
+#   MUDIMODEM_WINDOW=<s>   revert window (default 60)
+#   MUDIMODEM_PENDING=<f>  pending-state path (default /etc/mudimodem/pending)
+#   MUDIMODEM_LOG=<f>      log path
 
 set -u
 PENDING="${MUDIMODEM_PENDING:-/etc/mudimodem/pending}"
@@ -34,25 +49,24 @@ LOG="${MUDIMODEM_LOG:-/var/log/mudimodem-revert.log}"
 WINDOW="${MUDIMODEM_WINDOW:-60}"
 DRY="${MUDIMODEM_DRY:-0}"
 HIST_DIR="${MUDIMODEM_HIST:-/tmp/mudimodem}"
-STALE="${MUDIMODEM_STALE:-/etc/mudimodem/gl-stale}"
+BUS="${MUDIMODEM_BUS:-cpu}"
 
 # Append a "dog" event to the Tracking telemetry log when we auto-revert, so the
-# timeline shows the watchdog firing even with no browser open (spec §4.1).
+# timeline shows the watchdog firing even with no browser open.
 append_event() {  # $1=kind $2=label $3=detail
   mkdir -p "$HIST_DIR" 2>/dev/null
   ts=$(( $(date +%s) * 1000 ))
-  printf '{"t":%s,"kind":"%s","label":"%s","detail":"%s"}\n' "$ts" "$1" "$2" "$3" \
-    >> "$HIST_DIR/events.jsonl" 2>/dev/null
+  ev=$(printf '{"t":%s,"kind":"%s","label":"%s","detail":"%s"}' "$ts" "$1" "$2" "$3")
+  echo "$ev" >> "$HIST_DIR/events.jsonl" 2>/dev/null
+  # Push it to any open page over GL's ws bus (no-op without a browser).
+  [ "$DRY" = "1" ] || ubus call gl-session notify "{\"name\":\"mudimodem.event\",\"data\":$ev}" >/dev/null 2>&1
 }
-
-# Known-good = the full module-supported SA set (CLAUDE.md §5). Not a curated
-# safe subset — simply everything the module supports.
-KG_SA="2:5:7:12:13:14:25:26:29:30:38:41:48:66:70:71:77:78"
 
 log() { echo "$(date '+%F %T') [$$] $*" >> "$LOG" 2>/dev/null; }
 
-# Run one AT command. Inner quotes are JSON-escaped (CLAUDE.md §8), else ubus
-# silently returns empty/ERROR.
+# Run one AT command via GL's ubus bridge (needs an explicit sub_id). Inner
+# quotes are JSON-escaped, else ubus silently returns empty/ERROR. Returns the
+# ubus exit status: non-zero = the command never reached the modem.
 at() {  # $1 = AT command, $2 = sub_id
   esc=$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')
   json=$(printf '{"cmd":"%s","timeout":10,"sub_id":%s}' "$esc" "$2")
@@ -63,47 +77,125 @@ at() {  # $1 = AT command, $2 = sub_id
   ubus call modem.CPU.AT get_result_AT "$json" >> "$LOG" 2>&1
 }
 
-set_band() {  # $1 = param (e.g. nr5g_band), $2 = colon list, $3 = sub_id
-  [ -n "$2" ] || return 0
-  log "restore $1 -> $2 (sub_id $3)"
-  at "AT+QNWPREFCFG=\"$1\",$2" "$3"
+# Did gl-session's reply carry a TOP-LEVEL "error"? gl-ngx-session.lua replies
+# {error = resp.error, result = resp.result} — the JSON-RPC envelope /rpc
+# produced (oui-rpc.lua) — so a refusal (non-zero glc code, arg validator, ACL,
+# unknown method) is always a top-level error object and a success is
+# {result: …} with no such key. A substring match on the whole body would also
+# fire on an "error" field INSIDE a successful result, so parse instead:
+# jsonfilter (libubox; shipped in the 4.10 image at /usr/bin/jsonfilter) when
+# present, else match the key only at the envelope's top level, which the ubus
+# CLI pretty-prints with exactly one tab of indentation.
+reply_is_error() {  # $1 = reply body
+  if command -v jsonfilter >/dev/null 2>&1; then
+    [ -n "$(printf '%s' "$1" | jsonfilter -e '@.error' 2>/dev/null)" ]
+  else
+    printf '%s' "$1" | grep -q '^[[:space:]]"error"[[:space:]]*:'
+  fi
 }
 
+# Call one of GL's web RPC methods as root (gl-session call -> /rpc with the
+# local glinet bypass -> modem.so). $1 = func, $2 = params JSON. The reply
+# body is left in $GLC_OUT for callers that need a value back.
+GLC_OUT=""
+glc() {
+  json=$(printf '{"module":"modem","func":"%s","params":%s}' "$1" "$2")
+  GLC_OUT=""
+  if [ "$DRY" = "1" ]; then
+    log "DRY glc: $json"
+    return 0
+  fi
+  out=$(ubus -t 20 call gl-session call "$json" 2>&1)
+  rc=$?
+  GLC_OUT="$out"
+  echo "$out" >> "$LOG" 2>/dev/null
+  [ "$rc" -eq 0 ] || return 1
+  reply_is_error "$out" && return 1
+  return 0
+}
+
+# Clear GL's stored cell lock for one slot — the shell twin of the backend's
+# gl_unlock(): the stored tower fields ride along with lock=false so modem.so
+# sees the record it wrote. Fields come from get_cell_tower through jsonfilter
+# (shipped in the 4.10 image); without it, or with nothing stored, the minimal
+# {bus, slot, lock:false} goes out. Our keys are LAST: json-c keeps the last
+# duplicate, so bus/slot/lock can never be overridden by a stored field.
+gl_unlock_slot() {  # $1 = slot
+  extra=""
+  if command -v jsonfilter >/dev/null 2>&1 && glc get_cell_tower "{\"bus\":\"$BUS\"}"; then
+    tw=$(printf '%s' "$GLC_OUT" | jsonfilter -e "@.result.slot$1" 2>/dev/null | tr -d '\n')
+    case "$tw" in
+      \{*\}) extra=${tw#\{}; extra=${extra%\}}
+              case "$extra" in *\"*) ;; *) extra="" ;; esac ;;   # "{ }" -> nothing
+    esac
+  fi
+  glc set_cell_tower "{${extra:+$extra,}\"bus\":\"$BUS\",\"slot\":$1,\"lock\":false}"
+}
+
+# Write a band config through GL. $1 = params JSON (bus/slot/band_enable/...).
+set_band_config() {
+  log "set_band_config $1"
+  glc set_band_config "$1"
+}
+
+# Restore whatever the pending file describes. Returns 0 when the previous
+# state was written back (pending cleared), 1 when NOTHING could be written —
+# then the pending file is KEPT, so boot-check / Revert now can retry and the
+# page keeps offering Revert instead of believing the safety net fired.
 restore_from_pending() {
   if [ ! -f "$PENDING" ]; then log "no pending file; nothing to restore"; return 0; fi
-  KIND=""; SUB_ID=1; RAT=""; PREV_SAVE_CTRL=""; PREV_mode_pref=""; PREV_nr5g_disable_mode=""
-  PREV_nr5g_band=""; PREV_nsa_nr5g_band=""; PREV_lte_band=""
+  KIND=""; SUB_ID=1; SLOT=""; RAT=""; PREV_SAVE_CTRL=""; PREV_mode_pref=""; PREV_nr5g_disable_mode=""
+  PREV_BAND_CONFIG=""
   # shellcheck disable=SC1090
   . "$PENDING"
+  RESTORED=0
   if [ "$KIND" = "cell" ]; then
-    # Cell lock: raw-AT unlock saves the LINK now; GL's store is reconciled by
-    # the backend once the page can reach it again (the stale marker drives that).
+    # Cell lock: raw-AT unlock frees the LINK now; GL's store is reconciled by
+    # the backend once the page can reach it again (get_lock derives `stale`
+    # from GL-locked + modem-unlocked and offers "Clear it").
     log "cell revert: unlock common/${RAT:-5g} (sub_id ${SUB_ID:-1})"
-    at "AT+QNWLOCK=\"common/${RAT:-5g}\",0" "${SUB_ID:-1}"
-    [ -n "$PREV_SAVE_CTRL" ]        && at "AT+QNWLOCK=\"save_ctrl\",$PREV_SAVE_CTRL" "${SUB_ID:-1}"
-    [ -n "$PREV_mode_pref" ]        && at "AT+QNWPREFCFG=\"mode_pref\",$PREV_mode_pref" "${SUB_ID:-1}"
-    [ -n "$PREV_nr5g_disable_mode" ] && at "AT+QNWPREFCFG=\"nr5g_disable_mode\",$PREV_nr5g_disable_mode" "${SUB_ID:-1}"
-    : > "$STALE" 2>/dev/null
+    if at "AT+QNWLOCK=\"common/${RAT:-5g}\",0" "${SUB_ID:-1}"; then
+      RESTORED=1
+    else
+      log "cell revert: the unlock command did not reach the modem (ubus/modem_AT down)"
+    fi
+    [ -n "$PREV_SAVE_CTRL" ]        && { at "AT+QNWLOCK=\"save_ctrl\",$PREV_SAVE_CTRL" "${SUB_ID:-1}" || log "cell revert: save_ctrl restore failed"; }
+    [ -n "$PREV_mode_pref" ]        && { at "AT+QNWPREFCFG=\"mode_pref\",$PREV_mode_pref" "${SUB_ID:-1}" || log "cell revert: mode_pref restore failed"; }
+    [ -n "$PREV_nr5g_disable_mode" ] && { at "AT+QNWPREFCFG=\"nr5g_disable_mode\",$PREV_nr5g_disable_mode" "${SUB_ID:-1}" || log "cell revert: nr5g_disable_mode restore failed"; }
+  elif [ -n "$PREV_BAND_CONFIG" ]; then
+    if set_band_config "$PREV_BAND_CONFIG"; then
+      RESTORED=1
+    else
+      # GL refused the snapshot: fall back to an OPEN state on that slot so the
+      # link is never left on a bad filter. Both writes ride the same transport
+      # (gl-session -> nginx /rpc -> glc), so an nginx restart or a dead
+      # gl-session fails them together — that is the case RESTORED=0 covers.
+      log "snapshot restore failed; falling back to open state on slot ${SLOT:-1}"
+      if set_band_config "{\"bus\":\"$BUS\",\"slot\":${SLOT:-1},\"band_enable\":false,\"network_mode\":\"AUTO\"}"; then
+        RESTORED=1
+      fi
+    fi
   else
-    [ -n "${PREV_nr5g_band:-}" ]     && set_band "nr5g_band"     "$PREV_nr5g_band"     "${SUB_ID:-1}"
-    [ -n "${PREV_nsa_nr5g_band:-}" ] && set_band "nsa_nr5g_band" "$PREV_nsa_nr5g_band" "${SUB_ID:-1}"
-    [ -n "${PREV_lte_band:-}" ]      && set_band "lte_band"      "$PREV_lte_band"      "${SUB_ID:-1}"
-    [ -n "${PREV_mode_pref:-}" ]     && { log "restore mode_pref -> $PREV_mode_pref"; at "AT+QNWPREFCFG=\"mode_pref\",$PREV_mode_pref" "${SUB_ID:-1}"; }
+    log "pending has no PREV_BAND_CONFIG; nothing to restore"
+    RESTORED=1     # nothing restorable: an unusable file must not pin the UI forever
+  fi
+  if [ "$RESTORED" != "1" ]; then
+    log "restore FAILED: nothing was written back; pending KEPT for boot-check / Revert now / panic"
+    return 1
   fi
   rm -f "$PENDING"
   log "revert complete; pending cleared"
+  return 0
 }
 
 case "${1:-}" in
   watch)
-    # Ownership nonce (Finding I1): stamp the arm marker with THIS process's
-    # pid and act only while the marker still holds it. Without this, a prior
-    # watchdog that is still sleeping when a NEW experiment starts would wake,
-    # see the new PENDING, and revert it prematurely. A new experiment does
-    # `os.remove(ARMED)` then launches a new watchdog which stamps its own
-    # nonce, so the old watchdog's nonce no longer matches and it stands down.
-    # Drop the marker BEFORE sleeping so set_bands/set_cell_lock can confirm
-    # the safety net is live before writing the (potentially link-dropping) change.
+    # Ownership nonce: stamp the arm marker with THIS process's pid and act
+    # only while the marker still holds it. A newer experiment does
+    # `os.remove(ARMED)` then launches its own watchdog (new nonce), so a
+    # still-sleeping older watchdog stands down instead of reverting the new
+    # change prematurely. Drop the marker BEFORE sleeping so the backend can
+    # confirm the safety net is live before writing the change.
     MYNONCE=$$
     echo "$MYNONCE" > "$ARMED" 2>/dev/null
     log "watch armed (nonce $MYNONCE); window ${WINDOW}s; pending=$PENDING"
@@ -114,38 +206,65 @@ case "${1:-}" in
       log "superseded by a newer watchdog (arm no longer ours); no revert"
     else
       log "window elapsed, still pending and arm is ours -> reverting"
-      restore_from_pending
-      append_event "dog" "Auto-revert fired" "No confirm in ${WINDOW}s — previous config restored"
+      if restore_from_pending; then
+        append_event "dog" "Auto-revert fired" "No confirm in ${WINDOW}s — previous config restored"
+      else
+        append_event "dog" "Auto-revert FAILED" "No confirm in ${WINDOW}s and the restore was refused — change still pending; use Revert now or the ssh panic restore"
+      fi
     fi
-    # Clear the marker only if it is still ours (don't stomp a newer watchdog).
     [ "$(cat "$ARMED" 2>/dev/null)" = "$MYNONCE" ] && rm -f "$ARMED"
     ;;
   boot-check)
     if [ -f "$PENDING" ]; then
       log "boot-check: stale pending found -> reverting"
-      restore_from_pending
+      restore_from_pending || log "boot-check: restore failed; pending kept"
     else
       log "boot-check: nothing pending"
     fi
     ;;
+  restore-now)
+    if [ ! -f "$PENDING" ]; then echo '{"ok":true,"nothing_pending":true}'; exit 0; fi
+    KIND_NOW=$(sed -n 's/^KIND=//p' "$PENDING" 2>/dev/null | head -n1)
+    KIND_NOW="${KIND_NOW:-bands}"
+    log "restore-now ($KIND_NOW) requested by the backend"
+    if restore_from_pending; then
+      # PENDING is gone; drop the arm marker too so the sleeping watchdog wakes
+      # to "confirmed within window" and exits without touching anything.
+      rm -f "$ARMED"
+      if [ "$KIND_NOW" = "cell" ]; then append_event "user" "Reverted" "Cell lock removed"
+      else append_event "user" "Reverted" "Restored previous bands"; fi
+      printf '{"ok":true,"kind":"%s"}\n' "$KIND_NOW"
+    else
+      printf '{"ok":false,"kind":"%s","error":"nothing could be written back; pending kept, watchdog still armed"}\n' "$KIND_NOW"
+      exit 1
+    fi
+    ;;
   panic)
-    SUB="${2:-1}"
-    log "PANIC restore -> known-good SA (sub_id $SUB)"
-    set_band "nr5g_band" "$KG_SA" "$SUB"
-    # Clear cell locks and reset the prefs a lock can leave behind, so panic
-    # returns the modem to a fully open, auto-selecting state.
+    SUB="${MUDIMODEM_SUB_ID:-1}"
+    SLOTS="${2:-1 2}"
+    log "PANIC restore -> open band config (slots $SLOTS), locks cleared (sub_id $SUB)"
+    for s in $SLOTS; do
+      set_band_config "{\"bus\":\"$BUS\",\"slot\":$s,\"band_enable\":false,\"network_mode\":\"AUTO\"}" \
+        || log "panic: set_band_config failed on slot $s"
+      # GL's own slot-addressed unlock — the same call the backend's Unlock
+      # button makes (stored tower fields + lock:false). It needs no sub_id, so
+      # it clears the lock in GL's store for THIS slot whichever subscription
+      # the AT clears below happen to reach; without it cellular_manager would
+      # re-apply the stored lock on its next restart.
+      gl_unlock_slot "$s" || log "panic: set_cell_tower unlock failed on slot $s"
+    done
+    # Clear cell locks in the modem and reset the prefs a lock can leave
+    # behind, so panic returns the modem to a fully open, auto-selecting state.
     at 'AT+QNWLOCK="common/4g",0' "$SUB"
     at 'AT+QNWLOCK="common/5g",0' "$SUB"
     at 'AT+QNWLOCK="save_ctrl",0,0' "$SUB"
     at 'AT+QNWPREFCFG="mode_pref",AUTO' "$SUB"
-    # A 4G lock forces nr5g_disable_mode=1; clear it (Finding M1) so panic
-    # actually returns to a fully open, NR5G-capable state rather than 4G-only.
     at 'AT+QNWPREFCFG="nr5g_disable_mode",0' "$SUB"
     rm -f "$PENDING"
     log "panic complete"
     ;;
   *)
-    echo "usage: $0 {watch|boot-check|panic [sub_id]}" >&2
+    echo "usage: $0 {watch|boot-check|restore-now|panic [slot]}" >&2
     exit 1
     ;;
 esac

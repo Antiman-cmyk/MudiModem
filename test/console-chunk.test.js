@@ -85,17 +85,16 @@ test('renders without store or library (honest empty states, no throw)', () => {
   assert.match(txt, /at_mdm0/, 'truth line names the channel even with no store');
 });
 
-test('truth line shows the ACTIVE SIM from the websocket store', () => {
+test('truth line shows the ACTIVE SIM handed down by the parent (props, no socket reads)', () => {
   const c = loadChunk();
-  const vm = makeVm(c, {
-    'cellular.modems_status': { modems: [{ bus: 'cpu', current_sim_slot: '1' }] },
-    'cellular.sims_status': { sims: [{ slot: '1', carrier: 'T-Mobile', status: 6 },
-                                     { slot: '2', carrier: 'AT&T', status: 6 }] }
-  });
+  assert.ok(c.props && c.props.cell, 'declares the cell prop');
+  const vm = makeVm(c, {});
+  vm.cell = { slot: 1, carrier: 'T-Mobile' };
   const txt = textOf(c.render.call(vm, h));
   assert.match(txt, /T-Mobile/, 'active carrier');
   assert.match(txt, /slot 1/, 'active slot');
   assert.doesNotMatch(txt, /AT&T/, 'never the other SIM');
+  assert.ok(!/moduleStatus/.test(String(c.computed.activeSlot)), 'no socket reader of its own');
 });
 
 test('splitFields respects quoted commas', () => {

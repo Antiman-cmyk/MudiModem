@@ -18,7 +18,7 @@ os.execute("rm -rf " .. TMP .. "; mkdir -p " .. TMP)
 -- A fake curl: ignores every arg, prints whatever is in $TMP/remote.json.
 local curl = TMP .. "/curl.sh"
 local cf = assert(io.open(curl, "w"))
-cf:write("#!/bin/sh\ncat " .. TMP .. "/remote.json\n")
+cf:write("#!/bin/sh\necho \"$@\" > " .. TMP .. "/curl.args\ncat " .. TMP .. "/remote.json\n")
 cf:close()
 os.execute("chmod +x " .. curl)
 
@@ -72,4 +72,22 @@ assert(df.model == "", "F device_info model on failure: " .. tostring(df.model))
 assert(df.cpu == "", "F device_info cpu on failure: " .. tostring(df.cpu))
 
 os.execute("rm -rf " .. TMP)
+-- Case E: the recorded install source drives the update URL (fork/branch installs).
+os.execute("mkdir -p " .. TMP)
+local cf2 = assert(io.open(os.getenv("MUDIMODEM_CURL"), "w"))
+cf2:write("#!/bin/sh\necho \"$@\" > " .. TMP .. "/curl.args\ncat " .. TMP .. "/remote.json\n")
+cf2:close(); os.execute("chmod +x " .. os.getenv("MUDIMODEM_CURL"))
+writef(os.getenv("MUDIMODEM_VERSION_FILE"), '{"version":"2.0.0","base":"https://raw.githubusercontent.com/someone/MudiModem/feature-x"}')
+writef(TMP .. "/remote.json", '{"version":"2.0.1"}')
+local e = M.app_version({})
+assert(e.source == "https://raw.githubusercontent.com/someone/MudiModem/feature-x", "E source: " .. tostring(e.source))
+local argsf = io.open(TMP .. "/curl.args"); local curl_args = argsf and argsf:read("*a") or ""; if argsf then argsf:close() end
+assert(curl_args:find("someone/MudiModem/feature%-x/version%.json"), "E curl must fetch the recorded base: " .. curl_args)
+assert(e.update_available == true and e.latest == "2.0.1", "E update from the fork")
+-- Case F: a malformed base falls back to upstream (never a shell-escape vector).
+writef(os.getenv("MUDIMODEM_VERSION_FILE"), '{"version":"2.0.0","base":"https://x/y;rm -rf /"}')
+local fcase = M.app_version({})
+assert(fcase.source == "https://raw.githubusercontent.com/Antiman-cmyk/MudiModem/main", "F malformed base must fall back")
+
 print("backend-version OK")
+

@@ -1454,3 +1454,24 @@ test('fetchHistory ignores a stale reply after a newer request supersedes it', a
     delete global.window;
   }
 });
+
+// ---- 2.x: battery samples arrive as mudimodem.battery pushes, not by polling ----
+test('onPush appends a battery sample, clears a stale-history note, dedups replays', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  vm.samples = [{ t: 1000, cap: 70, cur: 500 }]; vm.lastT = 1000; vm.failStreak = 3; vm.err = 'stale';
+  vm.onPush({ t: 21000, cap: 71, cur: 480 });
+  assert.strictEqual(vm.samples.length, 2);
+  assert.strictEqual(vm.lastT, 21000);
+  assert.strictEqual(vm.err, '', 'a push proves the box is reachable');
+  assert.strictEqual(vm.failStreak, 0);
+  vm.onPush({ t: 21000, cap: 71, cur: 480 });
+  assert.strictEqual(vm.samples.length, 2, 'seed replay ignored');
+});
+
+test('mounted() installs a stall guard, never a 10 s poll', () => {
+  const c = loadChunk();
+  const src = String(c.mounted);
+  assert.ok(!/10000/.test(src), 'no 10 s interval');
+  assert.ok(/pushSeenAt/.test(src), 'stall guard keyed on the last push');
+});

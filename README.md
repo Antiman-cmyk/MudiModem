@@ -4,8 +4,6 @@ I have the Mudi 7 which is an amazing device.  I felt that it has good modem con
 
 MudiModem uses GL's built in modem commands to accomplish what it does so should not conflict with settings made through the native UI.
 
-I also included another screen I created which will put a live graph display on the modem's LCD screen.
-
 
 ---
 
@@ -13,8 +11,9 @@ I also included another screen I created which will put a live graph display on 
 
 MudiModem is a tabbed page. Every screen anchors to a persistent **live signal strip** across the top
 (RSRP, updating in real time) so you can always see what a change did to the connection. The tabs
-documented below are Tracking, Bands, Cell lock, AT console, SIM, Speedtest, Battery and LCD Display;
-there is also a Config tab (version / self-update).
+documented below are Tracking, Bands, Cell lock, AT console, SIM, Speedtest and Battery; there is
+also a Config tab (version / self-update). Everything live on the page is pushed by the router
+(GL's websocket bus) — the page never polls.
 
 ### 📈 Tracking
 
@@ -59,15 +58,6 @@ it, a searchable **community command library** where every entry carries a **ris
 only), `set` (runtime, gone on reboot), or `nv` (**writes permanent memory; survives factory reset**).
 Nothing ever runs by itself: clicking a library entry just fills the prompt, and `set`/`nv` commands stay
 locked until you tick "enable higher-risk commands."
-
-### 📇 SIM
-
-![SIM tab](docs/screenshots/05-sim.jpg)
-
-Both SIM slots, side by side. This box is DSDS — both SIMs register, but only one carries data — and the
-tab makes the split the stock UI hides plainly visible: the **selected** slot and the **data-carrying**
-slot can differ. Each card shows identity (hidden by default), APN with quick-pick suggestions, auth, IP
-type, and roaming state, with an editable dial profile, a one-click slot switch, and a failover summary.
 
 ### 🚀 Speedtest
 
@@ -123,23 +113,6 @@ Reported Charge** (the raw fuel-gauge reading, which is what the limiter actuall
 
 The charge-limit stack is based on **[ChiliApple](https://github.com/ChiliApple)'s battery control scripts**
 
-### 🖥️ LCD Display
-
-![LCD Display tab](docs/screenshots/08-lcd.jpg)
-
-MudiModem can also take over the Mudi's **front LCD** with its own cellular status screen — the
-[MudiUI](https://github.com/kevinherzig/MudiUI) renderer, folded into this project. It is **off by
-default** and changes nothing until you tick the box.
-
-From this tab: enable or disable the panel, set **brightness**, set the **screen timeout** (30 s
-through 60 m, or never), and choose the **default page**. Status shows whether the renderer is
-currently running.
-
-Enabling it takes the panel over from GL's stock screen — **long-press the panel (~1.6 s) to toggle
-back and forth** at any time (GL's screen is reloaded from scratch, so give it a couple of seconds to
-reappear). The renderer reads its cellular data from the same collector that feeds the Tracking and
-Battery charts rather than polling the modem itself, so the front panel costs the modem nothing extra.
-
 ---
 
 ## Installing it
@@ -147,20 +120,31 @@ Battery charts rather than polling the modem itself, so the front panel costs th
 From a **root shell on the router** 
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kevinherzig/MudiModem/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Antiman-cmyk/MudiModem/main/install.sh | sh
 ```
 
 The installer downloads every file from GitHub, gzips the page chunks with the box's own `gzip`, and drops
 them into place — no toolchain, nothing to build. Then **reload the GL admin in your browser** and a
-**MODEM** item appears in the top navigation. There's no reboot.
+**MODEM** item appears in the top navigation. There's no reboot. It refuses firmware older than 4.10.
+
+**Installing from a fork or branch** (e.g. before a change is merged upstream): point the installer at
+that tree's raw URL. The source is recorded on the box, so the Config tab's update check and
+**Update now** keep following the same fork/branch instead of upstream:
+
+```sh
+B=https://raw.githubusercontent.com/<user>/MudiModem/<branch>
+curl -fsSL "$B/install.sh" | MUDIMODEM_BASE="$B" sh
+```
 
 **Uninstall** is the mirror image:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kevinherzig/MudiModem/main/uninstall.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Antiman-cmyk/MudiModem/main/uninstall.sh | sh
 ```
 
-Both scripts **refuse to run against anything that isn't a GL-E5800** 
+Both scripts **refuse to run against anything that isn't a GL-E5800** on firmware 4.10 or newer.
+(This tree's default source is `Antiman-cmyk/MudiModem`; the original project by kevinherzig is the
+1.x / firmware-4.8 line.)
 
 > **Heads up — it's a travel router on cellular.** If you administer the Mudi *over* its own cellular
 > link, a bad band or cell lock can drop the connection you're using. MudiModem's confirm-or-revert
@@ -169,8 +153,13 @@ Both scripts **refuse to run against anything that isn't a GL-E5800**
 
 ## Hardware / compatibility
 
-- **Router:** GL.iNet GL-E5800 ("Mudi"), GL firmware 4.8.5 / OpenWrt 23.05.4
-- **Modem:** Quectel **RG650V-NA** (the North America variant)
+- **Router:** GL.iNet GL-E5800 ("Mudi"), **GL firmware 4.10.x** / OpenWrt 23.05.4
+- **Modem:** Quectel **RG650V** (NA and EU variants; band tables cover both)
 
-This was built and verified against one specific box. The band model and AT commands are Quectel- and
-firmware-specific; treat other hardware as untested.
+| MudiModem | GL firmware | notes |
+|---|---|---|
+| **2.x** (this branch) | **4.10 and later** | built on 4.10's per-slot band API, merged websocket state and `cell_info`; the installer refuses older firmware |
+| 1.x (`legacy-4.8` tag) | 4.8.x | `MUDIMODEM_REF=legacy-4.8 sh install.sh` |
+
+The firmware contract 2.x relies on is documented in `docs/cellular-api-4.10.md`. The band model
+and AT commands are Quectel- and firmware-specific; treat other hardware as untested.

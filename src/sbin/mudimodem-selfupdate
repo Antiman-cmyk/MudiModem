@@ -1,19 +1,35 @@
 #!/bin/sh
 # /usr/sbin/mudimodem-selfupdate — detached MudiModem self-update.
 #
-# Runs the idempotent, model-guarded install.sh from GitHub main. Launched
+# Runs the idempotent, model-guarded install.sh from the SAME source this
+# install came from (fork/branch aware — see install.sh MUDIMODEM_BASE). Launched
 # DETACHED by the mudimodem.self_update RPC method: install.sh ends with an
 # nginx restart, which would kill the /rpc connection if run in-handler.
 #
 # An atomic lockdir (mkdir is atomic) guards against double-click / concurrency.
 # The result is written to a state file the mudimodem.update_status method polls.
-# The install URL is a FIXED constant — no RPC argument reaches this shell.
+# The install URL comes from a root-owned file — no RPC argument reaches this shell.
 set -u
 
 LOCK="${MUDIMODEM_UPDATE_LOCK:-/etc/mudimodem/update.lock.d}"
 RESULT="${MUDIMODEM_UPDATE_RESULT:-/etc/mudimodem/update-result.json}"
 LOG="${MUDIMODEM_UPDATE_LOG:-/var/log/mudimodem-update.log}"
-CMD="${MUDIMODEM_UPDATE_CMD:-curl -fsSL https://raw.githubusercontent.com/kevinherzig/MudiModem/main/install.sh | sh}"
+# The install source recorded by install.sh (/etc/mudimodem/version.json "base");
+# upstream main when absent (a box installed by an older installer) or when the
+# recorded value is not a plain URL. The allowlist is the SAME one the Lua
+# app_version applies (src/rpc/mudimodem read_version_file — keep in sync):
+# letters, digits, . - _ : / — so the two readers can never follow different
+# sources, and nothing that could mean something to a shell gets through.
+VERSION_FILE="${MUDIMODEM_VERSION_FILE:-/etc/mudimodem/version.json}"
+BASE=$(sed -n 's/.*"base"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$VERSION_FILE" 2>/dev/null | head -n1)
+case "$BASE" in
+  http://*|https://*) case "$BASE" in *[!A-Za-z0-9._:/-]*) BASE="" ;; esac ;;
+  *) BASE="" ;;
+esac
+BASE="${BASE:-https://raw.githubusercontent.com/Antiman-cmyk/MudiModem/main}"
+# BASE reaches the command ONLY through the environment (MUDIMODEM_BASE), never
+# spliced into the string `sh -c` re-parses — so its content is data, not code.
+CMD="${MUDIMODEM_UPDATE_CMD:-curl -fsSL \"\$MUDIMODEM_BASE/install.sh\" | sh}"
 
 STALE_MIN="${MUDIMODEM_LOCK_STALE_MIN:-10}"
 # A prior run killed by SIGKILL/OOM/power-loss can't fire its EXIT trap, leaving
@@ -31,7 +47,7 @@ fi
 trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 
 : > "$LOG"
-if sh -c "$CMD" >> "$LOG" 2>&1; then
+if MUDIMODEM_BASE="$BASE" sh -c "$CMD" >> "$LOG" 2>&1; then
   printf '{"ok":true,"finished_at":"%s"}\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$RESULT"
 else
   rc=$?

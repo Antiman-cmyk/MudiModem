@@ -5,17 +5,17 @@
 # panel (or the ssh panic-restore) BEFORE uninstalling if you want them gone.
 # Run it from a root shell on the router (ssh root@<router> first if remote):
 #
-#   curl -fsSL https://raw.githubusercontent.com/kevinherzig/MudiModem/main/uninstall.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/Antiman-cmyk/MudiModem/main/uninstall.sh | sh
 set -eu
 
 MODEL=$(cat /proc/device-tree/model 2>/dev/null | tr -d '\0')
-case "$MODEL" in
-  *E5800*) echo "target OK: $MODEL" ;;
-  *) echo "REFUSING: this is not a GL-E5800 (got: '${MODEL:-unknown}')" >&2; exit 1 ;;
+HWMODEL=$(cat /proc/gl-hw-info/model 2>/dev/null | tr -d '\0')
+case "$MODEL:$HWMODEL" in
+  *E5800*|*e5800*) echo "target OK: ${MODEL:-$HWMODEL}" ;;
+  *) echo "REFUSING: this is not a GL-E5800 (got: '${MODEL:-unknown}' / '${HWMODEL:-unknown}')" >&2; exit 1 ;;
 esac
 
-# Must stay in lockstep with install.sh's sysupgrade list (minus /etc/config/mudi,
-# which is user config and intentionally kept).
+# Must stay in lockstep with install.sh's sysupgrade list.
 FILES="
 /www/views/gl-sdk4-ui-mudimodem.common.js.gz
 /www/views/gl-sdk4-ui-mudimodem-tracking.common.js.gz
@@ -26,6 +26,9 @@ FILES="
 /usr/share/oui/menu.d/mudimodem.json
 /usr/share/oui/menu.d/mudimodem-tracking.json
 /usr/share/oui/menu.d/mudimodem-speedtest.json
+/usr/lib/mudimodem/cellular_compat.py
+/usr/lib/mudimodem/mudimodem-detach
+/usr/share/gl-ngx/websocket/mudimodem.lua
 /usr/lib/mudimodem/mudimodem-at.py
 /usr/lib/mudimodem/mudimodem-lib
 /usr/lib/mudimodem/mudimodem-speedtest.py
@@ -44,10 +47,6 @@ FILES="
 /etc/mudimodem/battlimit.json
 /etc/mudimodem/history.json
 /etc/mudimodem/history
-/usr/bin/mudi.py
-/usr/bin/mudi-watch.py
-/etc/init.d/mudi
-/etc/init.d/mudi-watch
 "
 
 # Release charge limit before removing the binary (restores factory charge path).
@@ -71,18 +70,20 @@ if [ -x /etc/init.d/mudimodem-speedtestd ]; then
   echo "speedtest scheduler stopped + disabled"
 fi
 
-# Stop + disable the LCD renderer and hand the front panel back to gl_screen
-# BEFORE removing its files. Leave the LCD user config (uci "mudi") in place.
-if [ -x /etc/init.d/mudi ]; then
-  /etc/init.d/mudi stop    2>/dev/null || true
-  /etc/init.d/mudi disable 2>/dev/null || true
-fi
-if [ -x /etc/init.d/mudi-watch ]; then
-  /etc/init.d/mudi-watch stop    2>/dev/null || true
-  /etc/init.d/mudi-watch disable 2>/dev/null || true
-fi
+# 1.x shipped an LCD renderer (mudi.py) that seized the front panel; if a
+# leftover is still there, stop it and hand the panel back to gl_screen.
+# Every step is `|| true`: under `set -e` a procd `stop` on a service that was
+# never registered exits non-zero and would abort the uninstall half-way.
+for svc in mudi mudi-watch; do
+  if [ -x /etc/init.d/$svc ]; then
+    /etc/init.d/$svc stop    2>/dev/null || true
+    /etc/init.d/$svc disable 2>/dev/null || true
+    rm -f /etc/init.d/$svc || true
+    echo "1.x LCD service $svc stopped + removed"
+  fi
+done
+rm -f /usr/bin/mudi.py /usr/bin/mudi-watch.py /etc/config/mudi || true
 /etc/init.d/gl_screen start 2>/dev/null || true
-echo "LCD renderer stopped; front panel returned to gl_screen"
 
 echo "removing files:"
 for p in $FILES; do [ -e "$p" ] && rm -f "$p" && echo "  $p"; done

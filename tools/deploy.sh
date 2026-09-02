@@ -12,8 +12,21 @@ case "$MODEL" in
   *) echo "REFUSING: '$HOST' is not a GL-E5800 (got: '$MODEL')" >&2; exit 1 ;;
 esac
 echo "target OK: $MODEL"
+# Firmware floor (MudiModem 2.x is 4.10-only — see install.sh). Numeric
+# major.minor compare, the SAME expression install.sh uses: a glob such as
+# `4.[2-9]*` also matches 4.8.5/4.9.0, exactly the firmware this must refuse.
+GLVER=$(ssh -o BatchMode=yes "root@$HOST" 'cat /etc/glversion' 2>/dev/null | tr -d '\r\n')
+GLMAJ=${GLVER%%.*}; GLREST=${GLVER#*.}; GLMIN=${GLREST%%.*}
+case "$GLMAJ$GLMIN" in *[!0-9]*|"") GLMAJ=0; GLMIN=0 ;; esac
+if [ -z "${GLVER:-}" ] || [ "${GLMAJ:-0}" -lt 4 ] || { [ "${GLMAJ:-0}" -eq 4 ] && [ "${GLMIN:-0}" -lt 10 ]; }; then
+  echo "REFUSING: MudiModem 2.x needs GL firmware >= 4.10 (found '${GLVER:-unknown}')" >&2; exit 1
+fi
+echo "firmware OK: $GLVER"
 
 ./tools/build.sh
+
+# Same as install.sh: the collector / speed test / AT tool need python3-light.
+ssh -o BatchMode=yes "root@$HOST" 'opkg list-installed 2>/dev/null | grep -q "^python3-light " || { opkg update >/dev/null 2>&1; opkg install python3-light; }' 2>/dev/null || true
 
 ssh -o BatchMode=yes "root@$HOST" 'cat > /www/views/gl-sdk4-ui-mudimodem.common.js.gz' \
   < build/gl-sdk4-ui-mudimodem.common.js.gz
@@ -35,6 +48,16 @@ ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /www/mudimodem && cat > /www/mudimod
 ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /usr/lib/mudimodem && cat > /usr/lib/mudimodem/mudimodem-at.py' \
   < tools/mudimodem-at.py
 echo "console chunk + AT library + AT tool deployed"
+
+# Shared 4.10 helpers: the Python cellular compat lib, the detach wrapper, and
+# GL's /ws seed module for mudimodem.collect (dofile'd per subscribe).
+ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /usr/lib/mudimodem && cat > /usr/lib/mudimodem/cellular_compat.py' \
+  < src/lib/cellular_compat.py
+ssh -o BatchMode=yes "root@$HOST" 'cat > /usr/lib/mudimodem/mudimodem-detach && chmod 0755 /usr/lib/mudimodem/mudimodem-detach' \
+  < src/lib/mudimodem-detach
+ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /usr/share/gl-ngx/websocket && cat > /usr/share/gl-ngx/websocket/mudimodem.lua' \
+  < src/ws/mudimodem.lua
+echo "cellular_compat + detach + ws seed module deployed"
 
 # Library check/refresh tool — pulls the community AT library from the
 # external mudi7-at-library repo (fail-silent when unreachable; §4).
@@ -68,9 +91,12 @@ if [ -f src/sbin/mudimodem-speedtestd ]; then
 fi
 
 # Phase 5: installed-version marker, read by mudimodem.app_version.
-ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /etc/mudimodem && cat > /etc/mudimodem/version.json' \
-  < version.json
-echo "version.json deployed (/etc/mudimodem/version.json)"
+# version + the source the box should self-update from (MUDIMODEM_BASE, default upstream main).
+VER=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' version.json | head -n1)
+UPD_BASE="${MUDIMODEM_BASE:-https://raw.githubusercontent.com/Antiman-cmyk/MudiModem/main}"
+printf '{"version":"%s","base":"%s"}\n' "$VER" "$UPD_BASE" \
+  | ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /etc/mudimodem && cat > /etc/mudimodem/version.json'
+echo "version.json deployed ($VER, updates from $UPD_BASE)"
 
 # Confirm-or-revert watchdog + panic restore (§5). Inert until invoked; install
 # it BEFORE the backend so set_bands can always find it.
@@ -124,29 +150,6 @@ if [ -f src/sbin/mudimodem-collectd ]; then
   echo "collector deployed + service (re)started"
 fi
 
-# LCD front-panel renderer (vendored MudiUI). Files only — DEFAULT OFF: the
-# renderer seizes /dev/fb0 from gl_screen, so it's enabled solely from the admin
-# "LCD Display" tab (set_lcd), never here. Gate on the 240x320 panel being present.
-if [ -f src/lcd/mudi.py ]; then
-  lcd_geom=$(ssh -o BatchMode=yes "root@$HOST" 'cat /sys/class/graphics/fb0/virtual_size 2>/dev/null' || echo "?")
-  if [ "$lcd_geom" = "240,320" ]; then
-    ssh -o BatchMode=yes "root@$HOST" 'cat > /usr/bin/mudi.py && chmod 0755 /usr/bin/mudi.py' \
-      < src/lcd/mudi.py
-    ssh -o BatchMode=yes "root@$HOST" 'cat > /usr/bin/mudi-watch.py && chmod 0755 /usr/bin/mudi-watch.py' \
-      < src/lcd/mudi-watch.py
-    ssh -o BatchMode=yes "root@$HOST" 'cat > /etc/init.d/mudi && chmod 0755 /etc/init.d/mudi' \
-      < src/lcd/mudi.init
-    ssh -o BatchMode=yes "root@$HOST" 'cat > /etc/init.d/mudi-watch && chmod 0755 /etc/init.d/mudi-watch' \
-      < src/lcd/mudi-watch.init
-    # default settings only if absent — never clobber user LCD config
-    ssh -o BatchMode=yes "root@$HOST" '[ -f /etc/config/mudi ] || cat > /etc/config/mudi' \
-      < src/lcd/mudi.config
-    echo "LCD renderer deployed (disabled by default — enable from the LCD Display tab)"
-  else
-    echo "no 240x320 front panel on $HOST — skipping LCD renderer files"
-  fi
-fi
-
 # Battery charge limit: glbattlimit + hotplug + init + default policy JSON.
 # Off first if a previous watcher is active — replacing the binary mid-run is racy.
 if [ -f src/sbin/glbattlimit ]; then
@@ -175,21 +178,21 @@ ssh -o BatchMode=yes "root@$HOST" '
 echo "history persist policy present (default off)"
 
 # Preserve our files across a firmware upgrade (they live outside /etc/config).
-# Idempotent: only add lines not already present.
+# Idempotent: only add lines not already present. Must list EVERY file pushed
+# above — test/test_install_wiring.sh checks it against install.sh's list.
 ssh -o BatchMode=yes "root@$HOST" 'f=/etc/sysupgrade.conf; touch "$f"; for p in \
   /www/views/gl-sdk4-ui-mudimodem.common.js.gz \
   /www/views/gl-sdk4-ui-mudimodem-tracking.common.js.gz \
   /usr/share/oui/menu.d/mudimodem.json \
   /usr/share/oui/menu.d/mudimodem-tracking.json \
+  /usr/lib/mudimodem/cellular_compat.py \
+  /usr/lib/mudimodem/mudimodem-detach \
+  /usr/share/gl-ngx/websocket/mudimodem.lua \
   /usr/lib/oui-httpd/rpc/mudimodem \
   /usr/sbin/mudimodem-revert \
   /usr/sbin/mudimodem-selfupdate \
   /usr/sbin/mudimodem-collectd \
   /etc/init.d/mudimodem-collectd \
-  /usr/bin/mudi.py \
-  /usr/bin/mudi-watch.py \
-  /etc/init.d/mudi \
-  /etc/init.d/mudi-watch \
   /www/views/gl-sdk4-ui-mudimodem-console.common.js.gz \
   /www/mudimodem/at-library.json.gz \
   /usr/lib/mudimodem/mudimodem-at.py \

@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import tempfile
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -102,93 +103,89 @@ class LatencyStats(unittest.TestCase):
 
 
 class BuildSnapshot(unittest.TestCase):
-    MODEM = {"modems": [{"bus": "cpu", "current_sim_slot": "1"}]}
-    NET = {"networks": [
-        {"slot": "1", "cell_info": {"id": "D43B70D", "band": 71, "mode": "NR5G-SA FDD",
-                                     "rsrp": "-98", "sinr": "8", "rsrq": "-11"}},
-        {"slot": "2", "cell_info": {"id": "AD4B60A", "band": 66, "rsrp": "-113"}}]}
-    SIMS = {"sims": [{"slot": "1", "carrier": "T-Mobile"}, {"slot": "2", "carrier": "AT&T"}]}
+    MODEM = {"modems": [{"bus": "cpu", "current_sim_slot": 1}]}
+    CELL = {"bus": "cpu", "slot": 1, "network_type": 5, "tac": "DE0000", "cell_id": "DE017C015",
+            "signal": [{"band": 78, "earfcn": 627264, "pci": 142, "bandwidth": 100,
+                        "rsrp": -94, "rsrq": -10, "sinr": 12, "rsrp_level": 4}]}
+    NETS = {"networks": [{"bus": "cpu", "slot": 1, "carrier": "CHN-UNICOM"},
+                         {"bus": "cpu", "slot": 2, "carrier": "AT&T"}]}
 
     def test_active_slot_only(self):
-        snap = st.build_snapshot(self.MODEM, self.NET, self.SIMS)
-        self.assertEqual(snap["slot"], "1")
-        self.assertEqual(snap["carrier"], "T-Mobile")
-        self.assertEqual(snap["cell_id"], "D43B70D")
-        self.assertEqual(snap["rsrp"], -98)
+        snap = st.build_snapshot(self.MODEM, self.CELL, self.NETS)
+        self.assertEqual(snap["slot"], 1)
+        self.assertEqual(snap["carrier"], "CHN-UNICOM")
+        self.assertEqual(snap["cell_id"], "DE017C015")
+        self.assertEqual(snap["rsrp"], -94)
+        self.assertEqual(snap["band"], 78)
+        self.assertEqual(snap["mode"], "NR5G-SA")
+        self.assertEqual(snap["signals"][0]["role"], "PCC")
 
     def test_no_active_slot_is_empty_dict(self):
-        self.assertEqual(st.build_snapshot({"modems": [{}]}, self.NET, self.SIMS), {})
+        self.assertEqual(st.build_snapshot({"modems": [{"bus": "cpu"}]}, self.CELL, self.NETS), {})
 
-    # Firmware 4.10 shapes from issue #5 — same unwrap as collectd.
-    MODEM_410 = {"bus": "cpu", "current_sim_slot": 1}
-    NET_410 = {
-        "bus": "cpu", "slot": 1, "network_type": 51, "cell_id": "DF30C",
-        "signal": [{"band": 3, "rsrp": -97, "sinr": 17, "rsrq": -9}],
-    }
+    def test_flat_status_is_not_a_modem_list(self):
+        self.assertEqual(st.build_snapshot({"bus": "cpu", "current_sim_slot": 1}, self.CELL, self.NETS), {})
 
-    def test_firmware_410_flat_modem_and_cell_info_signal(self):
-        snap = st.build_snapshot(self.MODEM_410, self.NET_410, self.SIMS)
-        self.assertEqual(int(snap["slot"]), 1)
-        self.assertEqual(snap["cell_id"], "DF30C")
-        self.assertEqual(snap["rsrp"], -97)
-        self.assertEqual(snap["sinr"], 17)
-        self.assertEqual(snap["band"], 3)
-        self.assertEqual(snap["carrier"], "T-Mobile")
-        self.assertEqual(str(snap["mode"]), "51")
-
-    def test_firmware_410_id_comes_from_cell_info_not_signal(self):
-        net = dict(self.NET_410)
-        net["signal"] = [dict(self.NET_410["signal"][0], id="WRONG")]
-        snap = st.build_snapshot(self.MODEM_410, net, self.SIMS)
-        self.assertEqual(snap["cell_id"], "DF30C")
+    def test_snapshot_from_sample_keeps_cell_id_alias(self):
+        snap = st.snapshot_from_sample({"t": 1, "slot": 1, "id": "X", "cell_id": "X", "band": 3,
+                                        "mode": "LTE", "rsrp": -80, "carrier": "c"})
+        self.assertEqual(snap["cell_id"], "X")
+        self.assertEqual(snap["mode"], "LTE")
+        self.assertEqual(st.snapshot_from_sample({}), {})
 
 
 class LoadSnapshot(unittest.TestCase):
-    def test_prefers_cell_info_when_firmware_has_it(self):
-        modem = {"bus": "cpu", "current_sim_slot": 1}
-        net410 = {
-            "bus": "cpu", "slot": 1, "cell_id": "DF30C", "network_type": 51,
-            "signal": [{"band": 3, "rsrp": -97}],
-        }
-        sims = {"sims": [{"slot": "1", "carrier": "T-Mobile"}]}
+    def _latest(self, obj):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "latest.json")
+        with open(p, "w") as f:
+            json.dump(obj, f)
+        return p
+
+    def test_fresh_latest_json_means_zero_ubus_reads(self):
+        old_path, old_call = st.LATEST_PATH, st.ubus_call
         calls = []
+        st.LATEST_PATH = self._latest({"t": int(time.time() * 1000), "slot": 1, "cell_id": "DE017C015",
+                                       "band": 78, "mode": "NR5G-SA", "rsrp": -94, "carrier": "CHN-UNICOM"})
+        st.ubus_call = lambda o, m, a=None: calls.append((o, m)) or None
+        try:
+            snap = st.load_snapshot()
+        finally:
+            st.LATEST_PATH, st.ubus_call = old_path, old_call
+        self.assertEqual(snap["cell_id"], "DE017C015")
+        self.assertEqual(snap["rsrp"], -94)
+        self.assertEqual(calls, [], "a fresh collector sample must cost no modem traffic")
+
+    def test_stale_latest_falls_back_to_one_cell_info(self):
+        old_path, old_call = st.LATEST_PATH, st.ubus_call
+        calls = []
+        st.LATEST_PATH = self._latest({"t": int((time.time() - 300) * 1000), "slot": 1, "rsrp": -50})
 
         def fake(obj, method, args=None):
             calls.append((obj, method, args))
-            return {
-                ("cellular.modem", "status"): modem,
-                ("cellular.network", "cell_info"): net410,
-                ("cellular.sim", "status"): sims,
-            }.get((obj, method))
-
-        old = st.ubus_call
+            return {("cellular.modem", "status"): BuildSnapshot.MODEM,
+                    ("cellular.network", "cell_info"): BuildSnapshot.CELL,
+                    ("cellular.network", "info"): BuildSnapshot.NETS}.get((obj, method))
         st.ubus_call = fake
         try:
             snap = st.load_snapshot()
         finally:
-            st.ubus_call = old
-        self.assertEqual(snap["cell_id"], "DF30C")
-        self.assertEqual(snap["rsrp"], -97)
-        self.assertTrue(any(c[1] == "cell_info" for c in calls))
-        self.assertFalse(any(c[1] == "info" for c in calls))
+            st.LATEST_PATH, st.ubus_call = old_path, old_call
+        self.assertEqual(snap["cell_id"], "DE017C015")
+        self.assertEqual(snap["rsrp"], -94)
+        cell = [c for c in calls if c[1] == "cell_info"]
+        self.assertEqual(len(cell), 1)
+        self.assertEqual(cell[0][2], {"bus": "cpu", "slot": 1})
+        self.assertIn([c for c in calls if c[1] == "status"][0][2], (None, {}))
 
-    def test_falls_back_to_network_info_when_cell_info_missing(self):
-        def fake(obj, method, args=None):
-            return {
-                ("cellular.modem", "status"): BuildSnapshot.MODEM,
-                ("cellular.network", "cell_info"): None,
-                ("cellular.network", "info"): BuildSnapshot.NET,
-                ("cellular.sim", "status"): BuildSnapshot.SIMS,
-            }.get((obj, method))
-
-        old = st.ubus_call
-        st.ubus_call = fake
+    def test_missing_latest_and_no_slot_is_empty(self):
+        old_path, old_call = st.LATEST_PATH, st.ubus_call
+        st.LATEST_PATH = os.path.join(tempfile.mkdtemp(), "nope.json")
+        st.ubus_call = lambda o, m, a=None: {"modems": [{"bus": "cpu"}]} if m == "status" else None
         try:
-            snap = st.load_snapshot()
+            self.assertEqual(st.load_snapshot(), {})
         finally:
-            st.ubus_call = old
-        self.assertEqual(snap["cell_id"], "D43B70D")
-        self.assertEqual(snap["rsrp"], -98)
+            st.LATEST_PATH, st.ubus_call = old_path, old_call
 
 
 import http.server

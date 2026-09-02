@@ -1,36 +1,54 @@
 #!/usr/bin/python3
-# mudimodem-collectd — background modem-history collector for MudiModem.
+# mudimodem-collectd — background modem-history collector for MudiModem (GL 4.10).
 #
-# Polls ubus (cellular.modem/network/sim) every POLL_INTERVAL and appends one
-# JSON sample per tick to /tmp/mudimodem/samples.jsonl. It reads GL's
-# cellular_manager CACHE over ubus — NEVER raw AT — so it adds no load on the
-# modem's AT channel and cannot cause the crossed-response contention that has
-# bitten this box (spec §3). Live storage is tmpfs (RAM). Optional eMMC backup
-# (Config → keep history across reboots) periodically APPENDs new lines to
-# /etc/mudimodem/history/ and seeds tmpfs from that on boot — off by default.
+# Every POLL_INTERVAL it reads GL's cellular ubus for the ACTIVE slot and appends
+# one normalized sample (cellular_compat.build_sample: signals[] + PCC aliases)
+# to /tmp/mudimodem/samples.jsonl, writes latest.json and publishes it to the
+# web UI over GL's own websocket bus (`ubus call gl-session notify
+# {name:"mudimodem.collect", data}`; battery samples go out as
+# mudimodem.battery), so no page ever polls for live data. gl-session's notify
+# is a no-op with no browser attached, so it is called unconditionally.
 #
-# Stdlib only (Python 3.11 on the box); no pip. Managed by procd
-# (/etc/init.d/mudimodem-collectd), respawned on crash.
+# ⚠️ `cellular.network cell_info` is NOT a cache read on 4.10: its handler
+# executes AT+QENG / AT+QCAINFO on the shared AT channel every call. That is
+# why the default cadence is 10 s (GL's own signal log polls at 10 s) and
+# why nothing else here touches the modem: carrier/identity come from
+# `cellular.network info` at a slow cadence, battery from sysfs only.
+#
+# Live storage is tmpfs (RAM). Optional eMMC backup (Config → keep history
+# across reboots) periodically APPENDs new lines to /etc/mudimodem/history/
+# and seeds tmpfs from that on boot — off by default.
+#
+# Stdlib only; shares cellular_compat.py (/usr/lib/mudimodem). Managed by
+# procd (/etc/init.d/mudimodem-collectd), respawned on crash.
 #
 # Env overrides (tests): MUDIMODEM_HIST (dir), MUDIMODEM_POLL (seconds),
-# MUDIMODEM_HISTORY_CFG, MUDIMODEM_HISTORY_PERSIST (persist dir),
-# MUDIMODEM_FLUSH_INTERVAL (seconds).
+# MUDIMODEM_CARRIER_INTERVAL, MUDIMODEM_HISTORY_CFG, MUDIMODEM_HISTORY_PERSIST,
+# MUDIMODEM_FLUSH_INTERVAL, MUDIMODEM_NO_WS_PUSH=1 (skip gl-session notify).
 
 import json
 import os
 import signal
-import socket
 import subprocess
 import sys
-import threading
 import time
 
-POLL_INTERVAL   = float(os.environ.get("MUDIMODEM_POLL", "4"))
+_HERE = os.path.dirname(os.path.abspath(globals().get("__file__") or sys.argv[0] or "."))
+for _d in ("/usr/lib/mudimodem", os.path.join(_HERE, "..", "lib")):
+    if os.path.isdir(_d) and _d not in sys.path:
+        sys.path.insert(0, _d)
+import cellular_compat as cc  # noqa: E402
+
+BUS             = os.environ.get("MUDIMODEM_BUS", "cpu")
+POLL_INTERVAL   = float(os.environ.get("MUDIMODEM_POLL", "10"))
+CARRIER_INTERVAL = float(os.environ.get("MUDIMODEM_CARRIER_INTERVAL", "60"))
 SAMPLE_MAX_AGE  = 24 * 3600 * 1000     # 24 h, in ms
-SAMPLE_MAX_LINE = 22000                 # 24h at 4s ≈ 21.6k; hard backstop above that
-TRIM_EVERY      = 30                     # ~2 min at 4 s
+SAMPLE_MAX_LINE = 9000                  # 24h at 10s = 8640; hard backstop above that
+TRIM_EVERY      = 12                     # ~2 min at 10 s
 EVENT_TRIM_EVERY = 360                   # ~1 h
-CLIENT_SEND_TIMEOUT = float(os.environ.get("MUDIMODEM_SEND_TIMEOUT", "5"))
+WS_NAME         = "mudimodem.collect"    # global_sockets names the page subscribes to
+WS_BATT_NAME    = "mudimodem.battery"
+WS_PUSH         = os.environ.get("MUDIMODEM_NO_WS_PUSH") != "1"
 
 # ---- battery (issue #1) ---------------------------------------------------
 # Sampled from sysfs only: no ubus, no AT, nothing that can contend with the
@@ -74,98 +92,8 @@ def write_latest(path, sample):
     os.replace(tmp, path)
 
 
-class Broadcaster:
-    """Push each sample line to connected AF_UNIX clients (event + payload in
-    one). A new client is replayed the most recent line on connect. Best-effort:
-    a slow/dead client is dropped, never allowed to stall or crash the poll loop.
-    """
-
-    def __init__(self, path):
-        self.path = path
-        self._clients = []
-        self._last = None                       # bytes of the last published line
-        self._lock = threading.Lock()
-        self._srv = None
-
-    def start(self):
-        try:
-            os.unlink(self.path)                # clear a stale socket from a crash
-        except OSError:
-            pass
-        self._srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self._srv.bind(self.path)
-        self._srv.listen(8)
-        threading.Thread(target=self._accept, name="collectd-accept",
-                         daemon=True).start()
-
-    def _accept(self):
-        while True:
-            try:
-                c, _ = self._srv.accept()
-            except OSError:
-                return                          # listener closed on shutdown
-            # No timeout here would let a stalled client block a future
-            # publish()'s sendall() forever, freezing the whole poll loop.
-            c.settimeout(CLIENT_SEND_TIMEOUT)
-            with self._lock:
-                last = self._last
-            # Replay BEFORE adding to _clients: otherwise a concurrent
-            # publish() could sendall() to this same fd while we're still
-            # sending the replay here — two threads writing one socket.
-            if last is not None and not self._send(c, last):
-                continue                        # replay failed; client dropped
-            with self._lock:
-                self._clients.append(c)
-
-    def _send(self, c, data):
-        try:
-            c.sendall(data)
-            return True
-        except OSError:
-            with self._lock:
-                if c in self._clients:
-                    self._clients.remove(c)
-            try:
-                c.close()
-            except OSError:
-                pass
-            return False
-
-    def publish(self, line):
-        data = (line + "\n").encode("utf-8")
-        with self._lock:
-            self._last = data
-            clients = list(self._clients)
-        for c in clients:
-            self._send(c, data)
-
-    def close(self):
-        if self._srv:
-            try:
-                self._srv.close()
-            except OSError:
-                pass
-        with self._lock:
-            clients = list(self._clients)
-            self._clients = []
-        for c in clients:
-            try:
-                c.close()
-            except OSError:
-                pass
-        try:
-            os.unlink(self.path)
-        except OSError:
-            pass
-
-
 def ubus_call(obj, method, args=None):
-    """Return the parsed ubus result dict, or None on any failure.
-
-    `args` is an optional JSON-able dict (firmware 4.10 cell_info needs
-    {bus, slot}). Omitted / None still sends `{}` so older callers are
-    unchanged.
-    """
+    """Return the parsed ubus result dict, or None on any failure."""
     try:
         out = subprocess.run(["ubus", "call", obj, method, json.dumps(args or {})],
                              capture_output=True, timeout=8, text=True)
@@ -177,118 +105,93 @@ def ubus_call(obj, method, args=None):
 
 
 def _num(v):
-    if v is None or v == "":
-        return None
-    try:
-        f = float(v)
-    except (ValueError, TypeError):
-        return None
-    return int(f) if f == int(f) else f
+    return cc.normalize_metric(v)
 
 
-def _first(*vals):
-    for v in vals:
-        if v is not None and v != "":
-            return v
-    return None
+def build_sample(modem, cell_info, networks_info=None, t=None, carrier=None):
+    """Pure: one normalized sample (cellular_compat.build_sample) stamped with
+    the box clock. None when the active slot can't be resolved."""
+    s = cc.build_sample(modem, cell_info, networks_info, t=t, bus=BUS, carrier=carrier)
+    if s is not None and s["t"] is None:
+        s["t"] = now_ms()
+    return s
 
 
-def _as_slot(slot):
-    """Coerce a slot to int when the firmware gave us a numeric string.
-    4.10 cell_info wants {slot: 1}; 4.8 status returns '1'."""
-    try:
-        return int(slot)
-    except (TypeError, ValueError):
-        return slot
+class CarrierCache:
+    """`cellular.network info` is the identity/carrier source (the same call
+    GL's ws merge layer uses). It is re-read only every CARRIER_INTERVAL or
+    when the active slot changes — never per tick."""
+
+    def __init__(self):
+        self.at = 0.0
+        self.slot = None
+        self.info = None
+
+    def get(self, slot):
+        if self.info is None or slot != self.slot or time.time() - self.at >= CARRIER_INTERVAL:
+            self.info = ubus_call("cellular.network", "info") or {}
+            self.at = time.time()
+            self.slot = slot
+        return self.info
 
 
-def _modem_obj(modem):
-    """Unwrap 4.8 {modems:[...]} or return 4.10's already-flat object."""
-    if not isinstance(modem, dict):
-        return {}
-    if "modems" in modem:
-        mods = modem.get("modems") or []
-        return mods[0] if mods else {}
-    return modem
+_carrier = CarrierCache()
 
 
-def _is_cell_info_payload(net):
-    """True when `net` is a 4.10 cellular.network cell_info result.
-
-    Unregistered 4.10 still returns signal:[] (and maybe no cell_id) —
-    that is a valid payload and must NOT fall back to network info.
-    """
-    return isinstance(net, dict) and ("signal" in net or "cell_id" in net)
-
-
-def _cell_from_net(net, slot, bus):
-    """Pick the serving-cell dict out of either firmware shape.
-
-    Returns (cell, extras) where extras overrides id / mode / tx_channel
-    for the 4.10 layout (cell_id and network_type live on the parent;
-    earfcn is the 4.10 name for tx_channel). extras is {} on 4.8.
-    """
-    net = net or {}
-    if _is_cell_info_payload(net):
-        sigs = net.get("signal") or []
-        cell = sigs[0] if sigs else {}
-        extras = {
-            "id": _first(net.get("cell_id"), cell.get("id")),
-            "mode": _first(cell.get("mode"), cell.get("network_type"),
-                           net.get("network_type")),
-            "tx_channel": _first(cell.get("tx_channel"), cell.get("earfcn"),
-                                 net.get("earfcn")),
-        }
-        return cell, extras
-    for n in net.get("networks") or []:
-        if str(n.get("slot")) == str(slot) and (bus is None or n.get("bus") == bus):
-            return (n.get("cell_info") or {}), {}
-    return {}, {}
-
-
-def build_sample(modem, net, sims, t=None):
-    """Pure: assemble one sample from the three ubus payloads (or None if the
-    active slot can't be resolved). Anchors on the ACTIVE slot (current_sim_slot)
-    exactly as the UI does; an unregistered active slot yields a sample with null
-    metrics so the trace shows an honest gap.
-
-    Accepts both firmware 4.8 (modems[] + networks[].cell_info) and 4.10
-    (flat modem + cell_info.signal[]) shapes — issue #5.
-    """
-    m = _modem_obj(modem)
-    bus = m.get("bus")
-    slot = m.get("current_sim_slot")
+def collect_sample():
+    """The 4.10 read path: modem status (active slot, GL's no-arg modems[] form),
+    then ONE cell_info {bus,slot} (the AT-backed call — exactly once per tick),
+    carrier from the slow identity cache."""
+    modem = ubus_call("cellular.modem", "status")
+    slot = cc.active_slot(modem, BUS)
     if slot is None:
         return None
-    cell, extras = _cell_from_net(net, slot, bus)
-    mode = extras.get("mode", cell.get("mode"))
-    # LCD does mode.split(); stringify a 4.10 numeric network_type so it
-    # cannot AttributeError. The 4/51 enum is unverified, so we do not
-    # invent "NR5G"/"LTE" labels here.
-    if mode is not None and not isinstance(mode, str):
-        mode = str(mode)
-    carrier = ""
-    for s in (sims or {}).get("sims") or []:
-        if str(s.get("slot")) == str(slot):
-            carrier = s.get("carrier") or ""
-            break
-    return {
-        "t": now_ms() if t is None else t,
-        "slot": slot,
-        "id": extras.get("id", cell.get("id")),
-        "band": cell.get("band"),
-        "mode": mode,
-        "rsrp": _num(cell.get("rsrp")),
-        "sinr": _num(cell.get("sinr")),
-        "rsrq": _num(cell.get("rsrq")),
-        "rssi": _num(cell.get("rssi")),
-        "dl_bandwidth": cell.get("dl_bandwidth"),
-        "tx_channel": extras.get("tx_channel", cell.get("tx_channel")),
-        "rsrp_level": cell.get("rsrp_level"),
-        "sinr_level": cell.get("sinr_level"),
-        "rsrq_level": cell.get("rsrq_level"),
-        "carrier": carrier,
-    }
+    cell = ubus_call("cellular.network", "cell_info", {"bus": BUS, "slot": slot})
+    return build_sample(modem, cell, _carrier.get(slot))
+
+
+_ws_fail = {"n": 0, "last_log": 0.0}
+WS_FAIL_LOG_EVERY_S = 60
+
+
+def _ws_failure(detail):
+    """Record one failed push and say so on stderr (procd forwards it to logd):
+    the first failure immediately, then at most once a minute — a dead
+    gl-session must be visible in logread without flooding it every 10 s."""
+    _ws_fail["n"] += 1
+    now = time.time()
+    if _ws_fail["n"] == 1 or now - _ws_fail["last_log"] >= WS_FAIL_LOG_EVERY_S:
+        _ws_fail["last_log"] = now
+        sys.stderr.write("collectd: gl-session notify failed (%d so far): %s\n"
+                         % (_ws_fail["n"], detail))
+        sys.stderr.flush()
+
+
+def ws_publish(name, sample):
+    """Push one frame to every web client subscribed to `name` via GL's own push
+    bus — the same mechanism cellular_manager uses for cellular.modems_status.
+    With no browser attached gl-session's handler simply has no client to send
+    to and still returns status 0 (gl-ngx-session.lua `notify`), so a non-zero
+    exit is ALWAYS a fault (gl-session not registered, ubusd down, message
+    rejected) — logged, never swallowed. True iff the frame was accepted."""
+    if not WS_PUSH:
+        return False
+    try:
+        out = subprocess.run(["ubus", "call", "gl-session", "notify",
+                              json.dumps({"name": name, "data": sample})],
+                             capture_output=True, timeout=5, text=True)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        _ws_failure(str(e))
+        return False
+    if out.returncode != 0:
+        _ws_failure("rc=%d %s" % (out.returncode,
+                                  ((out.stderr or out.stdout or "").strip())[:200]))
+        return False
+    if _ws_fail["n"]:
+        sys.stderr.write("collectd: gl-session notify recovered after %d failure(s)\n" % _ws_fail["n"])
+        sys.stderr.flush()
+        _ws_fail["n"] = 0
+    return True
 
 
 def _readfile(path):
@@ -384,28 +287,6 @@ def read_battery(root=None, t=None, pidf=None, limf=None):
         "lim": lim,
         "lim_gauge": lim_gauge,
     }
-
-
-def collect_sample():
-    modem = ubus_call("cellular.modem", "status")
-    if not modem:
-        return None
-    m = _modem_obj(modem)
-    bus = m.get("bus")
-    slot = m.get("current_sim_slot")
-    # Firmware 4.10: metrics live on cellular.network cell_info {bus,slot}.
-    # Firmware 4.8: that method does not exist (ubus_call → None) and we
-    # fall back to the wrapped networks[] payload. Prefer cell_info when
-    # it actually answered so we don't mix the two shapes.
-    net = None
-    if slot is not None:
-        args = {"slot": _as_slot(slot)}
-        if bus is not None:
-            args["bus"] = bus
-        net = ubus_call("cellular.network", "cell_info", args)
-    if not _is_cell_info_payload(net):
-        net = ubus_call("cellular.network", "info")
-    return build_sample(modem, net, ubus_call("cellular.sim", "status"))
 
 
 def trim(path, max_age_ms, max_lines, ref_ms=None):
@@ -563,9 +444,7 @@ def main():
     events_path = os.path.join(hist, "events.jsonl")
     latest_path = os.path.join(hist, "latest.json")
     battery_path = os.path.join(hist, "battery.jsonl")
-    sock_path = os.path.join(hist, "collectd.sock")
-    bc = Broadcaster(sock_path)
-    bc.start()
+    battery_latest_path = os.path.join(hist, "battery-latest.json")
 
     # Seed live tmpfs from eMMC backup when the option is on and this is a
     # fresh boot (empty tmpfs). Cursor starts at the newest t already on disk
@@ -589,22 +468,23 @@ def main():
     while state["go"]:
         try:
             # Battery FIRST, and gated on ELAPSED TIME rather than a tick count.
-            # A tick is not 4 s: ubus_call has an 8 s timeout and collect_sample
-            # makes three of them, so a bad tick can run ~24 s and `i % 5` would
-            # silently stretch the battery interval to minutes.
+            # A tick is not 10 s: ubus_call has an 8 s timeout and collect_sample
+            # makes two of them, so a bad tick can run ~16 s and a tick count
+            # would silently stretch the battery interval.
             if time.time() - last_batt >= BATT_INTERVAL:
                 last_batt = time.time()
                 b = read_battery()
                 if b is not None:
                     with open(battery_path, "a") as f:
                         f.write(json.dumps(b) + "\n")
+                    write_latest(battery_latest_path, b)
+                    ws_publish(WS_BATT_NAME, b)
             s = collect_sample()
             if s is not None:
-                line = json.dumps(s)
                 with open(samples_path, "a") as f:
-                    f.write(line + "\n")
-                bc.publish(line)
+                    f.write(json.dumps(s) + "\n")
                 write_latest(latest_path, s)
+                ws_publish(WS_NAME, s)
             i += 1
             if i % TRIM_EVERY == 0:
                 trim(samples_path, SAMPLE_MAX_AGE, SAMPLE_MAX_LINE)
@@ -631,8 +511,6 @@ def main():
     except Exception as e:
         sys.stderr.write("collectd final flush: %s\n" % e)
         sys.stderr.flush()
-
-    bc.close()
 
 
 if __name__ == "__main__":

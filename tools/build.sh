@@ -1,5 +1,5 @@
 #!/bin/sh
-# tools/build.sh - "build" = gzip to the exact filename the SPA requests.
+# tools/build.sh - "build" = gzip to the exact filename the SPA requests (GL 4.10).
 # nginx `gzip_static on` serves this .gz for /views/gl-sdk4-ui-mudimodem.common.js
 set -eu
 cd "$(dirname "$0")/.."

@@ -95,19 +95,11 @@ class ATToolTest(unittest.TestCase):
         finally:
             holder.close()
 
-    def test_recover_stopped_is_safe_without_gl_modem(self):
-        mm.recover_stopped()                # dev box has no gl_modem: no-op, no raise
-        self.assertEqual(mm.gl_modem_pids(), [])
-
-    def test_glmodem_sleep_noop_without_daemon(self):
-        with mm.GlModemSleep(True) as s:
-            self.assertEqual(s.stopped, [])
-
     def test_cli_envelope_ok(self):
         fm = FakeModem(b"\r\nRG650VNA\r\n\r\nOK\r\n")
         r = subprocess.run(
             [sys.executable, TOOL, "--envelope", "--timeout", "3",
-             "--port", fm.path, "--lock", self.lock, "--no-glsleep", "ATI"],
+             "--port", fm.path, "--lock", self.lock, "ATI"],
             capture_output=True, text=True, timeout=15)
         self.assertEqual(r.returncode, 0, r.stderr)
         first, _, rest = r.stdout.partition("\n")
@@ -120,7 +112,7 @@ class ATToolTest(unittest.TestCase):
         fm = FakeModem(b"\r\nOK\r\n"); fm.loop = True
         r = subprocess.run(
             [sys.executable, TOOL, "--envelope", "--timeout", "3",
-             "--port", fm.path, "--lock", self.lock, "--no-glsleep",
+             "--port", fm.path, "--lock", self.lock,
              "AT+ONE", "AT+TWO"],
             capture_output=True, text=True, timeout=15)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -133,7 +125,7 @@ class ATToolTest(unittest.TestCase):
         fm = FakeModem(b"\r\nERROR\r\n"); fm.loop = True
         r = subprocess.run(
             [sys.executable, TOOL, "--envelope", "--timeout", "3",
-             "--port", fm.path, "--lock", self.lock, "--no-glsleep",
+             "--port", fm.path, "--lock", self.lock,
              "AT+BAD", "AT+NEVER"],
             capture_output=True, text=True, timeout=15)
         heads = [l for l in r.stdout.splitlines() if l.startswith("MM-AT:")]
@@ -147,7 +139,7 @@ class ATToolTest(unittest.TestCase):
         fm = FakeModem(b"\r\nOK\r\n"); fm.loop = True
         r = subprocess.run(
             [sys.executable, TOOL, "--envelope", "--timeout", "3",
-             "--port", fm.path, "--lock", self.lock, "--no-glsleep",
+             "--port", fm.path, "--lock", self.lock,
              "--", "AT+ONE", "--timeout"],
             capture_output=True, text=True, timeout=15)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -162,49 +154,12 @@ class ATToolTest(unittest.TestCase):
             r = subprocess.run(
                 [sys.executable, TOOL, "--envelope", "--timeout", "2",
                  "--port", fm.path, "--lock", self.lock, "--lock-wait", "0.3",
-                 "--no-glsleep", "AT"],
+                 "AT"],
                 capture_output=True, text=True, timeout=15)
         finally:
             holder.close()
         self.assertEqual(r.returncode, 2)
         self.assertRegex(r.stdout.splitlines()[0], r"^MM-AT:busy:\d+$")
-
-    def test_recover_stopped_runs_only_after_lock_acquired(self):
-        """Fix 1: recovering a stale-stopped gl_modem must happen only once
-        THIS process exclusively holds the flock — not before contending for
-        it. Recovering earlier would race a legitimately-stopped gl_modem
-        that another worker has SIGSTOPped for its own in-flight send."""
-        fm = FakeModem()
-        calls = []
-        orig_pids, orig_state, orig_kill = mm.gl_modem_pids, mm.proc_state, mm.os.kill
-        mm.gl_modem_pids = lambda: [4242]
-        mm.proc_state = lambda pid: "T"
-        mm.os.kill = lambda pid, sig: calls.append((pid, sig))
-        try:
-            # (a) Opening the FIRST channel acquires the lock -> recovery
-            # of the (faked) stale-stopped gl_modem must run.
-            ch = mm.ATChannel(port=fm.path, lock=self.lock)
-            try:
-                self.assertIn((4242, mm.signal.SIGCONT), calls,
-                              "lock holder must recover a stale-stopped gl_modem")
-            finally:
-                ch.close()
-
-            # (b) While a holder legitimately has the lock, a contending
-            # open must fail with ChannelBusy and must NEVER have issued
-            # SIGCONT during its own failed attempt — only the process that
-            # actually acquires the lock may recover.
-            holder = mm.ATChannel(port=fm.path, lock=self.lock)
-            try:
-                calls.clear()
-                with self.assertRaises(mm.ChannelBusy):
-                    mm.ATChannel(port=fm.path, lock=self.lock, lock_wait=0.3)
-                self.assertEqual(calls, [],
-                                  "a busy/failed open must not SIGCONT gl_modem")
-            finally:
-                holder.close()
-        finally:
-            mm.gl_modem_pids, mm.proc_state, mm.os.kill = orig_pids, orig_state, orig_kill
 
     def test_write_failure_yields_defined_envelope(self):
         """Fix 2: an OSError from the initial os.write() inside send() must
@@ -223,7 +178,7 @@ class ATToolTest(unittest.TestCase):
             with contextlib.redirect_stdout(buf):
                 rc = mm.main(["--envelope", "--timeout", "2",
                               "--port", fm.path, "--lock", self.lock,
-                              "--no-glsleep", "AT"])
+                              "AT"])
         finally:
             mm.os.write = orig_write
         out = buf.getvalue()

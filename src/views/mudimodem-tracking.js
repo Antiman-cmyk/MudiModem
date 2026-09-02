@@ -7,14 +7,14 @@
 // SILENT POST to /rpc (window.$axios directly, NOT $rpcRequest) so a failed
 // background poll can't trigger GL's global "Unknown error" banner — see
 // rpcSilent(). -> { samples:[...], events:[...], now }. The page fetches the full
-// 24h once on mount, then polls incrementally with `since`.
+// visible window once on mount, then stays live on the collector's pushes.
 // Handover/failover ticks are DERIVED here from the sample stream (net events
 // aren't persisted); user/watchdog events come from the server.
 //
 // Times are the box clock (os.time()*1000). We render relative to a skew-
 // corrected box-now so the axis doesn't jump if the browser clock differs.
 //
-// The middle bus is CELL ID (cell_info.id) + ARFCN — the box carries NO PCI over
+// The middle bus is CELL ID + ARFCN (4.10 collector samples also carry PCI) — over
 // ubus. Metrics arrive as numbers already (parsed by the collector); _level
 // buckets drive the GL quality ramp. All colour is GL theme tokens.
 module.exports = (function () {
@@ -45,6 +45,7 @@ module.exports = (function () {
   var RANGES = [[15,"15 m"],[60,"1 h"],[360,"6 h"],[1440,"24 h"]];
   var TICKSTEP = { 15:2, 60:10, 360:60, 1440:240 };
   var RECENT_USER_MS = 8000;
+  var STALL_MS = 45000;            // no push for this long => one catch-up fetch
   // PADL / PADR clear the RSRP (left) and SINR (right) y-axis labels. Was 30/12
   // when the overlay had no numeric scale and the legend carried every domain.
   var PADL = 42, PADR = 36, BUS_H = 20, PLOT_H = 230;
@@ -61,7 +62,7 @@ module.exports = (function () {
 
     data: function () {
       return { winW: 15, pinnedM: null, tick: 0, live: true, width: 900,
-        styleId: "mmt-css", cursor: null, poll: null,
+        styleId: "mmt-css", cursor: null, poll: null, pushSeenAt: 0,
         samples: [], events: [], lastT: 0, serverNow: 0, serverNowAt: 0,
         loading: true, err: "", fetching: false,
         // how far back we've fetched (epoch ms, BOX clock); null = nothing yet.
@@ -72,6 +73,18 @@ module.exports = (function () {
     },
 
     computed: {
+      // The collector's pushes (mudimodem.collect / mudimodem.event) land in the
+      // SPA's status store; watching them is how this page stays live.
+      pushedSample: function () {
+        var g = this.$store && this.$store.getters;
+        var s = g && g.moduleStatus ? g.moduleStatus("mudimodem.collect") : null;
+        return (s && s.t) ? s : null;
+      },
+      pushedEvent: function () {
+        var g = this.$store && this.$store.getters;
+        var e = g && g.moduleStatus ? g.moduleStatus("mudimodem.event") : null;
+        return (e && e.t) ? e : null;
+      },
       // handover/failover ticks derived from the sample stream, merged with the
       // server's user/watchdog events, newest last. Depends on `tick` for polling.
       allEvents: function () {
@@ -79,6 +92,15 @@ module.exports = (function () {
         var derived = this.deriveNetEvents(this.samples, this.events);
         return this.events.concat(derived).sort(function (a, b) { return a.t - b.t; });
       }
+    },
+
+    watch: {
+      "pushedSample.t": function () { this.onPush(this.pushedSample); },
+      // Deep, on the object: event `t` is whole-second (os.time()*1000 in the
+      // backend, date +%s in the watchdog), so two events stamped in the same
+      // second share a `t` and a `.t` watcher would never fire for the second
+      // one. onEventPush dedupes replays by (t, label) itself.
+      "pushedEvent": { deep: true, handler: function (e) { this.onEventPush(e); } }
     },
 
     created: function () { this.injectStyle(); },
@@ -90,9 +112,13 @@ module.exports = (function () {
       this._onResize = function () { self.measure(); };
       window.addEventListener("resize", this._onResize);
       this.fetchHistory();                        // initial: just the visible window
+      // No polling: samples and events arrive as pushes. The timer is only a
+      // stall guard — when no push has landed for a while (collector restart,
+      // websocket reconnect) it fetches the tail once.
+      this.pushSeenAt = Date.now();
       this.poll = setInterval(function () {
-        if (self.live) self.fetchHistory({ since: self.lastT, merge: true });
-      }, 10000);
+        if (self.live && Date.now() - self.pushSeenAt > STALL_MS) self.fetchHistory({ since: self.lastT, merge: true });
+      }, 30000);
     },
     // Keep the viewBox width in sync with the rendered width. At mount the lanes
     // element is usually absent (loading state), so the initial measure() no-ops
@@ -195,6 +221,29 @@ module.exports = (function () {
         var w = this.pendingWindow; this.pendingWindow = null;
         this.fetchHistory({ window: w });
       },
+      // A live collector sample (mudimodem.collect push): append it exactly as
+      // an incremental fetch would have. The box stamped `t`, so it also
+      // advances the box-clock reference without a round-trip.
+      onPush: function (s) {
+        if (!s || !s.t || s.t <= this.lastT) return;
+        this.pushSeenAt = Date.now();
+        this.samples = this.samples.concat([s]);
+        this.lastT = s.t;
+        this.serverNow = s.t; this.serverNowAt = Date.now();
+        var cut = s.t - 24 * 3600 * 1000;
+        if (this.samples.length && this.samples[0].t < cut)
+          this.samples = this.samples.filter(function (x) { return x.t >= cut; });
+        this.tick++;
+      },
+      // A user/watchdog event (mudimodem.event push) — Keep, Revert, auto-revert.
+      onEventPush: function (e) {
+        if (!e || !e.t) return;
+        for (var i = this.events.length - 1; i >= 0 && this.events[i].t >= e.t; i--) {
+          if (this.events[i].t === e.t && this.events[i].label === e.label) return;   // replay
+        }
+        this.events = this.events.concat([e]);
+        this.tick++;
+      },
       // pure: derive net (handover/failover) events from consecutive samples,
       // suppressing any within RECENT_USER_MS of a known user/watchdog event so a
       // change WE applied isn't double-counted as a network event.
@@ -206,18 +255,53 @@ module.exports = (function () {
                 (known[i].kind === "user" || known[i].kind === "dog")) return true;
           return false;
         };
+        // Topology signature of a sample: slot + serving cell + RAT + the PCC's
+        // band/pci/arfcn. A no-service sample (null id) has NO signature and can
+        // neither start nor end a handover — an outage is a gap, not an event.
+        // SCC add/remove (CA) is deliberately NOT a handover — and GL reports a
+        // CA add/drop on the SAME cell as network_type 4 <-> 41 (LTE <-> LTE+),
+        // so that flip is collapsed before signing or every CA change would
+        // read as a "Handover … (carrier change)".
+        var pcc = function (x) { return (Array.isArray(x.signals) && x.signals[0]) || x; };
+        var ratKey = function (x) {
+          var nt = x.network_type;
+          if (nt === 41 || nt === "41") nt = 4;
+          if (nt != null) return String(nt);
+          return String(x.mode || "").replace(/\+$/, "");
+        };
+        var sig = function (x) {
+          if (x.id == null) return null;
+          var c = pcc(x);
+          return [x.id, ratKey(x), c.band, c.pci, c.earfcn != null ? c.earfcn : x.tx_channel].join(":");
+        };
         for (var i = 0; i < samples.length; i++) {
           var s = samples[i];
           if (last && !recentUser(s.t)) {
             if (String(s.slot) !== String(last.slot)) {
               out.push({ t: s.t, kind: "net", label: "Failover",
                 detail: "Data now on SIM " + s.slot + (s.carrier ? " · " + s.carrier : "") });
-            } else if (s.id != null && last.id != null && String(s.id) !== String(last.id)) {
-              out.push({ t: s.t, kind: "net", label: "Handover",
-                detail: "Cell " + last.id + " → " + s.id + (s.band != null ? " (" + s.band + ")" : "") });
+              // The slot changed: this sample is the new baseline, registered
+              // or not. Keeping the old slot's cell as `last` would re-compare
+              // every not-yet-registered sample on the new slot against it and
+              // emit the same failover once per 10 s tick.
+              last = s;
+              continue;
+            } else {
+              var a = sig(last), b = sig(s);
+              if (a && b && a !== b) {
+                var fmt = function (x) {
+                  var c = pcc(x);
+                  return (c.band != null ? ((/NR5G/.test(x.mode || "") ? " n" : " B") + c.band) : "");
+                };
+                out.push({ t: s.t, kind: "net", label: "Handover",
+                  detail: "Cell " + last.id + " → " + s.id + fmt(s) +
+                          (b.split(":")[0] === a.split(":")[0] ? " (carrier change)" : "") });
+              }
             }
           }
-          last = s;
+          // A no-service sample keeps `last` (so the next registered sample
+          // compares against the pre-outage cell) but never emits.
+          if (s.id != null) last = s; else if (!last) last = s;
         }
         return out;
       },

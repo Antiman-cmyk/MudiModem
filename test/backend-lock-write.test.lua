@@ -2,9 +2,10 @@
 -- (cell kind). Shims oui.ubus, ngx (glc), os.execute (watchdog arm). No box.
 local PENDING = assert(os.getenv("MUDIMODEM_PENDING"))
 local ARMED   = assert(os.getenv("MUDIMODEM_ARMED"))
-local STALE   = assert(os.getenv("MUDIMODEM_STALE"))
 
 local at_log = {}
+local no_slot = false
+local no_plmn = false      -- cellular.sim info carries no mcc/mnc (SIM searching / status-0 wedge)
 local lock5_reply = '\r\n+QNWLOCK: "common/5g",0\r\n\r\nOK\r\n'
 local lock4_reply = '\r\n+QNWLOCK: "common/4g",0\r\n\r\nOK\r\n'
 local setfeat_calls = {}
@@ -28,24 +29,11 @@ package.loaded["oui.ubus"] = {
       end
       return { data = "\r\nOK\r\n" }
     elseif object == "cellular.modem" and method == "status" then
-      return { modems = { { bus = "cpu", current_sim_slot = "1" } } }
+      if no_slot then return { modems = { { bus = "cpu" } } } end
+      return { modems = { { bus = "cpu", current_sim_slot = 1 } } }   -- GL's no-arg modems[] form
     elseif object == "cellular.sim" and method == "info" then
-      return { sims = { { slot = "1", mcc = "310", mnc = "260" } } }
-    elseif object == "cellular.modem" and method == "get_all_config" then
-      -- Non-empty and slot-matching on purpose: if a future regression makes
-      -- confirm() fall through past the KIND=="cell" early-return, this makes
-      -- the "if sf then" block in the general (band) path actually live,
-      -- rather than trivially nil -- so scenario 6 exercises the same code a
-      -- band confirm would, and any regression that also loosens the `any`
-      -- gate (the other thing currently keeping a cell confirm from writing
-      -- band config) has something real to write.
-      return { slot_feature = { ["s1_bcpu_test"] = {
-        network_mode = "NR5G",
-        band = { band_enable = true, band_filter_mode = 0,
-                 band_list = { LTE = {}, ["NR-SA"] = { 71 }, ["NR-NSA"] = {} } } } } }
-    elseif object == "cellular.modem" and method == "set_feature_config" then
-      setfeat_calls[#setfeat_calls + 1] = params
-      return { ok = true, changed = true }
+      if no_plmn then return { sims = { { slot = 1, mcc = "", mnc = "" } } } end
+      return { sims = { { slot = 1, mcc = "310", mnc = "260" } } }
     end
     return {}
   end
@@ -63,6 +51,9 @@ ngx = {
     if body:find("get_cell_tower") then
       return { status = 200, body = '0 {"slot1":{},"slot2":{}}' }
     end
+    if body:find("get_band_config") then
+      return { status = 200, body = '0 {"band_enable":false,"network_mode":"AUTO","supports_band":true}' }
+    end
     return { status = 200, body = "0 {}" }
   end },
 }
@@ -73,6 +64,23 @@ os.execute = function(cmd)
   if cmd:find("watch") then local f = io.open(ARMED, "w"); if f then f:close() end end
   return true
 end
+-- revert_now (cell) runs the watchdog's `restore-now` through io.popen and
+-- reads its JSON line. Shim it: record the command and mimic the shell's
+-- side effects (pending + armed removed on success, kept on failure).
+local popen_cmds, restore_ok = {}, true
+local real_popen = io.popen
+io.popen = function(cmd)
+  popen_cmds[#popen_cmds + 1] = cmd
+  if not cmd:find("restore%-now") then return real_popen(cmd) end
+  local out
+  if restore_ok then
+    os.remove(PENDING); os.remove(ARMED)
+    out = '{"ok":true,"kind":"cell"}\n'
+  else
+    out = '{"ok":false,"kind":"cell","error":"nothing could be written back; pending kept, watchdog still armed"}\n'
+  end
+  return { read = function() return out end, close = function() return true end }
+end
 
 local M = dofile(assert(os.getenv("MM_PLUGIN")))
 assert(type(M.set_cell_lock) == "function", "set_cell_lock missing")
@@ -80,9 +88,9 @@ assert(type(M.clear_cell_lock) == "function", "clear_cell_lock missing")
 assert(type(M.scan_cells) == "function", "scan_cells missing")
 
 local function reset()
-  at_log = {}; glc_calls = {}; exec_cmds = {}; setfeat_calls = {}
-  os.remove(PENDING); os.remove(ARMED); os.remove(STALE)
-  glc_fail = false
+  at_log = {}; glc_calls = {}; exec_cmds = {}; popen_cmds = {}; restore_ok = true
+  os.remove(PENDING); os.remove(ARMED)
+  glc_fail = false; no_slot = false; no_plmn = false
   lock5_reply = '\r\n+QNWLOCK: "common/5g",0\r\n\r\nOK\r\n'
   lock4_reply = '\r\n+QNWLOCK: "common/4g",0\r\n\r\nOK\r\n'
 end
@@ -135,63 +143,85 @@ r = M.set_cell_lock({ rat = "5g", pci = 516, freq = 127490, scs = 15, band = 71 
 assert(r.error and tostring(r.error):find("20002044"), "GL error code not surfaced")
 assert(not io.open(PENDING, "r"), "pending must be removed on GL failure")
 
--- 6. confirm on a cell pending: clears it, does NOT touch set_feature_config.
--- set_feature_config is called via oui.ubus (the shim above), NOT via
--- ngx.location.capture/glc_calls -- so this must scan setfeat_calls, not
--- glc_calls, or a regression that removes the `KIND=="cell"` early-return in
--- M.confirm (falling through into the band-durability set_feature_config
--- path) would go undetected.
+-- 6. confirm on a cell pending: clears it and writes NOTHING (GL's store was
+--    written when the lock was applied).
 reset()
 assert(M.set_cell_lock({ rat = "5g", pci = 516, freq = 127490, scs = 15, band = 71 }).ok)
-glc_calls = {}; setfeat_calls = {}
+glc_calls = {}
 r = M.confirm({})
-assert(r.ok and r.confirmed, "confirm failed")
+assert(r.ok and r.confirmed and r.durable == true, "confirm failed")
 assert(not io.open(PENDING, "r"), "pending must be gone after confirm")
-assert(#setfeat_calls == 0, "cell confirm must not touch band config (set_feature_config)")
+assert(#glc_calls == 0, "cell confirm must not write anything")
 
--- 7. revert_now on a cell pending: raw-AT unlock (C1) + GL unlock + mode
---    restore + pending gone.
+-- 7. revert_now on a cell pending: the modem-side undo is the watchdog's own
+--    `restore-now` (ONE implementation — raw-AT unlock + pref restores live in
+--    test/revert.test.sh), run FIRST; THEN GL's store is reconciled here.
 reset()
 assert(M.set_cell_lock({ rat = "5g", pci = 516, freq = 127490, scs = 15, band = 71 }).ok)
-at_log = {}; glc_calls = {}
+at_log = {}; glc_calls = {}; popen_cmds = {}
 r = M.revert_now({})
-assert(r.ok and r.reverted, "revert_now failed")
-local raw_unlocked, unlocked
-for _, c in ipairs(at_log) do if c:find('QNWLOCK="common/5g",0', 1, true) then raw_unlocked = true end end
+assert(r.ok and r.reverted, "revert_now failed: " .. tostring(r.error))
+assert(#popen_cmds == 1 and popen_cmds[1]:find("mudimodem%-revert restore%-now"), "revert_now must run the watchdog's restore-now: " .. tostring(popen_cmds[1]))
+for _, c in ipairs(at_log) do assert(not c:find("QNWLOCK") and not c:find("QNWPREFCFG"), "no second AT restore implementation in Lua: " .. c) end
+local unlocked
 for _, c in ipairs(glc_calls) do if c:find('"lock":false') then unlocked = true end end
-assert(raw_unlocked, "revert_now must issue the GL-independent raw-AT unlock (C1)")
-assert(unlocked, "revert_now must also GL-unlock to reconcile the store")
-local mode_restored, disable_restored, savectrl_restored
-for _, c in ipairs(at_log) do
-  if c:find('mode_pref",NR5G') then mode_restored = true end
-  if c:find('nr5g_disable_mode",0') then disable_restored = true end
-  if c:find('save_ctrl",0,0') then savectrl_restored = true end
-end
-assert(mode_restored, "revert_now must restore mode_pref")
-assert(disable_restored, "revert_now must restore nr5g_disable_mode")
-assert(savectrl_restored, "revert_now must restore save_ctrl")
+assert(unlocked, "revert_now must GL-unlock to reconcile the store (after the modem-side undo)")
+assert(r.gl_reconciled == true, "GL reconcile reported")
 assert(not io.open(PENDING, "r"), "pending must be gone after revert")
 
--- 7b. C1: when GL's unlock FAILS, revert_now STILL raw-AT-unlocks (link freed)
---     and drops the STALE marker so the frontend reconciles later.
+-- 7b. When GL's unlock FAILS, the link is already free (restore-now ran) and
+--     the store is reported as not reconciled (get_lock's derived `stale` —
+--     GL locked + modem unlocked — then offers "Clear it"; no marker file).
 reset()
 assert(M.set_cell_lock({ rat = "5g", pci = 516, freq = 127490, scs = 15, band = 71 }).ok)
-at_log = {}; glc_calls = {}
+at_log = {}; glc_calls = {}; popen_cmds = {}
 glc_fail = true                       -- set_cell_tower(lock:false) now returns an error code
 r = M.revert_now({})
 assert(r.ok and r.reverted, "revert_now must still report reverted on GL failure")
-local raw_unlocked2
-for _, c in ipairs(at_log) do if c:find('QNWLOCK="common/5g",0', 1, true) then raw_unlocked2 = true end end
-assert(raw_unlocked2, "revert_now must raw-AT-unlock even when GL unlock fails (link safety)")
-assert(io.open(STALE, "r"), "revert_now must drop the STALE marker when GL unlock fails")
+assert(#popen_cmds == 1, "restore-now must run regardless of GL")
+assert(r.gl_reconciled == false and r.gl_error, "revert_now must report the failed GL reconcile")
 assert(not io.open(PENDING, "r"), "pending must be gone after revert even on GL failure")
 
--- 8. clear_cell_lock: GL unlock + stale marker removed.
+-- 7c. restore-now itself fails (nothing could be written): pending + watchdog
+--     stay, GL is NOT touched (the modem is still locked), error surfaced.
 reset()
-local sf = io.open(STALE, "w"); sf:write("x"); sf:close()
+assert(M.set_cell_lock({ rat = "5g", pci = 516, freq = 127490, scs = 15, band = 71 }).ok)
+at_log = {}; glc_calls = {}; popen_cmds = {}
+restore_ok = false
+r = M.revert_now({})
+assert(r.error and r.error:find("pending kept"), "failed restore must say the pending is kept; got " .. tostring(r.error))
+for _, c in ipairs(glc_calls) do assert(not c:find("set_cell_tower"), "GL must not be told 'unlocked' while the modem is still locked") end
+assert(io.open(PENDING, "r"), "pending must remain for the watchdog")
+assert(io.open(ARMED, "r"), "watchdog must stay armed")
+
+-- 8. clear_cell_lock: GL unlock (slot-addressed) + mode restored to AUTO at the
+--    CONFIRMED sub_id.
+reset()
 r = M.clear_cell_lock({})
-assert(r.ok, "clear_cell_lock failed")
-assert(not io.open(STALE, "r"), "stale marker must be cleared")
+assert(r.ok and r.mode == "AUTO", "clear_cell_lock failed")
+local gl_unlocked, mode_auto
+for _, c in ipairs(glc_calls) do if c:find('"lock":false') and c:find('"slot":1') then gl_unlocked = true end end
+for _, c in ipairs(at_log) do if c:find('mode_pref",AUTO @1', 1, true) then mode_auto = true end end
+assert(gl_unlocked, "clear_cell_lock must GL-unlock slot 1")
+assert(mode_auto, "clear_cell_lock must reset mode_pref to AUTO at the matched sub_id")
+
+-- 8b. sub_id UNCONFIRMED (SIM has no PLMN yet): set_cell_lock refuses outright —
+--     its PREV snapshot and the watchdog's revert would address a guessed
+--     subscription; clear_cell_lock still GL-unlocks the slot (needs no sub_id)
+--     but withholds the AT mode writes and says so.
+reset()
+no_plmn = true
+r = M.set_cell_lock({ rat = "5g", pci = 516, freq = 127490, scs = 15, band = 71 })
+assert(r.error and r.error:find("sub_id"), "set_cell_lock must refuse on an unconfirmed sub_id; got " .. tostring(r.error))
+for _, c in ipairs(glc_calls) do assert(not c:find("set_cell_tower"), "no GL write on an unconfirmed sub_id") end
+assert(not io.open(PENDING, "r"), "no pending on refusal")
+at_log = {}; glc_calls = {}
+r = M.clear_cell_lock({})
+assert(r.ok and r.warning and r.warning:find("not reset"), "clear_cell_lock must unlock but warn; got " .. tostring(r.warning))
+local gl_unlocked2
+for _, c in ipairs(glc_calls) do if c:find('"lock":false') then gl_unlocked2 = true end end
+assert(gl_unlocked2, "clear_cell_lock must still GL-unlock the slot")
+for _, c in ipairs(at_log) do assert(not c:find("QNWPREFCFG") and not c:find("save_ctrl"), "no AT mode writes at a guessed sub_id: " .. c) end
 
 -- 9. set_bands now ALSO refuses while a pending exists (shared interlock:
 -- a band apply must not clobber a cell pending, or vice versa).
@@ -210,5 +240,16 @@ r = M.set_cell_lock({ rat = "5g", pci = 516, freq = 127490, scs = 15, band = 71 
 assert(r.error and r.error:find("could not read"), "must refuse when lock state can't be read; got " .. tostring(r.error))
 for _, c in ipairs(glc_calls) do assert(not c:find("set_cell_tower"), "must not call set_cell_tower when lock state is unknown") end
 assert(not io.open(PENDING, "r"), "no pending file must remain after a failed-read refusal")
+
+-- 11. No active slot (modem resetting / no SIM): every write REFUSES rather
+--     than falling back to slot 1 (which would mis-target SIM2/eSIM).
+reset()
+no_slot = true
+assert(M.set_cell_lock({ rat = "5g", pci = 516, freq = 127490, scs = 15, band = 71 }).error:find("no active SIM"), "set_cell_lock must refuse without a slot")
+assert(M.clear_cell_lock({}).error:find("no active SIM"), "clear_cell_lock must refuse without a slot")
+assert(M.scan_cells({}).error:find("no active SIM"), "scan_cells must refuse without a slot")
+assert(M.set_bands({ sa = { 71 } }).error:find("no active SIM"), "set_bands must refuse without a slot")
+for _, c in ipairs(glc_calls) do assert(not c:find("set_cell_tower") and not c:find("scan_cell_tower") and not c:find("set_band_config"), "nothing may be written without a slot") end
+assert(not io.open(PENDING, "r"), "no pending may remain")
 
 print("backend-lock-write.test.lua: all ok")

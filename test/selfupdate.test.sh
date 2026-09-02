@@ -54,4 +54,60 @@ MUDIMODEM_UPDATE_LOG="$LOG" MUDIMODEM_UPDATE_CMD="true" \
 rmdir "$LOCK"
 
 rm -rf "$T"
+
+echo "6. default command follows the base recorded in version.json (fork/branch installs)"
+T6=$(mktemp -d); LOCK="$T6/lock.d"; RESULT="$T6/result.json"; LOG="$T6/log"
+VF="$T6/version.json"; OUT="$T6/base"
+printf '{"version":"2.0.0","base":"https://raw.githubusercontent.com/someone/MudiModem/feature-x"}\n' > "$VF"
+# A fake curl: its stdout is what `| sh` executes, so make it record the env sh sees.
+FAKEBIN=$(mktemp -d)
+cat > "$FAKEBIN/curl" <<EOF
+#!/bin/sh
+echo "\$2" > "$OUT.url"
+echo 'echo "\$MUDIMODEM_BASE" > $OUT'
+EOF
+chmod +x "$FAKEBIN/curl"
+PATH="$FAKEBIN:$PATH" MUDIMODEM_UPDATE_LOCK="$LOCK" MUDIMODEM_UPDATE_RESULT="$RESULT" \
+  MUDIMODEM_UPDATE_LOG="$LOG" MUDIMODEM_VERSION_FILE="$VF" sh "$SCRIPT"
+grep -q 'someone/MudiModem/feature-x/install.sh' "$OUT.url" || fail "curl must fetch install.sh from the recorded base"
+[ "$(cat "$OUT")" = "https://raw.githubusercontent.com/someone/MudiModem/feature-x" ] || fail "install.sh must inherit MUDIMODEM_BASE"
+grep -q '"ok":true' "$RESULT" || fail "expected ok result"
+echo "  ok  - self-update follows the recorded base"
+rm -rf "$T6" "$FAKEBIN"
+
+echo "7. a recorded base that is not a plain URL is IGNORED (falls back to upstream), never executed"
+T7=$(mktemp -d); LOCK="$T7/lock.d"; RESULT="$T7/result.json"; LOG="$T7/log"
+VF="$T7/version.json"; OUT="$T7/base"; PWNED="$T7/PWNED"
+printf '{"version":"2.0.0","base":"https://x/$(touch %s)"}\n' "$PWNED" > "$VF"
+FAKEBIN=$(mktemp -d)
+cat > "$FAKEBIN/curl" <<EOF
+#!/bin/sh
+echo "\$2" > "$OUT.url"
+echo 'echo "\$MUDIMODEM_BASE" > $OUT'
+EOF
+chmod +x "$FAKEBIN/curl"
+PATH="$FAKEBIN:$PATH" MUDIMODEM_UPDATE_LOCK="$LOCK" MUDIMODEM_UPDATE_RESULT="$RESULT" \
+  MUDIMODEM_UPDATE_LOG="$LOG" MUDIMODEM_VERSION_FILE="$VF" sh "$SCRIPT"
+[ -e "$PWNED" ] && fail "shell metacharacters in the recorded base were EXECUTED"
+grep -q 'Antiman-cmyk/MudiModem/main/install.sh' "$OUT.url" || fail "a bad base must fall back to upstream main (got: $(cat "$OUT.url"))"
+[ "$(cat "$OUT")" = "https://raw.githubusercontent.com/Antiman-cmyk/MudiModem/main" ] || fail "install.sh must see the fallback base"
+echo "  ok  - unsafe base ignored, nothing executed"
+rm -rf "$T7" "$FAKEBIN"
+
+echo "8. a base with a port (dev box http server) is accepted — same allowlist as the Lua app_version"
+T8=$(mktemp -d); LOCK="$T8/lock.d"; RESULT="$T8/result.json"; LOG="$T8/log"
+VF="$T8/version.json"; OUT="$T8/base"
+printf '{"version":"2.0.0","base":"http://192.168.8.190:8000"}\n' > "$VF"
+FAKEBIN=$(mktemp -d)
+cat > "$FAKEBIN/curl" <<EOF
+#!/bin/sh
+echo "\$2" > "$OUT.url"
+echo 'echo "\$MUDIMODEM_BASE" > $OUT'
+EOF
+chmod +x "$FAKEBIN/curl"
+PATH="$FAKEBIN:$PATH" MUDIMODEM_UPDATE_LOCK="$LOCK" MUDIMODEM_UPDATE_RESULT="$RESULT" \
+  MUDIMODEM_UPDATE_LOG="$LOG" MUDIMODEM_VERSION_FILE="$VF" sh "$SCRIPT"
+grep -q '^http://192.168.8.190:8000/install.sh$' "$OUT.url" || fail "a base with a port must be followed (got: $(cat "$OUT.url"))"
+echo "  ok  - port base accepted"
+rm -rf "$T8" "$FAKEBIN"
 echo "selfupdate OK"

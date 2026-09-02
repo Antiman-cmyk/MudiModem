@@ -1,0 +1,11 @@
+{
+  "index": 10,
+  "view": "internet",
+  "icon": "internet",
+  "level": 1,
+  "global_sockets": [
+    "cellular.modems_info",
+    "cellular.modems_status",
+    "cellular.networks_info"
+  ]
+}
