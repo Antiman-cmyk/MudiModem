@@ -419,7 +419,18 @@ index, not a slot number.** Verified:
 | **1** | **T-Mobile (310260)** | **1** — the active/serving SIM | |
 | 2 | AT&T | 2 (falls back to 0) |
 
-Slot 1 ↔ sub_id 1 is a **coincidence**; slot 2 ↔ sub_id **0**.
+~~Slot 1 ↔ sub_id 1 is a coincidence; slot 2 ↔ sub_id 0.~~ **Corrected 2026-10-28:** the table's
+own evidence is sub_id 1 → slot 1 and sub_id **2** → slot 2; 0 is the floating one. The old
+resolver tried `{1, 0, 2}` and PLMN-matched, which **could not tell SIM1 from SIM2**: with two SIMs
+of the same carrier sub_id 1 matched for slot 2 (every AT read/write hit SIM1), a SIM2 lookup could
+land on the unstable 0, and a roaming SIM (QSPN = visited PLMN ≠ IMSI home PLMN) never confirmed, so
+`set_cell_lock` refused. `resolve_active` now tries **the slot's own sub_id first, then the other,
+never 0**, confirms by **IMSI (`AT+CIMI`) first** (unique per SIM, roaming-proof), PLMN only as the
+fallback, and keys its cache on the SIM's iccid. 🔴 `AT+CIMI` per `sub_id` through `modem.CPU.AT`
+is not yet run on a live box — if it doesn't answer, the PLMN path (slot-first) still applies.
+Writes (`set_bands` / `set_cell_lock` / `clear_cell_lock`) also take the `slot` the page read its
+picture for and refuse when the active SIM has changed; the page re-reads on a slot change.
+`panic` clears modem locks on sub_ids 1 **and** 2.
 
 > ⚠️ **`sub_id=0` silently answers for different subscriptions at different times.** Same command,
 > minutes apart: `AT+QNWPREFCFG="nr5g_band"` @ sub_id=0 returned `71` (T-Mobile's), then
@@ -427,8 +438,8 @@ Slot 1 ↔ sub_id 1 is a **coincidence**; slot 2 ↔ sub_id **0**.
 > **This is worse than always-wrong — it looks right most of the time.** A whole band analysis was
 > built on it this session and thrown away.
 
-**RULE: never send `sub_id=0`.** Resolve the active slot from ubus (`cellular.sim info` /
-`cellular.network info` — the ground truth), then pass its explicit sub_id.
+**RULE: never send `sub_id=0`.** Resolve the active slot from ubus (`cellular.modem status`
+`current_sim_slot` — the ground truth), then the sub_id that answers for that SIM (`resolve_active`).
 
 **Build AT payloads with proper JSON escaping** — the inner quotes of `AT+QNWPREFCFG="nr5g_band"`
 must be escaped or ubus silently returns empty/ERROR. Working helper in the reference doc §Provenance.

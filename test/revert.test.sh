@@ -105,6 +105,10 @@ inlog '"slot":2,"band_enable":false' \
                                   && pass "slot 2 opened too" || fail "slot 2 not opened"
 inlog 'QNWLOCK=\\"common/4g\\",0' && pass "cleared 4g lock" || fail "did not clear 4g lock"
 inlog 'QNWLOCK=\\"common/5g\\",0' && pass "cleared 5g lock" || fail "did not clear 5g lock"
+# A lock on SIM2 lives on sub_id 2: clearing only sub_id 1 left it in place.
+inlog 'common/5g\\",0","timeout":10,"sub_id":1' && inlog 'common/5g\\",0","timeout":10,"sub_id":2' \
+                                  && pass "modem locks cleared on both subscriptions" || fail "panic missed a subscription"
+inlog '"sub_id":0'                && fail "panic sent sub_id 0" || pass "never sub_id 0"
 [ ! -f "$WORK/pending" ]          && pass "pending cleared" || fail "pending not cleared"
 
 echo "6. watch (KIND=cell): reverts by raw-AT unlock + restores prefs (no marker file: stale is derived live)"

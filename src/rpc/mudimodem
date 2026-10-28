@@ -190,54 +190,120 @@ local function qspn_plmn(blob)
   return last                                          -- "310260" or nil
 end
 
--- Resolve the sub_id that actually talks to the ACTIVE subscription.
--- sub_id=0 is unstable (CLAUDE.md §6), so we MATCH by PLMN rather than assume a
--- slot->sub_id mapping.  Returns (sub_id, operator_plmn, matched_bool).
-local function resolve_sub_id(want_plmn)
-  for _, sid in ipairs({ 1, 0, 2 }) do            -- prefer 1 (never lead with 0)
-    local plmn = qspn_plmn(at("AT+QSPN", sid))
-    if plmn and plmn ~= "" then
-      if not want_plmn or plmn == want_plmn then
-        return sid, plmn, (want_plmn ~= nil)
-      end
-    end
+-- The IMSI (14-15 digits) out of an AT+CIMI reply ("\r\n310260123456789\r\n\r\nOK").
+local function cimi_imsi(blob)
+  if not blob then return nil end
+  for d in blob:gmatch("%d+") do
+    if #d >= 14 and #d <= 15 then return d end
   end
-  return 1, nil, false                            -- fallback: sub_id 1, flagged
+  return nil
 end
 
--- Resolve the active subscription end-to-end: find the serving slot's PLMN from
--- ubus, then the sub_id whose QSPN matches it. Returns (sub_id, plmn, matched, slot).
--- ⚠️ `slot` is nil when GL has no active slot (no SIM, modem resetting): every
--- caller must REFUSE to write in that case — never fall back to slot 1, which
--- would mis-target SIM2/eSIM.
+-- A SIM field as a plain digit string (GL sends strings; a JSON number is
+-- formatted without an exponent so a 15-digit IMSI survives), nil otherwise.
+local function digits(v)
+  v = nn(v)
+  if type(v) == "number" then v = string.format("%.0f", v) end
+  if type(v) ~= "string" then return nil end
+  return v:match("^%s*(%d+)%s*$")
+end
+
+-- sub_ids to try for a slot, in order. On this box sub_id 1 answers for slot 1
+-- and sub_id 2 for slot 2, while sub_id 0 floats between subscriptions
+-- (reference §1) — so the slot's own number leads, the other explicit sub_id
+-- follows, and 0 is never sent (CLAUDE.md §6). Leading with 1 for every slot
+-- was the SIM1/SIM2 mix-up: with two SIMs of the same carrier sub_id 1 PLMN-
+-- matched for slot 2 too, and every AT read/write then hit SIM1.
+local function subid_candidates(slot)
+  local out, seen = {}, {}
+  for _, sid in ipairs({ slot or 1, 1, 2 }) do
+    if sid > 0 and not seen[sid] then seen[sid] = true; out[#out + 1] = sid end
+  end
+  return out
+end
+
+-- Resolve the sub_id that actually talks to the active SIM.
+-- 1. IMSI (AT+CIMI) when GL reports the slot's IMSI: unique per SIM, so it
+--    separates two SIMs of the same carrier and is unaffected by roaming. If
+--    CIMI answers but no candidate carries this IMSI, the answer is "not
+--    confirmed" — a PLMN match then could only pick the wrong SIM.
+-- 2. Otherwise PLMN: QSPN's registered PLMN against the SIM's home mcc+mnc
+--    (cannot separate same-carrier SIMs — the candidate order covers that —
+--    and misses while roaming).
+-- Unconfirmed => the slot's own sub_id, flagged. Returns (sub_id, plmn, matched).
+local function resolve_sub_id(slot, want_imsi, want_plmn)
+  local cands = subid_candidates(slot)
+  if want_imsi then
+    local cimi_works = false
+    for _, sid in ipairs(cands) do
+      local imsi = cimi_imsi(at("AT+CIMI", sid))
+      if imsi == want_imsi then return sid, want_plmn, true end
+      if imsi then cimi_works = true end
+    end
+    if cimi_works then return cands[1], nil, false end
+  end
+  if want_plmn then
+    for _, sid in ipairs(cands) do
+      local plmn = qspn_plmn(at("AT+QSPN", sid))
+      if plmn == want_plmn then return sid, plmn, true end
+    end
+  end
+  return cands[1], nil, false
+end
+
 -- GL's active slot (current_sim_slot of the built-in modem), nil when none.
 -- One ubus read, no AT — enough for every slot-addressed GL call.
 local function active_slot()
   local st = pick_modem(ucall("cellular.modem", "status", {}))
-  return st and tonumber(st.current_sim_slot) or nil
+  local slot = st and tonumber(nn(st.current_sim_slot)) or nil
+  return (slot and slot >= 1) and slot or nil       -- 0 is a truthy number in Lua, not a slot
 end
 
+-- Resolve the active subscription end-to-end: the active slot's SIM identity
+-- from ubus, then the sub_id that answers for it. Returns (sub_id, plmn,
+-- matched, slot).
+-- ⚠️ `slot` is nil when GL has no active slot (no SIM, modem resetting): every
+-- caller must REFUSE to write in that case — never fall back to slot 1, which
+-- would mis-target SIM2/eSIM.
 local function resolve_active()
-  local want_plmn
   local slot = active_slot()
+  if not slot then return nil, nil, false, nil end
+  local want_imsi, want_plmn, iccid
   local sims = ucall("cellular.sim", "info", {})
   for _, s in ipairs((sims and sims.sims) or {}) do
-    if slot and tonumber(s.slot) == slot and s.mcc and s.mnc then
-      want_plmn = tostring(s.mcc) .. tostring(s.mnc)
+    if type(s) == "table" and tonumber(nn(s.slot)) == slot and (nn(s.bus) == nil or s.bus == BUS) then
+      local imsi = digits(s.imsi)
+      if imsi and #imsi >= 14 and #imsi <= 15 then want_imsi = imsi end
+      local mcc, mnc = digits(s.mcc), digits(s.mnc)
+      if mcc and mnc then want_plmn = mcc .. mnc end
+      iccid = nn(s.iccid)
     end
   end
-  local key = tostring(slot) .. ":" .. tostring(want_plmn)
+  -- Keyed on the SIM itself (iccid/IMSI), so a different SIM in the same slot
+  -- — even one of the same carrier — never reuses another SIM's answer.
+  local key = tostring(slot) .. ":" .. tostring(iccid or want_imsi or want_plmn)
   if subid_cache.key == key and os.time() - subid_cache.at < SUBID_TTL then
     return subid_cache.sub_id, subid_cache.plmn, true, slot
   end
-  local sub_id, plmn, matched = resolve_sub_id(want_plmn)
-  -- Cache only a PLMN-matched answer, and never sub_id 0: it is documented to
-  -- answer for different subscriptions minutes apart (CLAUDE.md §6), so it
-  -- must be re-verified by QSPN on every call rather than pinned for 5 min.
-  if matched and sub_id ~= 0 then
+  local sub_id, plmn, matched = resolve_sub_id(slot, want_imsi, want_plmn)
+  if matched then
     subid_cache = { key = key, sub_id = sub_id, plmn = plmn, at = os.time() }
   end
   return sub_id, plmn, matched, slot
+end
+
+-- The page sends the slot its band/lock picture was read for. When the active
+-- SIM has changed since (a switch in GL's Internet page, slot failover), a
+-- write would apply SIM1's picture to SIM2 — refuse instead and say so; the
+-- page refetches. Absent (ssh / older page) => no check.
+local function slot_changed(args, slot)
+  local want = tonumber(args and nn(args.slot))
+  if want and want ~= slot then
+    return { error = "the active SIM changed (this page was showing SIM " .. want ..
+                     ", SIM " .. tostring(slot) .. " is active now) - refresh and try again",
+             slot_changed = true, slot = slot }
+  end
+  return nil
 end
 
 -- Call one of GL's C rpc plugins (modem.so) exactly as oui.rpc's glc_call does
@@ -606,13 +672,14 @@ function M.scan_cells(args)
   local res, err = glc("modem", "scan_cell_tower", { bus = BUS, slot = slot })
   if not res then return { error = "scan failed: " .. tostring(err) } end
   append_event("user", "Cell scan", "")
-  return { towers = arr(res.towers or {}), ts = os.time() * 1000 }
+  return { towers = arr(res.towers or {}), ts = os.time() * 1000, slot = slot }
 end
 
 -- WRITE: lock to one cell via GL's stack, protected by confirm-or-revert.
--- args = { rat="4g"|"5g", pci, freq, scs?, band?, extra? } — extra is an
+-- args = { rat="4g"|"5g", pci, freq, scs?, band?, extra?, slot? } — extra is an
 -- optional table of passthrough tower fields (cellid, carrier, mcc, mnc, …)
--- from a scan row, forwarded verbatim so GL stores what it scanned.
+-- from a scan row, forwarded verbatim so GL stores what it scanned; slot is the
+-- SIM the page read its serving cell for (refused if the active SIM changed).
 function M.set_cell_lock(args)
   local rat = args and args.rat
   if rat ~= "4g" and rat ~= "5g" then return { error = "rat must be '4g' or '5g'" } end
@@ -632,6 +699,8 @@ function M.set_cell_lock(args)
 
   local sub_id, _, matched, slot = resolve_active()
   if not slot then return { error = "no active SIM slot (modem not ready)" } end
+  local changed = slot_changed(args, slot)
+  if changed then return changed end
   -- The PREV snapshot and the watchdog's revert both address `sub_id`: an
   -- unconfirmed one (PLMN unknown — SIM still searching, the §12 status-0
   -- wedge) would snapshot and later "revert" the OTHER subscription while the
@@ -708,9 +777,12 @@ function M.set_cell_lock(args)
 end
 
 -- Unlock (risk-reducing — no revert window). Also the stale-store reconciler.
+-- args.slot (optional): as set_cell_lock — never unlock a SIM the page wasn't showing.
 function M.clear_cell_lock(args)
   local sub_id, _, matched, slot = resolve_active()
   if not slot then return { error = "no active SIM slot (modem not ready)" } end
+  local changed = slot_changed(args, slot)
+  if changed then return changed end
 
   -- Which family is locked? GL clears only the one named by network_type and
   -- defaults to 4g when the store has no record — a 5G lock would survive a
@@ -769,7 +841,9 @@ end
 -- modem.set_band_config, which both applies to the modem and persists in GL's
 -- store; a failed call changes nothing, a successful one is already durable,
 -- and the watchdog restores the previous get_band_config snapshot verbatim.
--- Returns { ok, window, applied={sa=..,nsa=..,lte=..,mode=..}, sub_id } or { error }.
+-- args.slot (optional): the slot the page's picture was read for — refused when
+-- the active SIM has changed since. Returns { ok, window, applied={sa=..,nsa=..,
+-- lte=..,mode=..}, slot } or { error }.
 function M.set_bands(args)
   args = args or {}
   local reset = args.reset == true
@@ -804,8 +878,13 @@ function M.set_bands(args)
     return { error = "another change is pending; keep or revert it first" }
   end
 
-  local sub_id, _, _, slot = resolve_active()
+  -- Bands are slot-addressed end to end (GL's per-slot store, and the watchdog
+  -- restores the snapshot through it), so no sub_id is resolved: that would
+  -- spend 1-3 AT round-trips on the shared channel for a value nothing uses.
+  local slot = active_slot()
   if not slot then return { error = "no active SIM slot (modem not ready)" } end
+  local changed = slot_changed(args, slot)
+  if changed then return changed end
 
   -- Snapshot the revert target: GL's stored config for this slot, verbatim.
   local prev, perr = band_cfg_get(slot)
@@ -882,7 +961,7 @@ function M.set_bands(args)
   local f = io.open(PENDING, "w")
   if not f then return { error = "cannot write pending state" } end
   f:write(table.concat({
-    "KIND=bands", "SUB_ID=" .. sub_id, "SLOT=" .. tostring(slot),
+    "KIND=bands", "SLOT=" .. tostring(slot),
     "PREV_BAND_CONFIG='" .. cjson.encode(prev_payload) .. "'",
     "APPLIED_BAND_CONFIG='" .. cjson.encode(payload) .. "'",
   }, "\n") .. "\n")
@@ -913,7 +992,7 @@ function M.set_bands(args)
   if applied.mode and not applied.reset then bits[#bits + 1] = "mode " .. applied.mode end
   append_event("user", "Bands applied", table.concat(bits, "; "))
 
-  return { ok = true, window = 60, applied = applied, sub_id = sub_id, slot = slot }
+  return { ok = true, window = 60, applied = applied, slot = slot }
 end
 
 -- READ: the recorded history (samples + user/dog events) for the Tracking page.

@@ -23,8 +23,9 @@
 #                      sleeping watchdog down. Prints one JSON line.
 #   panic [slot]       immediate open state: band filtering OFF + mode AUTO on
 #                      the given slot (default: both slots), cell locks cleared
-#                      in GL's store (per slot) AND in the modem (AT, at
-#                      MUDIMODEM_SUB_ID), save_ctrl + nr5g_disable_mode reset.
+#                      in GL's store (per slot) AND in the modem (AT, on every
+#                      sub_id in MUDIMODEM_SUB_ID — default both, 1 and 2),
+#                      save_ctrl + nr5g_disable_mode reset.
 #                      ssh-callable when the web UI is down:
 #                        ssh root@mudi /usr/sbin/mudimodem-revert panic
 #
@@ -33,10 +34,11 @@
 #   KIND=cell   SLOT=<n>  SUB_ID=<n>  RAT=4g|5g  PREV_SAVE_CTRL=  PREV_mode_pref=  PREV_nr5g_disable_mode=
 #
 # Env overrides:
-#   MUDIMODEM_SUB_ID=<n>   sub_id for panic's AT clears (default 1 — the T-Mobile/
-#                          slot-1 subscription on the reference box; sub_id 0 is
-#                          unstable, see CLAUDE.md §6). The per-slot GL unlock
-#                          panic also issues needs no sub_id.
+#   MUDIMODEM_SUB_ID="<n> [<n>]"  sub_ids for panic's AT clears (default "1 2":
+#                          sub_id 1 answers for SIM1, 2 for SIM2 — clearing only 1
+#                          left a SIM2 lock in place; sub_id 0 is unstable and never
+#                          used, see CLAUDE.md §6). The per-slot GL unlock panic
+#                          also issues needs no sub_id.
 #   (testing) MUDIMODEM_DRY=1  log intended writes instead of running them
 #   MUDIMODEM_WINDOW=<s>   revert window (default 60)
 #   MUDIMODEM_PENDING=<f>  pending-state path (default /etc/mudimodem/pending)
@@ -240,9 +242,9 @@ case "${1:-}" in
     fi
     ;;
   panic)
-    SUB="${MUDIMODEM_SUB_ID:-1}"
+    SUBS="${MUDIMODEM_SUB_ID:-1 2}"
     SLOTS="${2:-1 2}"
-    log "PANIC restore -> open band config (slots $SLOTS), locks cleared (sub_id $SUB)"
+    log "PANIC restore -> open band config (slots $SLOTS), locks cleared (sub_ids $SUBS)"
     for s in $SLOTS; do
       set_band_config "{\"bus\":\"$BUS\",\"slot\":$s,\"band_enable\":false,\"network_mode\":\"AUTO\"}" \
         || log "panic: set_band_config failed on slot $s"
@@ -254,12 +256,15 @@ case "${1:-}" in
       gl_unlock_slot "$s" || log "panic: set_cell_tower unlock failed on slot $s"
     done
     # Clear cell locks in the modem and reset the prefs a lock can leave
-    # behind, so panic returns the modem to a fully open, auto-selecting state.
-    at 'AT+QNWLOCK="common/4g",0' "$SUB"
-    at 'AT+QNWLOCK="common/5g",0' "$SUB"
-    at 'AT+QNWLOCK="save_ctrl",0,0' "$SUB"
-    at 'AT+QNWPREFCFG="mode_pref",AUTO' "$SUB"
-    at 'AT+QNWPREFCFG="nr5g_disable_mode",0' "$SUB"
+    # behind, so panic returns the modem to a fully open, auto-selecting state
+    # — on EVERY subscription: the lock may sit on whichever SIM was active.
+    for sub in $SUBS; do
+      at 'AT+QNWLOCK="common/4g",0' "$sub"
+      at 'AT+QNWLOCK="common/5g",0' "$sub"
+      at 'AT+QNWLOCK="save_ctrl",0,0' "$sub"
+      at 'AT+QNWPREFCFG="mode_pref",AUTO' "$sub"
+      at 'AT+QNWPREFCFG="nr5g_disable_mode",0' "$sub"
+    done
     rm -f "$PENDING"
     log "panic complete"
     ;;
