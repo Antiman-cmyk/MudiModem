@@ -4,6 +4,7 @@ frames and echoes argv so the test can assert clamping/quoting. No modem.
 
 Channel-level branches (first AT cmd triggers them):
   __BUSY__     -> MM-AT:busy:7          (2-field, channel-level)
+  __OWED__     -> MM-AT:busy:7 + a reason line (an earlier reply still owed)
   __OPENFAIL__ -> MM-AT:openfail:8
   __GARBAGE__  -> a line with no MM-AT: prefix (envelope parse failure)
   __WEIRD__    -> MM-AT:weird:9:1/1     (matches per-step shape, unknown status)
@@ -20,6 +21,9 @@ cmds = [a for a in argv if a.upper().startswith("AT")]
 
 if "__BUSY__" in argv_str:
     print("MM-AT:busy:7")
+elif "__OWED__" in argv_str:
+    print("MM-AT:busy:7")
+    print("reply to AT+QSCAN=*,1 still owed (sent 40 s ago, may answer for 560 s more)")
 elif "__OPENFAIL__" in argv_str:
     print("MM-AT:openfail:8")
 elif "__GARBAGE__" in argv_str:

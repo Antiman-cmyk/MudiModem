@@ -63,6 +63,10 @@ assert(r5.ok and r5.steps[1].response:find("AT+X='y'", 1, true), "single quotes 
 -- Channel-level failures still return {error}, never steps.
 local rb = M.at_console({ cmd = "AT__BUSY__" })
 assert(rb.error and not rb.ok and rb.error:lower():find("busy", 1, true), "busy errors")
+-- The tool's reason line (an earlier command's reply still owed) reaches the page.
+local rob = M.at_console({ cmd = "AT__OWED__" })
+assert(rob.error and rob.error:find("busy", 1, true) and rob.error:find("AT+QSCAN=*,1 still owed", 1, true),
+       "busy carries the tool's reason: " .. tostring(rob.error))
 local ro = M.at_console({ cmd = "AT__OPENFAIL__" })
 assert(ro.error and ro.error:find("cannot open", 1, true), "openfail errors")
 local rg = M.at_console({ cmd = "AT__GARBAGE__" })

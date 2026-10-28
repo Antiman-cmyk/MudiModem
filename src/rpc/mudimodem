@@ -1199,7 +1199,12 @@ function M.at_console(args)
 
   -- Channel-level failure: a 2-field frame (no /count) as the first line.
   local cstatus = out:match("^MM%-AT:(%w+):%d+%s*\n") or out:match("^MM%-AT:(%w+):%d+%s*$")
-  if cstatus == "busy" then return { error = "channel busy - another command in flight" } end
+  if cstatus == "busy" then
+    -- The tool may name WHY on the next line: an earlier command's reply is
+    -- still owed (sent, timed out, may yet answer) — say which and for how long.
+    local why = out:match("^MM%-AT:busy:%d+%s*\n([^\n]+)")
+    return { error = "channel busy - " .. (why and why:gsub("%s+$", "") or "another command in flight") }
+  end
   if cstatus == "openfail" then return { error = "cannot open the AT port (/dev/at_mdm0)" } end
 
   -- Parse per-step frames: header line then response lines up to the next header.
@@ -1363,8 +1368,8 @@ local function speedtest_status()
   else dead = (age == nil) or (age > SPEEDTEST_START_GRACE) end
   if not dead and age and age > SPEEDTEST_MAX_RUN then dead = true end
   if dead then
-    st = { running = false, phase = "error", iface = st.iface,
-           error = "the previous speed test stopped without finishing" }
+    local why = "the previous speed test stopped without finishing"
+    st = { running = false, phase = "error", iface = st.iface, error = why, message = why }
     write_json_file(SPEEDTEST_STATUS, st)
   end
   return st
@@ -1792,9 +1797,11 @@ local function write_history_policy(enabled)
 end
 
 local function history_dir_bytes(dir)
-  -- BusyBox du often lacks -b; sum known files with wc -c instead.
+  -- BusyBox du often lacks -b; sum known files with wc -c instead. Each stream
+  -- is two segments (collectd rotates current -> .prev once a day, so the
+  -- flash backup is append-only between rotations).
   local total = 0
-  for _, name in ipairs({ "samples.jsonl", "battery.jsonl" }) do
+  for _, name in ipairs({ "samples.jsonl", "samples.prev.jsonl", "battery.jsonl", "battery.prev.jsonl" }) do
     local f = io.open(dir .. "/" .. name, "r")
     if f then
       local sz = f:seek("end")

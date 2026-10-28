@@ -27,7 +27,8 @@ assert(M.run_speedtest({ iface = "vpn" }).error, "iface check first")
 -- 2. the pid is alive but is NOT our tool (recycled): stale.
 put({ running = true, phase = "latency", pid = other, started = os.time() - 20 })
 local st = M.get_speedtest_status({})
-assert(st.running == false and st.phase == "error" and st.error, "a recycled pid is not a run: " .. cjson.encode(st))
+assert(st.running == false and st.phase == "error" and st.error and st.message == st.error,
+       "a recycled pid is not a run (the page reads `message`): " .. cjson.encode(st))
 assert(cjson.decode(io.open(STATUS):read("*a")).running == false, "the stale status is rewritten on disk")
 
 -- 3. the pid is gone: stale.

@@ -772,7 +772,8 @@ MudiModem/
   and passes it by env; deploy/verify use install.sh's numeric firmware compare; deploy.sh's
   sysupgrade list is checked against install.sh's by `test/test_install_wiring.sh`. REFUTED by
   the image and left alone: cjson `[]→{}` in revert_now (oui-rpc.lua sets
-  `encode_empty_table_as_object(false)`), the detach fd loop (ash's script fd occupies fd 10),
+  `encode_empty_table_as_object(false)`), the detach fd loop (ash's script fd occupies fd 10;
+  harmless on ash — dash died on it, fixed 2026-10-28),
   `band_enable` type (libcm_modem.so emits a JSON boolean), per-route `global_sockets`
   (app.js subscribes the union of every menu entry at ws open).
   Follow-up (same day): the cell-lock `revert_now` now runs the watchdog's own
@@ -880,6 +881,26 @@ MudiModem/
   fields degrade to `idle`, never to a confident `full`/`blocked`.
   Spec: `docs/superpowers/specs/2026-07-27-battery-tab-history-design.md`;
   plan: `docs/superpowers/plans/2026-07-27-battery-tab-history.md`.
+- ✅ **Whole-repo bug sweep (2026-10-28).** SIM1/SIM2: sub_id slot-first + IMSI (§6), writes carry
+  the page's `slot`, the page re-reads on a slot switch, panic clears sub_ids 1+2. Collector: a
+  FAILED `cell_info` read skips the tick (no fake "not registered"); the eMMC backup is two
+  append-only segments per stream (`samples.jsonl` + `samples.prev.jsonl`, same for battery; one
+  rename a day, never a whole-file rewrite); intervals on `time.monotonic()`; events trim keeps
+  concurrent appends. Speed test: status carries `pid`/`started`, the backend reports a dead run as
+  `phase:error`; no radio snapshot on wired; `pcc_rat` kept. AT tool: a timed-out command's reply
+  is tracked in `/tmp/mudimodem/at.inflight` — the next send discards it or answers busy (with the
+  reason) instead of mis-pairing it. Shell: glbattlimit watcher interruptible + owner-checked +
+  detached (no nginx fds); install/deploy stop it BEFORE the nginx restart and re-apply the saved
+  limit after; python before services; version.json written last; the AT-library cache is never
+  clobbered by the bundled snapshot; uninstall reverts a pending change first; boot-check retries
+  ~5 min in the background. `mudimodem-detach` closes only the fds /proc lists, skipping its own
+  script fd, so it also works under dash. Pages: NSA anchor shown as B, PAUSED freezes, pins are
+  absolute, failed preloads retry, SIM switches break lines, the speed-test poll is silent and
+  dies with the tab, the battery-limit card refreshes, the console keeps its transcript across
+  tabs. 🔴 Live-box checks owed: `AT+CIMI` per sub_id; whether `/dev/at_mdm0` holds a late reply
+  between invocations (else the console reports busy for up to 180 s / 600 s after a timeout);
+  busybox `sleep` fractions (glbattlimit falls back to 1 s steps). Known, not fixed: after a
+  backward clock step the eMMC flush cursor (a sample `t`) waits until the clock passes it again.
 - 🔭 Later: an ipk. (`boot-check` now has its boot hook — `/etc/init.d/mudimodem-revert`,
   START=96, installed + enabled by install.sh/deploy.sh; `/etc/sysupgrade.conf` itself is already
   handled by `deploy.sh` — see the corrected bullet below.)
