@@ -33,6 +33,12 @@ lock) — don't re-derive it here.
 >   the tree; GL 4.10 ships its own Display Management page. `install.sh` and `uninstall.sh`
 >   both purge a 1.x renderer left on the box (stop + disable `mudi`/`mudi-watch`, delete the
 >   files, de-register them from sysupgrade.conf, hand the panel back to `gl_screen`).
+> - **Firmware upgrades (2.1.0, read in the image):** every E5800 upgrade ends in
+>   `abfota_update`, which keeps exactly what `/lib/upgrade/keep.d/*` lists ("Keep Settings")
+>   and wipes the rest — **`/etc/sysupgrade.conf` is never read, `/www` never restored, opkg
+>   packages (python3!) gone.** So `src/upgrade/keep.d/mudimodem` is the one preserve list, the
+>   web payload lives in `/usr/share/mudimodem/www` behind an nginx alias, and
+>   `mudimodem-deps heal` reinstalls `python3-light` at first boot (§9).
 > - **Scope rule (owner, 2026-09-02): ship only what stock 4.10 lacks or does incompletely.**
 >   The SIM/APN tab is gone (GL's Internet page has it all); the lock tab's scan card stays
 >   (it feeds our confirm-or-revert lock — the stock scan can only lock without a safety net).
@@ -210,17 +216,20 @@ return { get_config = function(args) ... end, set_config = function(args) ... en
 | File | Role |
 |---|---|
 | `/usr/lib/oui-httpd/rpc/mudimodem` | Lua backend; safe validated methods; dotted ubus calls |
-| `/www/views/gl-sdk4-ui-mudimodem.common.js.gz` | the Vue page (gzipped — `gzip_static on`) |
+| `/usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem.common.js.gz` | the Vue page (gzipped — `gzip_static on`), served at `/views/…` by our nginx alias — **nothing of ours lives in `/www`** (§9) |
+| `/etc/nginx/gl-conf.d/mudimodem.conf` | `^~` aliases: `/views/gl-sdk4-ui-mudimodem*` + `/mudimodem/` → `/usr/share/mudimodem/www` (§9) |
+| `/lib/upgrade/keep.d/mudimodem` | the firmware-upgrade preserve list — **every new shipped file goes here** (§9) |
 | `/usr/share/oui/menu.d/mudimodem.json` | menu registration **+ `global_sockets`** (§2) — the read path |
 | `/usr/sbin/mudimodem-revert` | detached auto-revert watchdog + ssh panic-restore |
-| `/www/mudimodem/at-library.json.gz` | community AT command library (§7a); static, axios-fetched |
+| `/usr/share/mudimodem/www/mudimodem/at-library.json.gz` | community AT command library (§7a); static, axios-fetched from `/mudimodem/` |
 | `/usr/lib/mudimodem/mudimodem-at.py` | our own AT channel on `/dev/at_mdm0` (§7a); backend spawns it |
-| `/www/views/gl-sdk4-ui-mudimodem-console.common.js.gz` | the AT-console tab chunk (lazy-loaded) |
+| `/usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-console.common.js.gz` | the AT-console tab chunk (lazy-loaded) |
 | **`/usr/share/gl-validator.d/mudimodem.lua`** | **arg validator — REQUIRED for the AT console (§3), not optional** |
 | `/usr/lib/mudimodem/cellular_compat.py` | the ONE place Python knows GL 4.10's cellular shapes (collectd + speedtest) |
 | `/usr/lib/mudimodem/mudimodem-detach` | fd-closing wrapper every detached child (watchdog, speedtest, self-update) goes through |
+| `/usr/lib/mudimodem/mudimodem-deps` | the python3 runtime: `install` / `check` / boot-time `heal` after an upgrade wiped it (§9) |
 | `/usr/share/gl-ngx/websocket/mudimodem.lua` | `/ws` seed module: `mudimodem.collect` (flagged `stale`+`age_s` when >60 s old) / `.battery` / `.event` |
-| `/www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz` | Battery tab chunk: 4-lane history chart + charge-limit form (§12, 2026-07-27) |
+| `/usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz` | Battery tab chunk: 4-lane history chart + charge-limit form (§12, 2026-07-27) |
 
 ⚠️ **The validator is NOT optional once a method takes free-form input.** oui applies a **default
 string-arg allowlist** (`^[%w%.%s%-_:#/]-$`) to every param when no per-object validator exists —
@@ -521,7 +530,7 @@ router and searchable. It's a differentiator no router UI has.
   **`github.com/kevinherzig/mudi7-at-library`** (public), whose CI validates + publishes a merged,
   content-`revision`-stamped `dist/at-library.json` + tiny `dist/version.json`. The base repo ships a
   baked snapshot (`src/at-library.snapshot.json`) as the offline/first-install cache at
-  `/www/mudimodem/at-library.json.gz`; `tools/mudimodem-lib` (backend `refresh_library`) pulls the
+  `/usr/share/mudimodem/www/mudimodem/at-library.json.gz`; `tools/mudimodem-lib` (backend `refresh_library`) pulls the
   latest into that cache on a **manual** button, and `library_status` does an on-load version check
   (router-mediated curl → same-origin browser). Browser still fetches with axios. Served
   unauthenticated — fine, AT commands are public knowledge.
@@ -558,7 +567,8 @@ router and searchable. It's a differentiator no router UI has.
 - **Online install from a fork/branch:** `curl -fsSL "$B/install.sh" | MUDIMODEM_BASE="$B" sh`.
   install.sh records `base` in `/etc/mudimodem/version.json`; `app_version` and
   `mudimodem-selfupdate` follow it. **Every default source in this tree is
-  `Antiman-cmyk/MudiModem` (main)** — the owner's repo, not kevinherzig's upstream (still 1.7.0).
+  `Antiman-cmyk/MudiModem` (main)** — the owner's repo, not kevinherzig's upstream (the 1.x /
+  4.8 line; 1.8.0 as of 2026-08-24 — its A/B-FOTA findings were ported in 2.1.0, §9/§12).
   The community AT library still comes from `kevinherzig/mudi7-at-library`
   (`tools/mudimodem-lib`, overridable via `/etc/mudimodem/library-url`).
 - **Never spawn a detached child bare from the backend** — `os.execute("… &")` inherits nginx's
@@ -642,9 +652,37 @@ router and searchable. It's a differentiator no router UI has.
   good→`--info-hover`, excellent→`--success`.
 
 ## 9. Persistence & risk
-- All four files live **outside `/etc/config/`** → wiped by a firmware upgrade unless listed in
-  **`/etc/sysupgrade.conf`**; a factory reset wipes them regardless. Same story as MudiUI §10 —
-  the installer must register them idempotently.
+- ✅ **Firmware upgrades — read in the 4.10 image (2026-10-28; upstream hit both halves live on the
+  4.8.5→4.10.0 upgrade, 2026-08-18/-24).** On the E5800, GL's upgrade RPC, `one_click_upgrade` and
+  even `/sbin/sysupgrade` (`platform.sh`) all end in **`abfota_update start-fota`**. Its `-k` comes
+  from `keep_package`, which GL's upgrade page sets from its one **Keep Settings** switch
+  (`keep_package = keep_config`; decoded from the `upgrade` RPC bytecode with
+  `reference/4.10/re-tools/luaq.py`). With `-k` it backs up exactly the paths in
+  **`/lib/upgrade/keep.d/*`** — one literal path per line (no globs, no leading whitespace; a
+  directory keeps its tree), only under `/etc /usr /lib /bin /sbin /data /var`, **anything else —
+  `/www` — skipped** — then preinit wipes the overlay and copies the backup back
+  (`lib/preinit/80_mount_root`). **`/etc/sysupgrade.conf` is never read.** Without `-k` it keeps the
+  image's own list, which is empty: nothing survives. Copy: `reference/4.10/abfota_update`.
+  ⇒ **`src/upgrade/keep.d/mudimodem` is the ONE preserve list** (self-listed, and it lists the procd
+  enable links `S<START>`/`K<STOP>`, or a service comes back disabled). **Any new shipped file goes
+  in it** — `test/test_install_wiring.sh` fails when an `install.sh` destination is not covered,
+  `verify.sh` 1b when a listed path is missing on the box.
+- **Nothing of ours lives in `/www`.** Chunks + AT library live in `/usr/share/mudimodem/www/`;
+  `/etc/nginx/gl-conf.d/mudimodem.conf` (included inside gl.conf's server block) maps
+  `location ^~ /views/gl-sdk4-ui-mudimodem` and `^~ /mudimodem/` onto it. Checked with the image's
+  own nginx under qemu: ours served from that tree (even with a stale `/www` copy present), GL's
+  chunks untouched, gzip_static intact. `ui.get_menu_list` reads only `menu.d/*.json` (bytecode),
+  so the menu needs no `/www/views` file. `mudimodem-lib refresh` writes the served copy.
+- ⚠️ **keep.d keeps FILES, not the RUNTIME.** The image ships no Python and the upgrade wipes opkg
+  packages (GL's plugin restore is a button, not a boot step), so the box boots with our daemons and
+  no `python3`. **`/usr/lib/mudimodem/mudimodem-deps`** owns the recipe: `install` (install.sh /
+  deploy.sh, before any service starts), `check`, and `heal` — the python services' init scripts
+  run `check` before `procd_open_instance` and, failing it, spawn a detached `heal` that waits
+  ≤10 min for the feed, installs `python3-light` (one `--force-reinstall` if opkg's DB lies), then
+  starts the *enabled* python services; flock-serialized (two opkg runs corrupt its DB). **Any new
+  opkg dependency goes through it — never into keep.d** (a restored site-packages is wrong on the
+  next Python minor; upstream's numpy lesson).
+- A factory reset wipes all of it regardless.
 - Band/cell lock persists in **modem NV** — it survives reflash *and* factory reset. The panic
   restore is the only way back.
 - The Mudi is a travel router on cellular — reachability is intermittent by design.
@@ -655,7 +693,7 @@ router and searchable. It's a differentiator no router UI has.
 | **0** | Hello-world chunk + menu entry | ✅ done. Settled the template-compiler + `level` unknowns. |
 | **1** | Read-only diagnostics tab | Now **cheaper than planned** — reads come free over `global_sockets` (§2); no backend needed except `policy_band`/`ue_capability_band` (§5a). |
 | **2** | Band grid + cell lock, auto-revert, panic restore | ✅ **2a+2b done** (band read/write/revert). ⏳ cell lock (`QNWLOCK` §6a) + durability (make `set_bands` persist via `modem.set_sim_config`) remain. |
-| **3** | AT console + community library | ✅ done (2026-07-18). Own channel via /usr/lib/mudimodem/mudimodem-at.py; library at /www/mudimodem/at-library.json.gz. (The 4.8-era `gl_modem` SIGSTOP during sends is gone — no such daemon on 4.10.) |
+| **3** | AT console + community library | ✅ done (2026-07-18). Own channel via /usr/lib/mudimodem/mudimodem-at.py; library at /usr/share/mudimodem/www/mudimodem/at-library.json.gz. (The 4.8-era `gl_modem` SIGSTOP during sends is gone — no such daemon on 4.10.) |
 | **4** | SIM / APN | ❌ **REMOVED 2026-09-02.** Stock 4.10's Internet page has slot switch, dial/APN profile and failover in full (verified in the shipped chunk) — the rule is to ship only what stock lacks or does incompletely. The DSDS/roaming knowledge below (§12 2026-07-18, §"Session findings") stays as reference; `cellular.modems_status`/`networks_info` are still consumed by the strip. |
 | **2.0.0** | GL 4.10 rewrite; LCD removed | ✅ 2026-09-02 — see the header block. The 1.x LCD renderer is gone; `mudimodem-collectd` is the single modem reader, pushing over `gl-session notify`. |
 
@@ -673,6 +711,9 @@ MudiModem/
 │   ├── rpc/mudimodem            ← backend (bands, cell lock, history, console, speedtest, battery, version)
 │   ├── lib/cellular_compat.py   ← GL 4.10 cellular shapes -> normalized sample (collectd + speedtest)
 │   ├── lib/mudimodem-detach     ← detached-child wrapper (closes nginx's fds)
+│   ├── lib/mudimodem-deps       ← python3-light check/install/boot-heal (§9)
+│   ├── upgrade/keep.d/mudimodem ← the firmware-upgrade preserve list (§9)
+│   ├── nginx/mudimodem.conf     ← gl-conf.d alias: SPA URLs → /usr/share/mudimodem/www (§9)
 │   ├── ws/mudimodem.lua         ← /ws seed module (mudimodem.collect/.battery/.event)
 │   ├── sbin/mudimodem-collectd  ← single modem-read daemon; broadcasts over Unix socket + latest.json
 │   └── sbin/mudimodem-revert    ← confirm-or-revert watchdog + ssh panic restore
@@ -683,6 +724,7 @@ MudiModem/
 │   └── mudimodem-at.py          ← our own AT channel on /dev/at_mdm0 (Python stdlib; Phase 3 console)
 ├── test/chunk.test.js           ← local Node test: evals the chunk exactly as the SPA does
 ├── test/battery-chunk.test.js       ← evals the battery chunk; lane domains, reduce, gaps
+├── test/deps.test.sh            ← stubbed opkg/python3: check, install, forced reinstall, heal, lock
 ├── test/backend-battery-history.test.lua
 ├── test/test_collectd.py        ← collectd broadcast socket + latest.json test
 ├── test/ws-seed.test.lua        ← /ws seed module self-test (stale flag); shipped to the box by verify.sh
@@ -706,6 +748,16 @@ MudiModem/
   console/library/battlimit/validator/persist), sh (revert, selfupdate, wiring). **Not yet run on
   a live 4.10 box** — the plan's Phase 0 checklist (contract doc §6) is the next step; verify.sh
   steps 0/0b/7 (cadence + normalized latest.json)/8e (modem_AT)/13c/15 are the 4.10 gates.
+- ✅ **2.1.0 — survive GL firmware upgrades (2026-10-28).** Ported from upstream 1.8.0
+  (`74d7c88` keep.d + persist tree + nginx alias; `dcc5d6b`'s lesson that keep.d does not bring
+  back opkg packages, applied to our own python3 instead of the LCD's numpy) and re-derived from
+  the 4.10 image (§9). Differences from upstream on purpose: ONE copy of the web payload (no
+  `/www` dual-write), keep.d *replaces* sysupgrade.conf (never read on the E5800), the library
+  refresh writes the served copy, the rc.d links come from each script's START/STOP (test-checked).
+  **Updating from 2.0.0 is handled** (1.x→2 is not, owner's rule): install.sh, uninstall.sh and
+  deploy.sh delete 2.0.0's `/www` payload and its `sysupgrade.conf` entries (every one names
+  `mudimodem` or `glbattlimit`); `verify.sh` 1b asserts none are left.
+  Not yet run on a box: `verify.sh` 1b + an actual upgrade with Keep Settings are the gates.
 - ✅ Recon complete: oui page/menu/rpc mechanism mapped, dot restriction + ACL model understood,
   Lua-plugin backend contract confirmed, four-file architecture + auto-revert designed.
 - ✅ **Phase 0 done (2026-07-16)** — chunk + menu deployed; `tools/verify.sh` green. Unknowns
@@ -890,7 +942,7 @@ MudiModem/
   fields degrade to `idle`, never to a confident `full`/`blocked`.
   Spec: `docs/superpowers/specs/2026-07-27-battery-tab-history-design.md`;
   plan: `docs/superpowers/plans/2026-07-27-battery-tab-history.md`.
-- ✅ **Whole-repo bug sweep (2026-10-28).** SIM1/SIM2: sub_id slot-first + IMSI (§6), writes carry
+- ✅ **2.2.0 — whole-repo bug sweep (2026-10-28).** SIM1/SIM2: sub_id slot-first + IMSI (§6), writes carry
   the page's `slot`, the page re-reads on a slot switch, panic clears sub_ids 1+2. Collector: a
   FAILED `cell_info` read skips the tick (no fake "not registered"); the eMMC backup is two
   append-only segments per stream (`samples.jsonl` + `samples.prev.jsonl`, same for battery; one
@@ -918,8 +970,8 @@ MudiModem/
   doc §2.1/§5, `reference/4.10/re-notes.md`. Known, not fixed: after a backward clock step the
   eMMC flush cursor (a sample `t`) waits until the clock passes it again.
 - 🔭 Later: an ipk. (`boot-check` now has its boot hook — `/etc/init.d/mudimodem-revert`,
-  START=96, installed + enabled by install.sh/deploy.sh; `/etc/sysupgrade.conf` itself is already
-  handled by `deploy.sh` — see the corrected bullet below.)
+  START=96, installed + enabled by install.sh/deploy.sh; firmware-upgrade persistence is keep.d,
+  §9.)
 
 ### Session findings 2026-07-17 (all in reference §10–§11)
 - **DSDS, not DSDA** — both SIMs register, only one carries data at a time. No simultaneous dual-data.
@@ -971,9 +1023,8 @@ MudiModem/
    exists on `/dev/at_mdm0` (`QSIMSWITCH`/`QDSDS`/`QMSIMCFG` all ERROR; `QCFG=?`/`QNWPREFCFG=?`
    list nothing sub-related). GL's `sub_id` is a QMI-layer thing behind `modem_AT`. Cross-SIM data
    stays on GL's `modem.CPU.AT`; the console is active-SIM only and labeled as such.
-- ✅ `/etc/sysupgrade.conf` **is** registered by `./tools/deploy.sh` (idempotent
-  `grep -qxF … || echo … >> "$f"`), covering every shipped file. **Any new shipped file must be
-  added to that list**, or a firmware upgrade wipes it. Still not done: `install.sh`/`uninstall.sh`,
-  and an ipk (the `boot-check` boot hook shipped 2026-09-02).
+- ✅ **Any new shipped file must be listed in `src/upgrade/keep.d/mudimodem`** (and removed by
+  `uninstall.sh`), or a firmware upgrade wipes it — the wiring test enforces both (§9). Still not
+  done: an ipk.
 - 🧹 `tools/verify.sh` still only checks the menu JSON *parses*; it should also assert
   `get_menu_list` returns it at `level:1` (§8 has the stub).

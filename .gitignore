@@ -15,3 +15,6 @@ __pycache__/
 firmware/*
 !firmware/README.md
 *.img
+
+# Scratch dump older copies of reference/4.10/re-tools/strrefs.py wrote to the cwd.
+seg.bin

@@ -7,7 +7,6 @@ fail() { echo "FAIL: $1" >&2; exit 1; }
 # --- no LCD renderer in 2.x; python3 for the daemons is ensured explicitly ---
 grep -qE 'src/lcd|cp_install .*(mudi\.py|mudi-watch|init\.d/mudi[^m]|config/mudi)' install.sh && fail "install.sh must not ship the LCD renderer (removed in 2.0)"
 grep -q 'rm -f /usr/bin/mudi.py' install.sh      || fail "install.sh must purge a 1.x LCD renderer left on the box"
-grep -q 'python3-light' install.sh              || fail "install.sh must ensure python3-light (collector/speedtest/AT tool)"
 grep -q '/etc/init.d/gl_screen start' uninstall.sh || fail "uninstall.sh must hand the panel back if a 1.x renderer is left"
 
 # --- 4.10 shared helpers (2.0.0) ---
@@ -32,16 +31,7 @@ grep -q '/usr/sbin/mudimodem-selfupdate' uninstall.sh || fail "uninstall.sh must
 grep -q '/etc/mudimodem/version.json' install.sh      || fail "install.sh must place version.json"
 grep -q '"base":"%s"' install.sh                       || fail "install.sh must record its install source (base) in version.json"
 grep -q 'MUDIMODEM_BASE=' src/sbin/mudimodem-selfupdate || fail "self-update must pass the recorded base to install.sh"
-grep -q '/etc/mudimodem/version.json' uninstall.sh    || fail "uninstall.sh must list version.json (sysupgrade de-register)"
 
-# --- deploy.sh must register every file it pushes (parity with install.sh) ---
-# Extract both /etc/sysupgrade.conf lists (the `for p in ... ; do` blocks) and
-# require deploy.sh's to be a superset of install.sh's minus nothing.
-inst_list=$(sed -n '/registering files in \/etc\/sysupgrade.conf/,/done/p' install.sh | grep -o '^\s*/[^ \\]*' | tr -d ' \t' | sort -u)
-dep_list=$(sed -n '/f=\/etc\/sysupgrade.conf; touch/,/done/p' tools/deploy.sh | grep -o '^\s*/[^ \\]*' | tr -d ' \t' | sort -u)
-for p in $inst_list; do
-  echo "$dep_list" | grep -qxF "$p" || fail "deploy.sh sysupgrade list is missing $p (install.sh has it)"
-done
 # The firmware gate must be the numeric compare, never a glob (4.[2-9]* matches 4.8.5).
 grep -hv '^[[:space:]]*#' tools/deploy.sh tools/verify.sh | grep -q '4\.\[2-9\]' && fail "deploy/verify firmware gate must not be a glob" || true
 grep -q 'GLMIN' tools/deploy.sh && grep -q 'GLMIN' tools/verify.sh || fail "deploy/verify must use install.sh's numeric firmware compare"
@@ -51,14 +41,11 @@ grep -q 'src/views/mudimodem-speedtest.js' install.sh || fail "install.sh must i
 grep -q 'src/menu/mudimodem-speedtest.json' install.sh || fail "install.sh must install speedtest menu"
 grep -q 'tools/mudimodem-speedtest.py' install.sh || fail "install.sh must install speedtest runner"
 grep -q 'src/sbin/mudimodem-speedtestd' install.sh || fail "install.sh must install speedtestd"
-grep -q '/www/views/gl-sdk4-ui-mudimodem-speedtest.common.js.gz' uninstall.sh || fail "uninstall must remove speedtest chunk"
 grep -q '/usr/sbin/mudimodem-speedtestd' uninstall.sh || fail "uninstall must remove speedtestd"
 grep -q 'mudimodem-speedtestd stop' uninstall.sh || fail "uninstall must stop speedtestd before remove"
 
 # --- battery tab (lazy chunk; parity with deploy.sh — was missing, broke curl install) ---
 grep -q 'src/views/mudimodem-battery.js' install.sh || fail "install.sh must install battery chunk"
-grep -q '/www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz' install.sh || fail "install.sh must register battery chunk in sysupgrade"
-grep -q '/www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz' uninstall.sh || fail "uninstall must remove battery chunk"
 
 # --- install destinations must exist as sources ---
 # shellcheck disable=SC2016
@@ -67,18 +54,76 @@ for s in $srcs; do
   [ -f "$s" ] || fail "install source missing: $s"
 done
 
-# --- install/uninstall path parity ---
-# Extract install sysupgrade paths and uninstall FILES paths; every install path
-# except intentional keeps must appear in uninstall.
-install_paths=$(awk '/registering files/,/^echo "  done"/' install.sh \
-  | grep -E '^\s*/' | tr -d ' \\' | sed 's/;.*//')
-uninstall_paths=$(awk '/^FILES="/,/^"/' uninstall.sh | grep -E '^\s*/' | tr -d ' ')
+# Every path install.sh writes (2nd arg of gz_install/cp_install).
+dests=$(grep -E '^\s*(gz_install|cp_install)\s+' install.sh | awk '{print $3}')
 
-for p in $install_paths; do
-  # /etc/config/mudi is never in sysupgrade list from the loop above (only
-  # written conditionally) — if it ever appears, uninstall must keep it.
-  echo "$uninstall_paths" | grep -qxF "$p" \
-    || fail "install sysupgrade path missing from uninstall FILES: $p"
+# --- install/uninstall parity: uninstall removes every installed file ---
+u_files=$(awk '/^FILES="/,/^"/' uninstall.sh | grep '^/')
+u_dirs=$(sed -n 's/^DIRS="\(.*\)"/\1/p' uninstall.sh)
+for d in $dests; do
+  echo "$u_files" | grep -qxF "$d" && continue
+  for x in $u_dirs; do case "$d" in "$x"/*) continue 2 ;; esac; done
+  fail "uninstall.sh leaves $d behind"
+done
+
+# --- firmware upgrade: abfota_update keeps exactly what keep.d lists ---
+# (never /etc/sysupgrade.conf; only /etc /usr /lib /bin /sbin /data /var
+# entries; one literal path per line — read in the 4.10 image, CLAUDE.md §9).
+KEEP=src/upgrade/keep.d/mudimodem
+keep=$(grep '^/' "$KEEP")
+kept() {  # exact entry, or under a listed directory (trailing /)
+  for k in $keep; do
+    case "$k" in */) case "$1" in "$k"*) return 0 ;; esac ;; *) [ "$1" = "$k" ] && return 0 ;; esac
+  done
+  return 1
+}
+for d in $dests; do kept "$d" || fail "keep.d does not carry $d over a firmware upgrade"; done
+bad=$(grep -vE '^(#|$|/(etc|usr|lib|bin|sbin|data|var)/[^][*? ]*$)' "$KEEP" || true)
+[ -z "$bad" ] || fail "keep.d lines abfota_update would drop or misparse: $bad"
+kept /lib/upgrade/keep.d/mudimodem || fail "keep.d must list itself (the next upgrade reads it)"
+grep -E '^\s*(gz_install|cp_install)\s+.*\s/www/' install.sh && fail "install.sh must not write /www (an upgrade drops it)"
+grep -q "cat > /www/" tools/deploy.sh && fail "deploy.sh must not write /www (an upgrade drops it)"
+grep -q '>> "$f"' install.sh tools/deploy.sh && fail "register files in keep.d, not sysupgrade.conf (never read on the E5800)"
+# Updating from 2.0.0 (and uninstalling it): its /www payload and its
+# sysupgrade.conf entries (every one names mudimodem or glbattlimit) must go.
+for f in install.sh uninstall.sh tools/deploy.sh; do
+  grep -q 'rm -f /www/views/gl-sdk4-ui-mudimodem\*.common.js.gz' "$f" && grep -q 'rm -rf /www/mudimodem' "$f" \
+    && grep -q 'grep -v -e mudimodem -e glbattlimit "$f"' "$f" \
+    || fail "$f must drop a 2.0.0 install's /www payload and sysupgrade.conf entries"
+done
+# procd enable links: an upgrade keeps a service only if its S/K link is listed.
+for f in src/etc/init.d/*; do
+  n=$(basename "$f"); st=$(sed -n 's/^START=//p' "$f"); sp=$(sed -n 's/^STOP=//p' "$f")
+  [ -z "$st" ] || kept "/etc/rc.d/S$st$n" || fail "keep.d is missing the enable link /etc/rc.d/S$st$n"
+  [ -z "$sp" ] || kept "/etc/rc.d/K$sp$n" || fail "keep.d is missing the enable link /etc/rc.d/K$sp$n"
+done
+grep -q 'src/upgrade/keep.d/mudimodem' tools/deploy.sh || fail "deploy.sh must push keep.d"
+
+# --- web payload: /usr/share/mudimodem/www, served by our gl-conf.d alias ---
+grep -q 'location ^~ /views/gl-sdk4-ui-mudimodem' src/nginx/mudimodem.conf \
+  && grep -q 'location ^~ /mudimodem/' src/nginx/mudimodem.conf \
+  && [ "$(grep -c 'root /usr/share/mudimodem/www;' src/nginx/mudimodem.conf)" = 2 ] \
+  || fail "nginx alias must map /views/gl-sdk4-ui-mudimodem* and /mudimodem/ onto /usr/share/mudimodem/www"
+echo "$dests" | grep -qxF /etc/nginx/gl-conf.d/mudimodem.conf || fail "install.sh must install the nginx alias"
+grep -q 'src/nginx/mudimodem.conf' tools/deploy.sh || fail "deploy.sh must push the nginx alias"
+grep -q 'DEFAULT_CACHE = "/usr/share/mudimodem/www/mudimodem/at-library.json.gz"' tools/mudimodem-lib \
+  || fail "library refresh must write the copy nginx serves (/usr/share/mudimodem/www/mudimodem/)"
+
+# --- python3 runtime (opkg; wiped by an upgrade): one recipe, healed at boot ---
+py_svcs=$(grep -l '/usr/bin/python3' src/etc/init.d/* | xargs -n1 basename | sort | tr '\n' ' ')
+deps_svcs=$(sed -n 's/^SERVICES="\(.*\)"/\1/p' src/lib/mudimodem-deps | tr ' ' '\n' | sort | tr '\n' ' ')
+[ "$py_svcs" = "$deps_svcs" ] || fail "mudimodem-deps SERVICES ($deps_svcs) must be the python services ($py_svcs)"
+for n in $py_svcs; do
+  grep -q '"$DEPS" check' "src/etc/init.d/$n" && grep -q '"$DEPS" heal' "src/etc/init.d/$n" \
+    || fail "$n must defer to mudimodem-deps heal when python3 is missing"
+done
+grep -hv '^[[:space:]]*#' install.sh tools/deploy.sh | grep -q 'opkg' \
+  && fail "install/deploy must go through mudimodem-deps, not opkg directly"
+for f in install.sh tools/deploy.sh; do
+  d=$(grep -n 'mudimodem-deps install' "$f" | head -n1 | cut -d: -f1)
+  r=$(grep -nE 'init\.d/mudimodem-[a-z]+ (enable|restart)|init\.d/mudimodem-[a-z]+ enable;' "$f" | head -n1 | cut -d: -f1)
+  [ -n "$d" ] && [ -n "$r" ] && [ "$d" -lt "$r" ] \
+    || fail "$f must run mudimodem-deps install before starting any service (a heal would race it)"
 done
 
 # --- firmware gate: the SAME numeric compare in install/deploy/verify, and it
@@ -97,11 +142,12 @@ done
 # every file is installed (a half-done install must not claim the new version) ---
 first() { grep -nE "$2" "$1" | head -n1 | cut -d: -f1; }
 last()  { grep -nE "$2" "$1" | tail -n1 | cut -d: -f1; }
-py=$(first install.sh 'opkg install python3-light')
+py=$(first install.sh 'mudimodem-deps install')
+[ -n "$py" ] || fail "install.sh never runs mudimodem-deps install"
 for svc in mudimodem-speedtestd mudimodem-collectd; do
-  [ "$py" -lt "$(first install.sh "init.d/$svc restart")" ] || fail "install.sh restarts $svc before installing python3-light"
+  [ "${py:-99999}" -lt "$(first install.sh "init.d/$svc restart")" ] || fail "install.sh restarts $svc before installing python3-light"
 done
-[ "$(first tools/deploy.sh 'opkg install python3-light')" -lt "$(first tools/deploy.sh 'mudimodem-speedtestd restart')" ] \
+[ "$(first tools/deploy.sh 'mudimodem-deps install')" -lt "$(first tools/deploy.sh 'mudimodem-speedtestd restart')" ] \
   || fail "deploy.sh restarts a python service before installing python3-light"
 [ "$(first install.sh '> /etc/mudimodem/version.json')" -gt "$(last install.sh '^[[:space:]]*(gz_install|cp_install)[[:space:]]')" ] \
   || fail "install.sh writes version.json before the last file is installed"
@@ -136,7 +182,7 @@ rm -rf "$LT"
 # failed revert aborts (the watchdog stays armed) ---
 rn=$(first uninstall.sh 'mudimodem-revert restore-now')
 [ -n "$rn" ] || fail "uninstall.sh must revert a pending change (restore-now)"
-for later in 'glbattlimit off' 'rm -rf /usr/lib/mudimodem' 'removing files' 'mudimodem-rever\[t\] watch'; do
+for later in 'glbattlimit off' 'for p in \$FILES \$DIRS' 'removing files' 'mudimodem-rever\[t\] watch'; do
   [ "$rn" -lt "$(first uninstall.sh "$later")" ] || fail "uninstall.sh: restore-now must come before '$later'"
 done
 UT=$(mktemp -d)

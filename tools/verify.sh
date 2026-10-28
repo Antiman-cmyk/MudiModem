@@ -73,16 +73,30 @@ ssh -o BatchMode=yes "root@$HOST" 'lua /tmp/mm-ws-seed.test.lua; rc=$?; rm -f /t
   || fail "websocket/mudimodem.lua seed module failed its self-test (collect/battery/event + stale flag)"
 
 echo "1. files present"
-ssh -o BatchMode=yes "root@$HOST" 'test -s /www/views/gl-sdk4-ui-mudimodem.common.js.gz' \
+ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem.common.js.gz' \
   || fail "chunk .gz missing"
 ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/oui/menu.d/mudimodem.json' \
   || fail "menu json missing"
+
+echo "1b. survives a firmware upgrade (keep.d, nginx alias, python3 runtime)"
+ssh -o BatchMode=yes "root@$HOST" 'cat /lib/upgrade/keep.d/mudimodem' | cmp -s - src/upgrade/keep.d/mudimodem \
+  || fail "/lib/upgrade/keep.d/mudimodem missing or stale (run ./tools/deploy.sh)"
+# abfota_update silently skips a listed path that does not exist, so a typo or
+# a renamed rc.d link would only surface as a file missing after the upgrade.
+MISSING=$(ssh -o BatchMode=yes "root@$HOST" 'grep "^/" /lib/upgrade/keep.d/mudimodem | while read -r p; do [ -e "$p" ] || echo "$p"; done')
+[ -z "$MISSING" ] || fail "keep.d lists paths missing on the box: $MISSING"
+ssh -o BatchMode=yes "root@$HOST" 'test -s /etc/nginx/gl-conf.d/mudimodem.conf' \
+  || fail "nginx alias /etc/nginx/gl-conf.d/mudimodem.conf missing (step 3 would 404)"
+ssh -o BatchMode=yes "root@$HOST" '/usr/lib/mudimodem/mudimodem-deps check' \
+  || fail "python3 runtime missing (mudimodem-deps check): collector/speedtest/AT tool cannot run"
+LEFT=$(ssh -o BatchMode=yes "root@$HOST" 'ls -d /www/views/gl-sdk4-ui-mudimodem* /www/mudimodem 2>/dev/null; grep -e mudimodem -e glbattlimit /etc/sysupgrade.conf 2>/dev/null' || true)
+[ -z "$LEFT" ] || fail "2.0.0 leftovers still on the box (install.sh removes them): $LEFT"
 
 echo "2. menu json is valid JSON on-device"
 onbox_lua test/onbox/json-parses.lua /usr/share/oui/menu.d/mudimodem.json \
   || fail "menu json does not parse (would break ui.get_menu_list for EVERY page)"
 
-echo "3. nginx serves the chunk via gzip_static"
+echo "3. nginx serves the chunk via gzip_static (through our gl-conf.d alias)"
 # The device's libcurl has no --compressed, so ask for gzip and decode ourselves.
 # Without Accept-Encoding: gzip there is no plain file to serve and nginx 302s --
 # harmless, since every browser sends it.
@@ -117,7 +131,7 @@ printf '%s' "$BODY" | node -e '
   })'
 
 echo "4b. tracking chunk present, valid menu, serves, evals + renders"
-ssh -o BatchMode=yes "root@$HOST" 'test -s /www/views/gl-sdk4-ui-mudimodem-tracking.common.js.gz' \
+ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-tracking.common.js.gz' \
   || fail "tracking chunk .gz missing"
 ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/oui/menu.d/mudimodem-tracking.json' \
   || fail "tracking menu json missing"
@@ -204,7 +218,7 @@ fi
 # 7b. Battery history (issue #1): chunk serves + evals, collector is sampling,
 #     and get_battery_history survives a real /rpc round trip.
 echo "7b. battery chunk + battery.jsonl + get_battery_history"
-ssh -o BatchMode=yes "root@$HOST" 'test -s /www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz' \
+ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz' \
   || fail "battery chunk .gz missing"
 BBODY=$(ssh -o BatchMode=yes "root@$HOST" \
   'curl -sk -H "Accept-Encoding: gzip" "https://127.0.0.1/views/gl-sdk4-ui-mudimodem-battery.common.js?_t=1" | gzip -dc')
@@ -251,15 +265,15 @@ fi
 
 # 8. Phase 3: AT console chunk + community library + own-channel AT tool.
 echo "8. Phase 3: console chunk + AT library + AT tool"
-ssh -o BatchMode=yes "root@$HOST" 'test -s /www/views/gl-sdk4-ui-mudimodem-console.common.js.gz' \
+ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-console.common.js.gz' \
   || fail "console chunk .gz missing"
-ssh -o BatchMode=yes "root@$HOST" 'test -s /www/mudimodem/at-library.json.gz' \
+ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/mudimodem/www/mudimodem/at-library.json.gz' \
   || fail "at-library .gz missing"
 ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/lib/mudimodem/mudimodem-at.py' \
   || fail "AT tool missing"
 
 echo "8a. library gz parses on-device and is served via gzip_static"
-ssh -o BatchMode=yes "root@$HOST" 'gzip -dc /www/mudimodem/at-library.json.gz > /tmp/mm-lib.json' \
+ssh -o BatchMode=yes "root@$HOST" 'gzip -dc /usr/share/mudimodem/www/mudimodem/at-library.json.gz > /tmp/mm-lib.json' \
   && onbox_lua test/onbox/library-entries.lua /tmp/mm-lib.json; rc=$?
 ssh -o BatchMode=yes "root@$HOST" 'rm -f /tmp/mm-lib.json'; [ "$rc" = "0" ] \
   || fail "at-library.json.gz is not valid gzipped JSON with entries"
@@ -370,7 +384,7 @@ onbox_lua test/onbox/app-version-shape.lua \
   || fail "app_version live shape check failed"
 
 echo "11. Speedtest: files present, menu valid, chunk evals"
-ssh -o BatchMode=yes "root@$HOST" 'test -s /www/views/gl-sdk4-ui-mudimodem-speedtest.common.js.gz' \
+ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-speedtest.common.js.gz' \
   || fail "speedtest chunk .gz missing"
 ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/oui/menu.d/mudimodem-speedtest.json' \
   || fail "speedtest menu json missing"
