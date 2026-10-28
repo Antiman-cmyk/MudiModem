@@ -89,6 +89,8 @@ ssh -o BatchMode=yes "root@$HOST" 'test -s /etc/nginx/gl-conf.d/mudimodem.conf' 
   || fail "nginx alias /etc/nginx/gl-conf.d/mudimodem.conf missing (step 3 would 404)"
 ssh -o BatchMode=yes "root@$HOST" '/usr/lib/mudimodem/mudimodem-deps check' \
   || fail "python3 runtime missing (mudimodem-deps check): collector/speedtest/AT tool cannot run"
+LEFT=$(ssh -o BatchMode=yes "root@$HOST" 'ls -d /www/views/gl-sdk4-ui-mudimodem* /www/mudimodem 2>/dev/null; grep -e mudimodem -e glbattlimit /etc/sysupgrade.conf 2>/dev/null' || true)
+[ -z "$LEFT" ] || fail "2.0.0 leftovers still on the box (install.sh removes them): $LEFT"
 
 echo "2. menu json is valid JSON on-device"
 onbox_lua test/onbox/json-parses.lua /usr/share/oui/menu.d/mudimodem.json \

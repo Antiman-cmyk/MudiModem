@@ -83,7 +83,14 @@ bad=$(grep -vE '^(#|$|/(etc|usr|lib|bin|sbin|data|var)/[^][*? ]*$)' "$KEEP" || t
 kept /lib/upgrade/keep.d/mudimodem || fail "keep.d must list itself (the next upgrade reads it)"
 grep -E '^\s*(gz_install|cp_install)\s+.*\s/www/' install.sh && fail "install.sh must not write /www (an upgrade drops it)"
 grep -q "cat > /www/" tools/deploy.sh && fail "deploy.sh must not write /www (an upgrade drops it)"
-grep -q 'sysupgrade.conf' tools/deploy.sh && fail "deploy.sh must register keep.d, not sysupgrade.conf (never read on the E5800)"
+grep -q '>> "$f"' install.sh tools/deploy.sh && fail "register files in keep.d, not sysupgrade.conf (never read on the E5800)"
+# Updating from 2.0.0 (and uninstalling it): its /www payload and its
+# sysupgrade.conf entries (every one names mudimodem or glbattlimit) must go.
+for f in install.sh uninstall.sh tools/deploy.sh; do
+  grep -q 'rm -f /www/views/gl-sdk4-ui-mudimodem\*.common.js.gz' "$f" && grep -q 'rm -rf /www/mudimodem' "$f" \
+    && grep -q 'grep -v -e mudimodem -e glbattlimit "$f"' "$f" \
+    || fail "$f must drop a 2.0.0 install's /www payload and sysupgrade.conf entries"
+done
 # procd enable links: an upgrade keeps a service only if its S/K link is listed.
 for f in src/etc/init.d/*; do
   n=$(basename "$f"); st=$(sed -n 's/^START=//p' "$f"); sp=$(sed -n 's/^STOP=//p' "$f")
