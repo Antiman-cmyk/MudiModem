@@ -899,7 +899,9 @@ MudiModem/
   `phase:error`; no radio snapshot on wired; `pcc_rat` kept. AT tool: a timed-out command's reply
   is tracked in `/tmp/mudimodem/at.inflight` — the next send discards it or answers busy (with the
   reason) instead of mis-pairing it. Shell: glbattlimit watcher interruptible + owner-checked +
-  detached (no nginx fds); install/deploy stop it BEFORE the nginx restart and re-apply the saved
+  detached (no nginx fds), and it no longer writes a fixed 4.4 V `vreg` on release — GL's
+  `quec_battery` derates `vreg` for heat (4180 mV warm) and cell age, so glbattlimit saves GL's
+  value when it gates and hands exactly that back (contract doc §5); install/deploy stop it BEFORE the nginx restart and re-apply the saved
   limit after; python before services; version.json written last; the AT-library cache is never
   clobbered by the bundled snapshot; uninstall reverts a pending change first; boot-check retries
   ~5 min in the background. `mudimodem-detach` closes only the fds /proc lists, skipping its own

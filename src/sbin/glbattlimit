@@ -29,13 +29,15 @@ CHG=$R/sys/class/power_supply/charger
 PUMP=$R/sys/class/power_supply/sgm41600-standalone/device/sgm41600
 BUCK=$R/sys/class/power_supply/charger/device/sgm41542s
 
-VREG_NORMAL=4400000       # factory constant-voltage target (uV)
+VREG_NORMAL=4400000       # factory constant-voltage target (uV) — LAST-RESORT restore only
 VREG_FLOOR=3900000        # lowest value used for gating (uV)
 VREG_MARGIN=150           # mV below current terminal voltage
 DEF_LIMIT=80
 POLL=${GLBATTLIMIT_POLL:-15}
 PIDF=$R/tmp/glbattlimit.pid
 LIMF=$R/tmp/glbattlimit.limit
+GATEF=$R/tmp/glbattlimit.gate     # the vreg WE wrote while gating (absent = not gating)
+VREGF=$R/tmp/glbattlimit.vreg     # GL's own vreg, saved when we gated, restored on release
 # MudiModem's fd-closing launcher (see `on`); absent when used standalone.
 DETACH="${MUDIMODEM_DETACH:-/usr/lib/mudimodem/mudimodem-detach}"
 
@@ -76,18 +78,42 @@ cap()     { cat "$BAT/capacity"; }
 vnow_mv() { echo $(( $(cat "$BAT/voltage_now") / 1000 )); }
 online()  { cat "$CHG/online"; }
 
+# The buck's vreg is NOT ours alone: GL's quec_battery (procd, START=04) sets
+# it itself — read in the 4.10 image, thermal_battery_state_change ->
+# set_sgm41542s_func: 4180 mV when the cell is warm, charge current 0 when
+# hot, and by cycle count 4250-4400 mV as the cell ages, rewritten on every
+# thermal-state change. So the gate remembers the value GL had set and puts
+# exactly that back; it never writes vreg while not gating (a fixed 4.4 V
+# every poll overrode GL's warm/aged derating).
 gate_on() {
+    cur=$(cat "$BUCK/vreg" 2>/dev/null)
+    # Not the value we last wrote (first gate, or quec_battery rewrote it on a
+    # thermal change while we gated): that is GL's current choice — keep it.
+    if [ -n "$cur" ] && [ "$cur" != "$(cat "$GATEF" 2>/dev/null)" ]; then
+        echo "$cur" > "$VREGF"
+    fi
     t=$(( $(vnow_mv) - VREG_MARGIN ))
     t=$(( t * 1000 ))
     [ "$t" -lt "$VREG_FLOOR" ] && t=$VREG_FLOOR
+    gl=$(cat "$VREGF" 2>/dev/null)
+    [ -n "$gl" ] && [ "$t" -gt "$gl" ] && t=$gl      # never above what GL allows
     echo 0 > "$PUMP/charge_en" 2>/dev/null
     echo "$t" > "$BUCK/vreg" 2>/dev/null
+    echo "$t" > "$GATEF"
 }
 
-# Only restore vreg. Do NOT write charge_en=2 ourselves: the SGM41600 is a
-# slave charger and switching it back is the host's job. The buck resumes
-# charging immediately; the pump returns on the next plug event.
-gate_off() { echo "$VREG_NORMAL" > "$BUCK/vreg" 2>/dev/null; }
+# Release: only when we gated, and only back to GL's own value. If GL rewrote
+# vreg since our last write, its value already stands — leave it. Do NOT
+# write charge_en=2 ourselves: the SGM41600 is a slave charger and switching
+# it back is the host's job; the pump returns on the next plug event.
+gate_off() {
+    [ -f "$GATEF" ] || return 0
+    if [ "$(cat "$BUCK/vreg" 2>/dev/null)" = "$(cat "$GATEF" 2>/dev/null)" ]; then
+        gl=$(cat "$VREGF" 2>/dev/null)
+        echo "${gl:-$VREG_NORMAL}" > "$BUCK/vreg" 2>/dev/null
+    fi
+    rm -f "$GATEF" "$VREGF"
+}
 
 # Is $1 a live watcher? kill -0 alone also matches a zombie, or an unrelated
 # process that reused the pid of a SIGKILLed watcher whose PIDF survived.
@@ -112,6 +138,7 @@ stop_watcher() {
         done
         watcher_alive "$p" && kill -9 "$p" 2>/dev/null
     fi
+    gate_off          # a SIGKILLed watcher ran no trap; a no-op when nothing is gated
     rm -f "$PIDF" "$LIMF"
 }
 
@@ -136,7 +163,7 @@ watch_loop() {
         if [ "$(online)" != "1" ]; then
             gate_off
             rm -f "$PIDF" "$LIMF"
-            log "unplugged - factory state restored"
+            log "unplugged - GL's charge voltage restored"
             exit 0
         fi
         if [ "$(cap)" -ge "$lim" ]; then gate_on; else gate_off; fi
@@ -214,7 +241,7 @@ case "$1" in
     echo "Current   : $(cat $BAT/current_now) mA  (+charging -discharging 0=blocked)"
     echo "Charger   : online=$(online)"
     echo "Pump      : charge_en=$(cat $PUMP/charge_en)  (0=off 1=bypass 2=2:1)"
-    echo "Buck vreg : $(cat $BUCK/vreg) uV  (factory $VREG_NORMAL)"
+    echo "Buck vreg : $(cat $BUCK/vreg) uV  ($( [ -f "$GATEF" ] && echo "gated; GL's value $(cat "$VREGF" 2>/dev/null)" || echo "GL's own value"))"
     ;;
 
   _watch)

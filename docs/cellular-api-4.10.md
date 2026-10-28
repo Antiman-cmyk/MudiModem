@@ -153,7 +153,13 @@ awareness. Written to `/tmp/mudimodem/samples.jsonl` + `latest.json`, broadcast 
 - GL's opkg feed (`/etc/opkg/distfeeds.conf`) carries `python3-light 3.11.7-1`; every module
   MudiModem's Python imports is in it (checked by importing them with that interpreter).
 - `quec_battery` (START=04) actively manages `vreg/charge_en/hiz_mode` on the same sysfs
-  nodes `glbattlimit` writes (🔴 duel test).
+  nodes `glbattlimit` writes. Read in the binary: `thermal_battery_state_change →
+  set_sgm41542s_func` writes `vreg = full_volt_mv*1000` — **4180 mV when warm, charge
+  current 0 when hot, otherwise derated by cycle count** (>500 → 4250, >200 → 4300,
+  >100 → 4350). Its `cap_limit` is the USB-C OTG output limit (`gl_otg.typec1.threshold`),
+  not a charge cap. ⇒ `glbattlimit` must never write a fixed 4.4 V back: it saves GL's
+  `vreg` when it gates, never raises the gate above it, and on release restores GL's value
+  only if the buck still holds the gate value it wrote itself (else GL rewrote it — leave it).
 
 ## 6. What the image settled, and the short list that only a running box can answer
 
@@ -189,8 +195,10 @@ Settled from the image (second pass, 2026-09-02):
 
 🔴 Genuinely runtime (state or timing, not derivable from files):
 1. Does `set_band_config` redial? (mitigated in the UI; a Phase-0 observation, not a blocker.)
-2. `quec_battery` vs `glbattlimit` cadence duel (`quec_battery` logs `sleep :%d s` — dynamic;
-   it existed on 4.8 too, where glbattlimit demonstrably held).
+2. `quec_battery` vs `glbattlimit` cadence (`quec_battery` logs `sleep :%d s` — dynamic;
+   it existed on 4.8 too, where glbattlimit demonstrably held). The *value* conflict is
+   settled from the image (§5: glbattlimit hands GL's own vreg back); only how often
+   quec_battery re-asserts while gated is runtime.
 3. `cellular.collect` / `modem.get_signals` cadence — `interval`/`max_count` come from a
    runtime-generated `/etc/config/collection.json`; only matters for the optional cheaper
    signal source, nothing depends on it.

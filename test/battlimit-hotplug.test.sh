@@ -190,11 +190,11 @@ gone_within "$w3" 4              || wfail "W5: duplicate watcher kept running"
 [ "$(cat "$WPIDF")" = 999999 ]   || wfail "W5: touched the owner's pid file"
 rm -f "$WPIDF" "$WLIMF"
 
-echo "W6. unplug: the watcher restores the factory state and exits"
+echo "W6. unplug: the watcher restores GL's charge voltage and exits"
 POLL=1 glb on 60; w3=$(cat "$WPIDF" 2>/dev/null)
 echo 0 > "$B/charger/online"
 gone_within "$w3" 4              || wfail "W6: watcher kept running after unplug"
-[ "$(cat "$VREG")" = 4400000 ] && [ ! -e "$WPIDF" ] || wfail "W6: factory state not restored"
+[ "$(cat "$VREG")" = 4400000 ] && [ ! -e "$WPIDF" ] || wfail "W6: GL's charge voltage not restored"
 echo 1 > "$B/charger/online"
 
 echo "W7. control: without the detach wrapper (standalone) the nohup path still works"
@@ -203,5 +203,38 @@ alive "$w3"                      || wfail "W7: nohup fallback started no watcher
 [ -e "/proc/$w3/fd/7" ]          || wfail "W7: control broken (fd 7 should be inherited here, so W1 proves nothing)"
 glb off
 gone_within "$w3" 2              || wfail "W7: off did not stop the nohup watcher"
+
+# W8-W10: the buck's vreg also belongs to GL's quec_battery, which derates it
+# (4180 mV warm, 4250-4350 mV for an aged cell) — glbattlimit must give GL's
+# value back, never a fixed 4.4 V, and never write vreg while not gating.
+echo "W8. release restores GL's own (warm-derated) vreg, not 4.4 V"
+echo 4180000 > "$VREG"
+POLL=1 glb on 60; w3=$(cat "$WPIDF" 2>/dev/null)
+[ "$(cat "$VREG")" = 3900000 ]   || wfail "W8: gate not applied (vreg $(cat "$VREG"))"
+glb off
+gone_within "$w3" 3              || wfail "W8: off did not stop the watcher"
+[ "$(cat "$VREG")" = 4180000 ]   || wfail "W8: released to $(cat "$VREG") instead of GL's 4180000"
+
+echo "W9. below the limit the watcher never writes vreg (GL's aged-cell value stands)"
+echo 50 > "$B/cw221X-bat/capacity"; echo 4250000 > "$VREG"
+POLL=1 glb on 60; w3=$(cat "$WPIDF" 2>/dev/null)
+sleep 3
+[ "$(cat "$VREG")" = 4250000 ]   || wfail "W9: overwrote GL's vreg with $(cat "$VREG") while not gating"
+glb off
+gone_within "$w3" 3              || wfail "W9: off did not stop the watcher"
+[ "$(cat "$VREG")" = 4250000 ]   || wfail "W9: off wrote vreg though nothing was gated"
+echo 70 > "$B/cw221X-bat/capacity"
+
+echo "W10. GL rewrites vreg mid-gate (thermal change): its new value is the one restored"
+echo 4400000 > "$VREG"
+POLL=1 glb on 60; w3=$(cat "$WPIDF" 2>/dev/null)
+[ "$(cat "$VREG")" = 3900000 ]   || wfail "W10: gate not applied"
+echo 4180000 > "$VREG"           # quec_battery: thermal state -> warm
+sleep 3
+[ "$(cat "$VREG")" = 3900000 ]   || wfail "W10: gate not re-applied after GL's rewrite"
+echo 0 > "$B/charger/online"     # unplug
+gone_within "$w3" 4              || wfail "W10: watcher kept running after unplug"
+[ "$(cat "$VREG")" = 4180000 ]   || wfail "W10: restored $(cat "$VREG"), not GL's latest 4180000"
+echo 1 > "$B/charger/online"; echo 4400000 > "$VREG"
 
 echo "glbattlimit watcher OK"
