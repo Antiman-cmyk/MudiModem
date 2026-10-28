@@ -12,15 +12,24 @@ and spawned DETACHED by the mudimodem RPC backend (a fixed-size test takes
 schedule. Persists one JSON line per result to /etc/mudimodem/speedtests.jsonl
 (NOT /tmp -- unlike the RF-history telemetry, these must survive a reboot).
 
+Status file contract (STATUS_PATH; the backend and mudimodem-speedtestd read it):
+every write this run makes carries `pid` (this process) and `started` (epoch
+seconds when the run began), so a reader can tell a live run from one that
+died with `running:true` on disk. A run always ends on a terminal write
+(`running:false`, phase "done" or "error" + `message`/`error`), even on an
+uncaught exception or SIGTERM. A run that loses the flock exits WITHOUT
+touching the file — it belongs to the run holding the lock.
+
 Design doc: docs/superpowers/specs/2026-07-20-speedtest-tab-design.md
 """
 import fcntl
 import json
 import os
+import signal
 import subprocess
 import sys
-import tempfile
 import time
+import traceback
 
 DOWN_URL = os.environ.get("MUDIMODEM_ST_DOWN_URL", "https://speed.cloudflare.com/__down")
 UP_URL = os.environ.get("MUDIMODEM_ST_UP_URL", "https://speed.cloudflare.com/__up")
@@ -32,6 +41,9 @@ DOWN_BYTES = int(os.environ.get("MUDIMODEM_ST_DOWN_BYTES", 20 * 1024 * 1024))
 # ~2.6 Mbps actual throughput; the same transfer completed fine at 40s).
 UP_BYTES = int(os.environ.get("MUDIMODEM_ST_UP_BYTES", 2 * 1024 * 1024))
 LATENCY_N = int(os.environ.get("MUDIMODEM_ST_LATENCY_N", 5))
+DEFAULT_TIMEOUT = 20.0   # per curl transfer (--timeout)
+UBUS_TIMEOUT = 8         # per ubus call
+CURL_GRACE_S = 5         # curl_probe's subprocess deadline beyond curl's own -m
 HIST_PATH = os.environ.get("MUDIMODEM_ST_HIST", "/etc/mudimodem/speedtests.jsonl")
 STATUS_PATH = os.environ.get("MUDIMODEM_ST_STATUS", "/tmp/mudimodem/speedtest-status.json")
 LOCK_PATH = os.environ.get("MUDIMODEM_ST_LOCK", "/tmp/mudimodem/speedtest.lock")
@@ -88,8 +100,11 @@ for _d in ("/usr/lib/mudimodem", os.path.join(_HERE, "..", "src", "lib")):
         sys.path.insert(0, _d)
 import cellular_compat as cc  # noqa: E402
 
-SNAP_KEYS = ("slot", "carrier", "band", "mode", "cell_id", "rsrp", "sinr", "rsrq",
-             "pci", "tx_channel", "signals")
+# `mode` is the CELL's RAT (NR5G-NSA for EN-DC); `pcc_rat` is the primary
+# carrier's own RAT (LTE for an NSA anchor) — the one `band`/`tx_channel`
+# belong to, so the page formats B66 vs n66 off it (cellular_compat).
+SNAP_KEYS = ("slot", "carrier", "band", "mode", "pcc_rat", "cell_id", "rsrp", "sinr",
+             "rsrq", "pci", "tx_channel", "signals")
 
 
 def snapshot_from_sample(sample):
@@ -130,7 +145,9 @@ def build_snapshot(modem, cell_info, networks_info=None):
 
 def load_snapshot():
     """Prefer the collector's fresh latest.json (zero modem traffic); only when
-    it is stale/absent do the 4.10 reads ourselves (one AT-backed cell_info)."""
+    it is stale/absent do the 4.10 reads ourselves (one AT-backed cell_info).
+    A failed cell_info read is no snapshot at all, never a fake "no service"
+    one. Cellular runs only: a wired result describes no radio."""
     latest = read_latest()
     if latest is not None:
         return snapshot_from_sample(latest)
@@ -139,14 +156,25 @@ def load_snapshot():
     if slot is None:
         return {}
     cell = ubus_call("cellular.network", "cell_info", {"bus": BUS, "slot": slot})
+    if cc.cell_info_failed(cell):
+        return {}
     return build_snapshot(modem, cell, ubus_call("cellular.network", "info"))
+
+
+def worst_case_seconds(timeout=DEFAULT_TIMEOUT, latency_n=None):
+    """Upper bound on one run's wall time, from this tool's own timeouts:
+    interface lookup (1 ubus) + snapshot fallback (3 ubus) + download +
+    upload + latency_n probes, each curl bounded by curl_probe's deadline.
+    mudimodem-speedtestd sizes its kill timeout from this."""
+    latency_n = LATENCY_N if latency_n is None else latency_n
+    return 4 * UBUS_TIMEOUT + (2 + latency_n) * (timeout + CURL_GRACE_S)
 
 
 def ubus_call(obj, method, args=None):
     """Return the parsed ubus result dict, or None on any failure."""
     try:
         cmd = ["ubus", "call", obj, method, json.dumps(args or {})]
-        out = subprocess.run(cmd, capture_output=True, timeout=8, text=True)
+        out = subprocess.run(cmd, capture_output=True, timeout=UBUS_TIMEOUT, text=True)
         if out.returncode != 0 or not out.stdout:
             return None
         return json.loads(out.stdout)
@@ -158,14 +186,17 @@ def resolve_iface(which):
     return resolve_iface_from_dump(ubus_call("network.interface", "dump"), which)
 
 
-def curl_probe(url, extra_args, timeout):
+def curl_probe(url, extra_args, timeout, data=None):
     """Run curl, discarding the response body (-o /dev/null), capturing ONLY
-    the -w JSON trailer on stdout. Returns the parsed dict, or None on any
-    failure (process error, timeout, or bad JSON)."""
+    the -w JSON trailer on stdout. `data` (bytes) is fed on stdin, for
+    `--data-binary @-`. Returns the parsed dict, or None on any failure
+    (process error, timeout, or bad JSON). subprocess.run kills curl on its
+    own timeout AND on any exception unwinding through it (our SIGTERM), so
+    no curl outlives the probe that started it."""
     cmd = ["curl", "-s", "-m", str(timeout), "-o", "/dev/null", "-w", "%{json}"] + list(extra_args) + [url]
     try:
-        out = subprocess.run(cmd, capture_output=True, timeout=timeout + 5)
-    except subprocess.TimeoutExpired:
+        out = subprocess.run(cmd, input=data, capture_output=True, timeout=timeout + CURL_GRACE_S)
+    except (OSError, subprocess.TimeoutExpired):
         return None
     if out.returncode != 0:
         return None
@@ -185,8 +216,12 @@ def run_download(device, cfg):
     return mbps(r.get("speed_download")) if _ok(r) else None
 
 
-def run_upload(device, cfg, upload_path):
-    r = curl_probe(cfg["up_url"], ["--interface", device, "--data-binary", "@" + upload_path], cfg["timeout"])
+def run_upload(device, cfg):
+    # The payload goes over curl's stdin, never through a temp file: a run
+    # killed mid-upload used to leak a 2 MiB file in /tmp (RAM) every time.
+    payload = os.urandom(cfg["up_bytes"])
+    r = curl_probe(cfg["up_url"], ["--interface", device, "--data-binary", "@-"], cfg["timeout"],
+                   data=payload)
     return mbps(r.get("speed_upload")) if _ok(r) else None
 
 
@@ -261,7 +296,7 @@ def parse_args(argv):
     skips ubus resolution entirely; the Lua backend and the scheduler daemon
     never pass it -- only --iface, which is always resolved live."""
     cfg = {
-        "trigger": "manual", "iface": "cellular", "timeout": 20.0, "device": None,
+        "trigger": "manual", "iface": "cellular", "timeout": DEFAULT_TIMEOUT, "device": None,
         "down_url": DOWN_URL, "up_url": UP_URL,
         "down_bytes": DOWN_BYTES, "up_bytes": UP_BYTES,
         "hist": HIST_PATH, "status": STATUS_PATH, "lock": LOCK_PATH,
@@ -299,63 +334,95 @@ def parse_args(argv):
     return cfg
 
 
+class Terminated(Exception):
+    """SIGTERM (mudimodem-speedtestd's timeout, a service stop). Raised from
+    the handler so it unwinds through subprocess.run — which kills the curl
+    it is waiting on — and into main()'s terminal status write."""
+
+
+def _on_sigterm(_signum, _frame):
+    raise Terminated()
+
+
+def run_test(cfg, status, fail):
+    """One test, start to result. `status(**fields)` writes a status
+    snapshot; `fail(message, rc)` writes the terminal error and returns rc."""
+    status(running=True, phase="starting")
+    if cfg["device"]:
+        device, up = cfg["device"], True
+    else:
+        device, up = resolve_iface(cfg["iface"])
+    if not up or not device:
+        return fail(cfg["iface"] + " is not connected", 3)
+
+    # Carrier/SIM/band/RSRP describe the CELLULAR link: a wired result gets
+    # none (it used to be stamped with the modem's, and a stale latest.json
+    # even cost an AT-backed cell_info read).
+    snapshot = load_snapshot() if cfg["iface"] == "cellular" else {}
+
+    status(running=True, phase="download")
+    down = run_download(device, cfg)
+    if down is None:
+        return fail("download failed", 4)
+
+    status(running=True, phase="upload")
+    up_mbps = run_upload(device, cfg)
+    if up_mbps is None:
+        return fail("upload failed", 4)
+
+    status(running=True, phase="latency")
+    latency_ms, jitter_ms = run_latency(device, cfg)
+    if latency_ms is None:
+        return fail("latency probe failed", 4)
+
+    result = {"t": int(time.time() * 1000), "trigger": cfg["trigger"], "iface": cfg["iface"],
+              "down_mbps": down, "up_mbps": up_mbps,
+              "latency_ms": latency_ms, "jitter_ms": jitter_ms}
+    result.update(snapshot)
+    append_result(cfg["hist"], result)
+    status(running=False, phase="done", result=result)
+    return 0
+
+
 def main(argv):
     cfg = parse_args(argv)
     lock = acquire_lock(cfg["lock"])
     if lock is None:
-        write_status(cfg["status"], {"running": False, "phase": "error",
-                                      "message": "another test is already running"})
+        # Lost the flock race to a run already in flight (manual vs scheduled).
+        # Exit WITHOUT touching the status file (design spec): it belongs to
+        # the run holding the lock, and running:false here would hide that run.
         return 2
+    run = {"pid": os.getpid(), "started": int(time.time()), "iface": cfg["iface"]}
+    ended = {"terminal": False}
+
+    def status(**fields):
+        obj = dict(run)
+        obj.update(fields)
+        write_status(cfg["status"], obj)
+        if not obj.get("running"):
+            ended["terminal"] = True
+
+    def fail(message, rc):
+        status(running=False, phase="error", message=message, error=message)
+        return rc
+
+    prev_term = signal.signal(signal.SIGTERM, _on_sigterm)
     try:
-        if cfg["device"]:
-            device, up = cfg["device"], True
-        else:
-            device, up = resolve_iface(cfg["iface"])
-        if not up or not device:
-            write_status(cfg["status"], {"running": False, "phase": "error",
-                                          "message": cfg["iface"] + " is not connected", "iface": cfg["iface"]})
-            return 3
-
-        snapshot = load_snapshot()
-
-        write_status(cfg["status"], {"running": True, "phase": "download", "iface": cfg["iface"]})
-        down = run_download(device, cfg)
-        if down is None:
-            write_status(cfg["status"], {"running": False, "phase": "error",
-                                          "message": "download failed", "iface": cfg["iface"]})
-            return 4
-
-        write_status(cfg["status"], {"running": True, "phase": "upload", "iface": cfg["iface"]})
-        upload_path = tempfile.mktemp(prefix="mudimodem-st-")
-        with open(upload_path, "wb") as f:
-            f.write(os.urandom(cfg["up_bytes"]))
-        try:
-            up_mbps = run_upload(device, cfg, upload_path)
-        finally:
-            try:
-                os.remove(upload_path)
-            except OSError:
-                pass
-        if up_mbps is None:
-            write_status(cfg["status"], {"running": False, "phase": "error",
-                                          "message": "upload failed", "iface": cfg["iface"]})
-            return 4
-
-        write_status(cfg["status"], {"running": True, "phase": "latency", "iface": cfg["iface"]})
-        latency_ms, jitter_ms = run_latency(device, cfg)
-        if latency_ms is None:
-            write_status(cfg["status"], {"running": False, "phase": "error",
-                                          "message": "latency probe failed", "iface": cfg["iface"]})
-            return 4
-
-        result = {"t": int(time.time() * 1000), "trigger": cfg["trigger"], "iface": cfg["iface"],
-                  "down_mbps": down, "up_mbps": up_mbps,
-                  "latency_ms": latency_ms, "jitter_ms": jitter_ms}
-        result.update(snapshot)
-        append_result(cfg["hist"], result)
-        write_status(cfg["status"], {"running": False, "phase": "done", "result": result})
-        return 0
+        return run_test(cfg, status, fail)
+    except Terminated:
+        return fail("speed test was stopped", 5)
+    except Exception as e:                           # e.g. append_result on a full /etc
+        traceback.print_exc()
+        return fail("speed test failed: %s" % e, 5)
     finally:
+        signal.signal(signal.SIGTERM, prev_term)
+        if not ended["terminal"]:
+            # even the fail() above can raise; never leave running:true behind
+            try:
+                write_status(cfg["status"], dict(run, running=False, phase="error",
+                                                 message="speed test failed", error="speed test failed"))
+            except Exception:
+                pass
         lock.close()
 
 

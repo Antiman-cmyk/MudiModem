@@ -16,15 +16,17 @@
 #   watch              sleep the revert window, then restore the previous config
 #                      UNLESS mudimodem.confirm removed the pending file.
 #   boot-check         run at boot; a pending revert that survived a reboot
-#                      (file still present) is restored now.
+#                      (file still present) is restored now, retried for ~5 min
+#                      while GL's stack comes up (MUDIMODEM_BOOT_TRIES/_DELAY).
 #   restore-now        synchronous restore for the page's "Revert now" (the
 #                      backend's revert_now runs it): the SAME restore the
 #                      watchdog performs at window end, then stands the
 #                      sleeping watchdog down. Prints one JSON line.
 #   panic [slot]       immediate open state: band filtering OFF + mode AUTO on
 #                      the given slot (default: both slots), cell locks cleared
-#                      in GL's store (per slot) AND in the modem (AT, at
-#                      MUDIMODEM_SUB_ID), save_ctrl + nr5g_disable_mode reset.
+#                      in GL's store (per slot) AND in the modem (AT, on every
+#                      sub_id in MUDIMODEM_SUB_ID — default both, 1 and 2),
+#                      save_ctrl + nr5g_disable_mode reset.
 #                      ssh-callable when the web UI is down:
 #                        ssh root@mudi /usr/sbin/mudimodem-revert panic
 #
@@ -33,10 +35,11 @@
 #   KIND=cell   SLOT=<n>  SUB_ID=<n>  RAT=4g|5g  PREV_SAVE_CTRL=  PREV_mode_pref=  PREV_nr5g_disable_mode=
 #
 # Env overrides:
-#   MUDIMODEM_SUB_ID=<n>   sub_id for panic's AT clears (default 1 — the T-Mobile/
-#                          slot-1 subscription on the reference box; sub_id 0 is
-#                          unstable, see CLAUDE.md §6). The per-slot GL unlock
-#                          panic also issues needs no sub_id.
+#   MUDIMODEM_SUB_ID="<n> [<n>]"  sub_ids for panic's AT clears (default "1 2":
+#                          sub_id 1 answers for SIM1, 2 for SIM2 — clearing only 1
+#                          left a SIM2 lock in place; sub_id 0 is unstable and never
+#                          used, see CLAUDE.md §6). The per-slot GL unlock panic
+#                          also issues needs no sub_id.
 #   (testing) MUDIMODEM_DRY=1  log intended writes instead of running them
 #   MUDIMODEM_WINDOW=<s>   revert window (default 60)
 #   MUDIMODEM_PENDING=<f>  pending-state path (default /etc/mudimodem/pending)
@@ -215,12 +218,46 @@ case "${1:-}" in
     [ "$(cat "$ARMED" 2>/dev/null)" = "$MYNONCE" ] && rm -f "$ARMED"
     ;;
   boot-check)
-    if [ -f "$PENDING" ]; then
-      log "boot-check: stale pending found -> reverting"
-      restore_from_pending || log "boot-check: restore failed; pending kept"
-    else
-      log "boot-check: nothing pending"
+    # The restore rides services procd starts asynchronously (gl-session +
+    # nginx /rpc + glc for bands, modem_AT for a cell lock), so an attempt at
+    # START=96 can land before them — and a single failed try would leave the
+    # reboot-mid-window change in force (GL re-applies its store). Retry on a
+    # bounded ramp (5,10,15,20,20… s; 18 tries ≈ 5 min) and stand down once
+    # pending is gone or replaced (Keep / Revert now / panic / a newer change
+    # with its own watchdog). The init script runs this in the background.
+    BOOT_TRIES="${MUDIMODEM_BOOT_TRIES:-18}"
+    BOOT_DELAY="${MUDIMODEM_BOOT_DELAY:-5}"
+    BOOT_LOCK="${MUDIMODEM_BOOT_LOCK:-/tmp/mudimodem-boot-check.pid}"
+    if [ ! -f "$PENDING" ]; then log "boot-check: nothing pending"; exit 0; fi
+    # One retry loop at a time (a manual `/etc/init.d/mudimodem-revert start`
+    # while the boot one still runs). A holder that died without its EXIT trap
+    # (kill) leaves a dead pid, which is simply taken over; /tmp: no lock can
+    # outlive the boot.
+    holder=$(cat "$BOOT_LOCK" 2>/dev/null)
+    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+      log "boot-check: already running (pid $holder); not starting a second"
+      exit 0
     fi
+    echo $$ > "$BOOT_LOCK"
+    trap '[ "$(cat "$BOOT_LOCK" 2>/dev/null)" = "$$" ] && rm -f "$BOOT_LOCK"' EXIT
+    snap=$(cat "$PENDING" 2>/dev/null)
+    log "boot-check: stale pending found -> reverting"
+    n=1
+    while :; do
+      if restore_from_pending; then log "boot-check: restored (attempt $n)"; break; fi
+      if [ "$n" -ge "$BOOT_TRIES" ]; then
+        log "boot-check: restore failed $n times; giving up, pending kept (Revert now / panic)"
+        break
+      fi
+      d=$((BOOT_DELAY * n)); [ "$d" -gt $((BOOT_DELAY * 4)) ] && d=$((BOOT_DELAY * 4))
+      log "boot-check: restore failed (attempt $n); retrying in ${d}s"
+      sleep "$d"
+      if [ "$(cat "$PENDING" 2>/dev/null)" != "$snap" ]; then
+        log "boot-check: pending cleared or replaced meanwhile; standing down"
+        break
+      fi
+      n=$((n + 1))
+    done
     ;;
   restore-now)
     if [ ! -f "$PENDING" ]; then echo '{"ok":true,"nothing_pending":true}'; exit 0; fi
@@ -240,9 +277,9 @@ case "${1:-}" in
     fi
     ;;
   panic)
-    SUB="${MUDIMODEM_SUB_ID:-1}"
+    SUBS="${MUDIMODEM_SUB_ID:-1 2}"
     SLOTS="${2:-1 2}"
-    log "PANIC restore -> open band config (slots $SLOTS), locks cleared (sub_id $SUB)"
+    log "PANIC restore -> open band config (slots $SLOTS), locks cleared (sub_ids $SUBS)"
     for s in $SLOTS; do
       set_band_config "{\"bus\":\"$BUS\",\"slot\":$s,\"band_enable\":false,\"network_mode\":\"AUTO\"}" \
         || log "panic: set_band_config failed on slot $s"
@@ -254,12 +291,15 @@ case "${1:-}" in
       gl_unlock_slot "$s" || log "panic: set_cell_tower unlock failed on slot $s"
     done
     # Clear cell locks in the modem and reset the prefs a lock can leave
-    # behind, so panic returns the modem to a fully open, auto-selecting state.
-    at 'AT+QNWLOCK="common/4g",0' "$SUB"
-    at 'AT+QNWLOCK="common/5g",0' "$SUB"
-    at 'AT+QNWLOCK="save_ctrl",0,0' "$SUB"
-    at 'AT+QNWPREFCFG="mode_pref",AUTO' "$SUB"
-    at 'AT+QNWPREFCFG="nr5g_disable_mode",0' "$SUB"
+    # behind, so panic returns the modem to a fully open, auto-selecting state
+    # — on EVERY subscription: the lock may sit on whichever SIM was active.
+    for sub in $SUBS; do
+      at 'AT+QNWLOCK="common/4g",0' "$sub"
+      at 'AT+QNWLOCK="common/5g",0' "$sub"
+      at 'AT+QNWLOCK="save_ctrl",0,0' "$sub"
+      at 'AT+QNWPREFCFG="mode_pref",AUTO' "$sub"
+      at 'AT+QNWPREFCFG="nr5g_disable_mode",0' "$sub"
+    done
     rm -f "$PENDING"
     log "panic complete"
     ;;

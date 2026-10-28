@@ -16,6 +16,8 @@ run() {  # runs the watchdog with isolated env; extra env in $EXTRA
   P="$WORK/pending"; L="$WORK/log"
   env MUDIMODEM_DRY=1 MUDIMODEM_PENDING="$P" MUDIMODEM_LOG="$L" \
       MUDIMODEM_ARMED="$WORK/armed" MUDIMODEM_WINDOW="${WIN:-1}" \
+      MUDIMODEM_BOOT_LOCK="$WORK/bootlock" MUDIMODEM_BOOT_DELAY="${BDELAY:-0}" \
+      MUDIMODEM_BOOT_TRIES="${BTRIES:-3}" \
       MUDIMODEM_HIST="$WORK/hist" sh "$SCRIPT" "$@"
 }
 # LIVE mode (DRY unset) against a FAKE ubus on PATH: $UBUS_BODY is what
@@ -29,7 +31,14 @@ runlive() {
 echo "ubus \$*" >> "$WORK/ubus.calls"
 case "\$*" in
   *get_cell_tower*) printf '%s\n' "\${UBUS_TOWER_BODY:-\$UBUS_BODY}"; exit 0 ;;
-  *gl-session\ call*) printf '%s\n' "\$UBUS_BODY"; exit "\${UBUS_RC:-0}" ;;
+  *gl-session\ call*)
+    # UBUS_FAIL_FIRST=<n>: the first n gl-session calls fail as if gl-session /
+    # nginx were not up yet (boot), later ones get UBUS_BODY/UBUS_RC.
+    if [ -n "\${UBUS_FAIL_FIRST:-}" ]; then
+      n=\$(( \$(cat "$WORK/ubus.fails" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "$WORK/ubus.fails"
+      [ "\$n" -le "\$UBUS_FAIL_FIRST" ] && { echo "Command failed: Not found"; exit 4; }
+    fi
+    printf '%s\n' "\$UBUS_BODY"; exit "\${UBUS_RC:-0}" ;;
   *gl-session\ notify*) exit 0 ;;
   *) echo '{}'; exit 0 ;;
 esac
@@ -56,7 +65,9 @@ EOF
   P="$WORK/pending"; L="$WORK/log"
   PATH="$FAKE:$PATH" env -u MUDIMODEM_DRY MUDIMODEM_PENDING="$P" MUDIMODEM_LOG="$L" \
       MUDIMODEM_ARMED="$WORK/armed" MUDIMODEM_WINDOW="${WIN:-1}" MUDIMODEM_HIST="$WORK/hist" \
-      UBUS_BODY="$UBUS_BODY" UBUS_RC="${UBUS_RC:-0}" sh "$SCRIPT" "$@"
+      MUDIMODEM_BOOT_LOCK="$WORK/bootlock" MUDIMODEM_BOOT_DELAY="${BDELAY:-0}" \
+      MUDIMODEM_BOOT_TRIES="${BTRIES:-3}" \
+      UBUS_BODY="$UBUS_BODY" UBUS_RC="${UBUS_RC:-0}" UBUS_FAIL_FIRST="${UBUS_FAIL_FIRST:-}" sh "$SCRIPT" "$@"
 }
 # A bands pending: the GL get_band_config snapshot, JSON single-quoted for sh.
 mkpending() { printf "KIND=bands\nSLOT=1\nSUB_ID=1\nPREV_BAND_CONFIG='%s'\n" "$1" > "$WORK/pending"; }
@@ -105,6 +116,10 @@ inlog '"slot":2,"band_enable":false' \
                                   && pass "slot 2 opened too" || fail "slot 2 not opened"
 inlog 'QNWLOCK=\\"common/4g\\",0' && pass "cleared 4g lock" || fail "did not clear 4g lock"
 inlog 'QNWLOCK=\\"common/5g\\",0' && pass "cleared 5g lock" || fail "did not clear 5g lock"
+# A lock on SIM2 lives on sub_id 2: clearing only sub_id 1 left it in place.
+inlog 'common/5g\\",0","timeout":10,"sub_id":1' && inlog 'common/5g\\",0","timeout":10,"sub_id":2' \
+                                  && pass "modem locks cleared on both subscriptions" || fail "panic missed a subscription"
+inlog '"sub_id":0'                && fail "panic sent sub_id 0" || pass "never sub_id 0"
 [ ! -f "$WORK/pending" ]          && pass "pending cleared" || fail "pending not cleared"
 
 echo "6. watch (KIND=cell): reverts by raw-AT unlock + restores prefs (no marker file: stale is derived live)"
@@ -226,6 +241,47 @@ OUT=$(UBUS_BODY="$UBUS_BODY" runlive restore-now); rc=$?
 [ "$rc" = "1" ]                        && pass "exit 1" || fail "exit $rc"
 echo "$OUT" | grep -q '"ok":false'     && pass "JSON ok:false" || fail "no failure JSON: $OUT"
 [ -f "$WORK/pending" ]                 && pass "pending kept" || fail "pending lost"
+
+OKBODY=$(printf '{\n\t"result": { }\n}')
+setcount() { grep -c 'set_band_config' "$WORK/ubus.calls" 2>/dev/null || echo 0; }
+
+echo "17. LIVE boot-check: GL's stack not up yet -> retries until the restore lands"
+rm -f "$WORK/log" "$WORK/ubus.calls" "$WORK/ubus.fails" "$WORK/bootlock"; mkpending "$SNAP"
+# Two whole attempts fail (snapshot + open-state fallback each), the third lands.
+UBUS_FAIL_FIRST=4 BTRIES=5 UBUS_BODY="$OKBODY" runlive boot-check
+[ ! -f "$WORK/pending" ]          && pass "pending cleared once the stack answered" || fail "gave up after the first failure"
+inlog 'restored (attempt 3)'      && pass "restored on attempt 3" || fail "no 'restored (attempt 3)' in log"
+[ "$(setcount)" = 5 ]             && pass "2 failed attempts x 2 writes + 1 success" || fail "expected 5 set_band_config calls, got $(setcount)"
+[ ! -f "$WORK/bootlock" ]         && pass "single-instance lock released" || fail "boot lock left behind"
+
+echo "18. LIVE boot-check: still failing after the last try -> gives up, pending kept"
+rm -f "$WORK/log" "$WORK/ubus.calls" "$WORK/ubus.fails"; mkpending "$SNAP"
+BTRIES=3 UBUS_BODY="Command failed: Not found" UBUS_RC=4 runlive boot-check
+[ -f "$WORK/pending" ]            && pass "pending kept (Revert now / panic can still act)" || fail "pending lost"
+inlog 'giving up'                 && pass "bounded: gave up" || fail "no give-up logged"
+[ "$(setcount)" = 6 ]             && pass "exactly 3 attempts" || fail "expected 6 set_band_config calls, got $(setcount)"
+
+echo "19. LIVE boot-check: pending cleared meanwhile (Keep / Revert now) -> stands down"
+rm -f "$WORK/log" "$WORK/ubus.calls" "$WORK/ubus.fails"; mkpending "$SNAP"
+BDELAY=2 BTRIES=5 UBUS_BODY="Command failed: Not found" UBUS_RC=4 runlive boot-check &
+BPID=$!
+sleep 1; rm -f "$WORK/pending"   # e.g. the page's Keep, during the first back-off
+wait "$BPID"
+inlog 'standing down'             && pass "stood down" || fail "kept retrying after pending vanished"
+[ "$(setcount)" = 2 ]             && pass "no write after pending vanished" || fail "expected 2 set_band_config calls, got $(setcount)"
+
+echo "20. boot-check: a second run while one is retrying does not start another loop"
+rm -f "$WORK/log"; mkpending "$SNAP"
+echo $$ > "$WORK/bootlock"       # a live holder (this test shell)
+run boot-check
+inlog 'already running'           && pass "second instance declined" || fail "no single-instance guard"
+[ -f "$WORK/pending" ]            && pass "and left pending to the running loop" || fail "second instance restored anyway"
+[ "$(cat "$WORK/bootlock")" = "$$" ] && pass "holder's lock untouched" || fail "second instance clobbered the lock"
+sh -c 'exit 0' & DEAD=$!; wait "$DEAD"; echo "$DEAD" > "$WORK/bootlock"   # holder died without cleanup
+rm -f "$WORK/log"
+run boot-check
+[ ! -f "$WORK/pending" ]          && pass "a dead holder's lock is taken over" || fail "stale lock blocked boot-check"
+rm -f "$WORK/bootlock"
 
 echo
 if [ "$FAILED" = "0" ]; then echo "ALL REVERT TESTS PASSED"; else echo "REVERT TESTS FAILED"; exit 1; fi

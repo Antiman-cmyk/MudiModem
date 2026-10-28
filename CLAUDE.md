@@ -428,7 +428,19 @@ index, not a slot number.** Verified:
 | **1** | **T-Mobile (310260)** | **1** — the active/serving SIM | |
 | 2 | AT&T | 2 (falls back to 0) |
 
-Slot 1 ↔ sub_id 1 is a **coincidence**; slot 2 ↔ sub_id **0**.
+~~Slot 1 ↔ sub_id 1 is a coincidence; slot 2 ↔ sub_id 0.~~ **Corrected 2026-10-28:** the table's
+own evidence is sub_id 1 → slot 1 and sub_id **2** → slot 2; 0 is the floating one. The old
+resolver tried `{1, 0, 2}` and PLMN-matched, which **could not tell SIM1 from SIM2**: with two SIMs
+of the same carrier sub_id 1 matched for slot 2 (every AT read/write hit SIM1), a SIM2 lookup could
+land on the unstable 0, and a roaming SIM (QSPN = visited PLMN ≠ IMSI home PLMN) never confirmed, so
+`set_cell_lock` refused. `resolve_active` now tries **the slot's own sub_id first, then the other,
+never 0**, confirms by **IMSI (`AT+CIMI`) first** (unique per SIM, roaming-proof), PLMN only as the
+fallback, and keys its cache on the SIM's iccid. 🟢 **Settled from the 4.10 image (contract doc
+§2.1): GL itself uses `sub_id = slot` for the built-in modem, reads each slot's IMSI with
+`AT+CIMI` at that sub_id, and never sends `sub_id:0` (`execute_at_command` omits it).**
+Writes (`set_bands` / `set_cell_lock` / `clear_cell_lock`) also take the `slot` the page read its
+picture for and refuse when the active SIM has changed; the page re-reads on a slot change.
+`panic` clears modem locks on sub_ids 1 **and** 2.
 
 > ⚠️ **`sub_id=0` silently answers for different subscriptions at different times.** Same command,
 > minutes apart: `AT+QNWPREFCFG="nr5g_band"` @ sub_id=0 returned `71` (T-Mobile's), then
@@ -436,8 +448,8 @@ Slot 1 ↔ sub_id 1 is a **coincidence**; slot 2 ↔ sub_id **0**.
 > **This is worse than always-wrong — it looks right most of the time.** A whole band analysis was
 > built on it this session and thrown away.
 
-**RULE: never send `sub_id=0`.** Resolve the active slot from ubus (`cellular.sim info` /
-`cellular.network info` — the ground truth), then pass its explicit sub_id.
+**RULE: never send `sub_id=0`.** Resolve the active slot from ubus (`cellular.modem status`
+`current_sim_slot` — the ground truth), then the sub_id that answers for that SIM (`resolve_active`).
 
 **Build AT payloads with proper JSON escaping** — the inner quotes of `AT+QNWPREFCFG="nr5g_band"`
 must be escaped or ubus silently returns empty/ERROR. Working helper in the reference doc §Provenance.
@@ -533,13 +545,21 @@ router and searchable. It's a differentiator no router UI has.
 - **`verified: []` + `source` are load-bearing** — an unverified community command must render as
   "*nobody yet*", not hide. Keeps the library from becoming a folk-remedy collection. AT is
   vendor- *and* firmware-specific; `AT+QNWPREFCFG` is Quectel-only.
-- ⭐ **Transport: our own AT channel, not GL's `modem.CPU.AT`.** (4.10: nothing of GL's is
-  SIGSTOPped any more — `gl_modem` no longer exists as a daemon.) GL's channel (`/dev/smd9`) crosses
-  responses under heavy polling (reference §10). `/dev/at_mdm0` is a free, world-accessible, separate
-  AT port; **`tools/mudimodem-at.py`** (CPython stdlib, no compile, no `pyserial`) drives it cleanly.
-  The backend can spawn it per command. ⚠️ It has **no `sub_id`** (active-subscription context only),
-  so it's right for the console + active-SIM work but NOT the cross-SIM band model — that stays on
-  GL's channel. Gotchas (open blocking = no `EBUSY`; not a tty; filter URCs) are in the file header.
+- ⭐ **Transport (changed 2026-10-28): GL's own AT service FIRST, the direct port only as fallback.**
+  `at_console` runs `ubus -t <timeout+5> call modem.CPU.AT get_result_AT
+  {cmd, timeout, sub_id = active slot, source_flag: 1}` — byte-for-byte what GL's web console sends
+  (`libcm_network.so send_at_command`). 4.10's `modem_AT` (rewritten, gl-sdk4-cellular 2026.236)
+  fixed what made the 4.8 channel unusable: one IO thread with a request queue,
+  `drain_rx_before_tx`, an `expected_prefix` check that discards a crossed reply, `AT+QUIMSUB=<sub_id>`
+  per request, and a `cellular.status get_event` notice when a band/lock/mode/CFUN-type command
+  runs, so GL's state manager sees console changes (contract doc §5). Why move: `/dev/at_mdm0` is
+  read continuously by `port-bridge` (contention), and it answers for whatever subscription that
+  port is on — with SIM2 active it may still answer for SIM1; GL's service is addressed per SIM.
+  **`tools/mudimodem-at.py` on `/dev/at_mdm0`** remains only for when `modem.CPU.AT` is not
+  registered (ubus exit 4 on the FIRST step — nothing sent, so nothing runs twice); replies carry
+  `transport: "gl" | "direct"` and the console labels it. Limits: GL's console caps a reply at
+  4095 bytes (same buffer here); the per-step timeout stays 1–60 s. Direct-port gotchas (open
+  blocking = no `EBUSY`; not a tty; filter URCs) are in the tool's header.
 - ✅ Built 2026-07-18 — see §12 and the Phase-3 spec/plan.
 
 ## 8. Dev gotchas
@@ -813,7 +833,8 @@ MudiModem/
   and passes it by env; deploy/verify use install.sh's numeric firmware compare; deploy.sh's
   sysupgrade list is checked against install.sh's by `test/test_install_wiring.sh`. REFUTED by
   the image and left alone: cjson `[]→{}` in revert_now (oui-rpc.lua sets
-  `encode_empty_table_as_object(false)`), the detach fd loop (ash's script fd occupies fd 10),
+  `encode_empty_table_as_object(false)`), the detach fd loop (ash's script fd occupies fd 10;
+  harmless on ash — dash died on it, fixed 2026-10-28),
   `band_enable` type (libcm_modem.so emits a JSON boolean), per-route `global_sockets`
   (app.js subscribes the union of every menu entry at ws open).
   Follow-up (same day): the cell-lock `revert_now` now runs the watchdog's own
@@ -921,6 +942,33 @@ MudiModem/
   fields degrade to `idle`, never to a confident `full`/`blocked`.
   Spec: `docs/superpowers/specs/2026-07-27-battery-tab-history-design.md`;
   plan: `docs/superpowers/plans/2026-07-27-battery-tab-history.md`.
+- ✅ **2.2.0 — whole-repo bug sweep (2026-10-28).** SIM1/SIM2: sub_id slot-first + IMSI (§6), writes carry
+  the page's `slot`, the page re-reads on a slot switch, panic clears sub_ids 1+2. Collector: a
+  FAILED `cell_info` read skips the tick (no fake "not registered"); the eMMC backup is two
+  append-only segments per stream (`samples.jsonl` + `samples.prev.jsonl`, same for battery; one
+  rename a day, never a whole-file rewrite); intervals on `time.monotonic()`; events trim keeps
+  concurrent appends. Speed test: status carries `pid`/`started`, the backend reports a dead run as
+  `phase:error`; no radio snapshot on wired; `pcc_rat` kept. AT tool: a timed-out command's reply
+  is tracked in `/tmp/mudimodem/at.inflight` — the next send discards it or answers busy (with the
+  reason) instead of mis-pairing it. Shell: glbattlimit watcher interruptible + owner-checked +
+  detached (no nginx fds), and it no longer writes a fixed 4.4 V `vreg` on release — GL's
+  `quec_battery` derates `vreg` for heat (4180 mV warm) and cell age, so glbattlimit saves GL's
+  value when it gates and hands exactly that back (contract doc §5); install/deploy stop it BEFORE the nginx restart and re-apply the saved
+  limit after; python before services; version.json written last; the AT-library cache is never
+  clobbered by the bundled snapshot; uninstall reverts a pending change first; boot-check retries
+  ~5 min in the background. `mudimodem-detach` closes only the fds /proc lists, skipping its own
+  script fd, so it also works under dash. Pages: NSA anchor shown as B, PAUSED freezes, pins are
+  absolute, failed preloads retry, SIM switches break lines, the speed-test poll is silent and
+  dies with the tab, the battery-limit card refreshes, the console keeps its transcript across
+  tabs. **Verified against the 4.10 image the same day** (`firmware/rootfs`, the router's own
+  busybox / Lua / jsonfilter / python3-light 3.11.7 under qemu): every Lua, Python and shell
+  suite passes on them; sub_id = slot + `AT+CIMI` per sub_id is GL's own code path; busybox
+  `sleep` takes fractions, `pgrep -f` is regex, **`setsid` does not exist** (harmless — procd
+  and nginx signal by pid); port-bridge reads `at_mdm0` continuously, so the AT tool keeps
+  only QSCAN / COPS=? / CGATT "owed" (600 / 180 / 180 s) and others 15 s; the old glbattlimit
+  orphan-watcher bug reproduces on the router's ash and the fix removes it. Details: contract
+  doc §2.1/§5, `reference/4.10/re-notes.md`. Known, not fixed: after a backward clock step the
+  eMMC flush cursor (a sample `t`) waits until the clock passes it again.
 - 🔭 Later: an ipk. (`boot-check` now has its boot hook — `/etc/init.d/mudimodem-revert`,
   START=96, installed + enabled by install.sh/deploy.sh; firmware-upgrade persistence is keep.d,
   §9.)

@@ -3,6 +3,8 @@
 # installer placed (keep.d entry included) and restarts nginx.
 # Idempotent. Does NOT touch the modem's band/cell-lock NV — clear those from the
 # panel (or the ssh panic-restore) BEFORE uninstalling if you want them gone.
+# The one exception: a change still in its confirm-or-revert window is reverted
+# first, exactly as its watchdog would have done.
 # Run it from a root shell on the router (ssh root@<router> first if remote):
 #
 #   curl -fsSL https://raw.githubusercontent.com/Antiman-cmyk/MudiModem/main/uninstall.sh | sh
@@ -40,6 +42,30 @@ FILES="
 # Ours entirely: web payload, helpers + tools, state (pending-revert marker,
 # version, battlimit, history, speedtest).
 DIRS="/usr/share/mudimodem /usr/lib/mudimodem /etc/mudimodem"
+
+# FIRST, before anything is stopped or removed: a band/cell-lock change still
+# inside its confirm-or-revert window exists only as /etc/mudimodem/pending +
+# a sleeping watchdog. Deleting them would make the trial change permanent
+# (the watchdog wakes to "confirmed"), so undo it now — the same synchronous
+# restore the page's "Revert now" runs, while nginx/gl-session are still up —
+# and refuse to go on if it fails (the watchdog then stays armed).
+if [ -f /etc/mudimodem/pending ]; then
+  echo "an unconfirmed band/cell-lock change is pending - reverting it first:"
+  if [ -x /usr/sbin/mudimodem-revert ] && out=$(/usr/sbin/mudimodem-revert restore-now 2>&1); then
+    echo "  $out"
+  else
+    echo "  ${out:-/usr/sbin/mudimodem-revert is missing}" >&2
+    echo "ABORTING: the pending change could not be reverted; removing MudiModem now would keep it." >&2
+    echo "  Retry in a minute, or run: /usr/sbin/mudimodem-revert panic" >&2
+    echo "  (or keep the change: rm /etc/mudimodem/pending) and re-run the uninstaller." >&2
+    exit 1
+  fi
+fi
+# Then stand down any watchdog still sleeping, and a boot-check retry loop
+# (pending is gone, they would only wake to a no-op; [t]: never match this shell).
+for p in $(pgrep -f 'mudimodem-rever[t] watch' 2>/dev/null) $(pgrep -f 'mudimodem-rever[t] boot-check' 2>/dev/null); do
+  kill "$p" 2>/dev/null || true
+done
 
 # Release charge limit before removing the binary (restores factory charge path).
 if [ -x /usr/bin/glbattlimit ]; then

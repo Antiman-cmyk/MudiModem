@@ -190,54 +190,120 @@ local function qspn_plmn(blob)
   return last                                          -- "310260" or nil
 end
 
--- Resolve the sub_id that actually talks to the ACTIVE subscription.
--- sub_id=0 is unstable (CLAUDE.md §6), so we MATCH by PLMN rather than assume a
--- slot->sub_id mapping.  Returns (sub_id, operator_plmn, matched_bool).
-local function resolve_sub_id(want_plmn)
-  for _, sid in ipairs({ 1, 0, 2 }) do            -- prefer 1 (never lead with 0)
-    local plmn = qspn_plmn(at("AT+QSPN", sid))
-    if plmn and plmn ~= "" then
-      if not want_plmn or plmn == want_plmn then
-        return sid, plmn, (want_plmn ~= nil)
-      end
-    end
+-- The IMSI (14-15 digits) out of an AT+CIMI reply ("\r\n310260123456789\r\n\r\nOK").
+local function cimi_imsi(blob)
+  if not blob then return nil end
+  for d in blob:gmatch("%d+") do
+    if #d >= 14 and #d <= 15 then return d end
   end
-  return 1, nil, false                            -- fallback: sub_id 1, flagged
+  return nil
 end
 
--- Resolve the active subscription end-to-end: find the serving slot's PLMN from
--- ubus, then the sub_id whose QSPN matches it. Returns (sub_id, plmn, matched, slot).
--- ⚠️ `slot` is nil when GL has no active slot (no SIM, modem resetting): every
--- caller must REFUSE to write in that case — never fall back to slot 1, which
--- would mis-target SIM2/eSIM.
+-- A SIM field as a plain digit string (GL sends strings; a JSON number is
+-- formatted without an exponent so a 15-digit IMSI survives), nil otherwise.
+local function digits(v)
+  v = nn(v)
+  if type(v) == "number" then v = string.format("%.0f", v) end
+  if type(v) ~= "string" then return nil end
+  return v:match("^%s*(%d+)%s*$")
+end
+
+-- sub_ids to try for a slot, in order. On this box sub_id 1 answers for slot 1
+-- and sub_id 2 for slot 2, while sub_id 0 floats between subscriptions
+-- (reference §1) — so the slot's own number leads, the other explicit sub_id
+-- follows, and 0 is never sent (CLAUDE.md §6). Leading with 1 for every slot
+-- was the SIM1/SIM2 mix-up: with two SIMs of the same carrier sub_id 1 PLMN-
+-- matched for slot 2 too, and every AT read/write then hit SIM1.
+local function subid_candidates(slot)
+  local out, seen = {}, {}
+  for _, sid in ipairs({ slot or 1, 1, 2 }) do
+    if sid > 0 and not seen[sid] then seen[sid] = true; out[#out + 1] = sid end
+  end
+  return out
+end
+
+-- Resolve the sub_id that actually talks to the active SIM.
+-- 1. IMSI (AT+CIMI) when GL reports the slot's IMSI: unique per SIM, so it
+--    separates two SIMs of the same carrier and is unaffected by roaming. If
+--    CIMI answers but no candidate carries this IMSI, the answer is "not
+--    confirmed" — a PLMN match then could only pick the wrong SIM.
+-- 2. Otherwise PLMN: QSPN's registered PLMN against the SIM's home mcc+mnc
+--    (cannot separate same-carrier SIMs — the candidate order covers that —
+--    and misses while roaming).
+-- Unconfirmed => the slot's own sub_id, flagged. Returns (sub_id, plmn, matched).
+local function resolve_sub_id(slot, want_imsi, want_plmn)
+  local cands = subid_candidates(slot)
+  if want_imsi then
+    local cimi_works = false
+    for _, sid in ipairs(cands) do
+      local imsi = cimi_imsi(at("AT+CIMI", sid))
+      if imsi == want_imsi then return sid, want_plmn, true end
+      if imsi then cimi_works = true end
+    end
+    if cimi_works then return cands[1], nil, false end
+  end
+  if want_plmn then
+    for _, sid in ipairs(cands) do
+      local plmn = qspn_plmn(at("AT+QSPN", sid))
+      if plmn == want_plmn then return sid, plmn, true end
+    end
+  end
+  return cands[1], nil, false
+end
+
 -- GL's active slot (current_sim_slot of the built-in modem), nil when none.
 -- One ubus read, no AT — enough for every slot-addressed GL call.
 local function active_slot()
   local st = pick_modem(ucall("cellular.modem", "status", {}))
-  return st and tonumber(st.current_sim_slot) or nil
+  local slot = st and tonumber(nn(st.current_sim_slot)) or nil
+  return (slot and slot >= 1) and slot or nil       -- 0 is a truthy number in Lua, not a slot
 end
 
+-- Resolve the active subscription end-to-end: the active slot's SIM identity
+-- from ubus, then the sub_id that answers for it. Returns (sub_id, plmn,
+-- matched, slot).
+-- ⚠️ `slot` is nil when GL has no active slot (no SIM, modem resetting): every
+-- caller must REFUSE to write in that case — never fall back to slot 1, which
+-- would mis-target SIM2/eSIM.
 local function resolve_active()
-  local want_plmn
   local slot = active_slot()
+  if not slot then return nil, nil, false, nil end
+  local want_imsi, want_plmn, iccid
   local sims = ucall("cellular.sim", "info", {})
   for _, s in ipairs((sims and sims.sims) or {}) do
-    if slot and tonumber(s.slot) == slot and s.mcc and s.mnc then
-      want_plmn = tostring(s.mcc) .. tostring(s.mnc)
+    if type(s) == "table" and tonumber(nn(s.slot)) == slot and (nn(s.bus) == nil or s.bus == BUS) then
+      local imsi = digits(s.imsi)
+      if imsi and #imsi >= 14 and #imsi <= 15 then want_imsi = imsi end
+      local mcc, mnc = digits(s.mcc), digits(s.mnc)
+      if mcc and mnc then want_plmn = mcc .. mnc end
+      iccid = nn(s.iccid)
     end
   end
-  local key = tostring(slot) .. ":" .. tostring(want_plmn)
+  -- Keyed on the SIM itself (iccid/IMSI), so a different SIM in the same slot
+  -- — even one of the same carrier — never reuses another SIM's answer.
+  local key = tostring(slot) .. ":" .. tostring(iccid or want_imsi or want_plmn)
   if subid_cache.key == key and os.time() - subid_cache.at < SUBID_TTL then
     return subid_cache.sub_id, subid_cache.plmn, true, slot
   end
-  local sub_id, plmn, matched = resolve_sub_id(want_plmn)
-  -- Cache only a PLMN-matched answer, and never sub_id 0: it is documented to
-  -- answer for different subscriptions minutes apart (CLAUDE.md §6), so it
-  -- must be re-verified by QSPN on every call rather than pinned for 5 min.
-  if matched and sub_id ~= 0 then
+  local sub_id, plmn, matched = resolve_sub_id(slot, want_imsi, want_plmn)
+  if matched then
     subid_cache = { key = key, sub_id = sub_id, plmn = plmn, at = os.time() }
   end
   return sub_id, plmn, matched, slot
+end
+
+-- The page sends the slot its band/lock picture was read for. When the active
+-- SIM has changed since (a switch in GL's Internet page, slot failover), a
+-- write would apply SIM1's picture to SIM2 — refuse instead and say so; the
+-- page refetches. Absent (ssh / older page) => no check.
+local function slot_changed(args, slot)
+  local want = tonumber(args and nn(args.slot))
+  if want and want ~= slot then
+    return { error = "the active SIM changed (this page was showing SIM " .. want ..
+                     ", SIM " .. tostring(slot) .. " is active now) - refresh and try again",
+             slot_changed = true, slot = slot }
+  end
+  return nil
 end
 
 -- Call one of GL's C rpc plugins (modem.so) exactly as oui.rpc's glc_call does
@@ -606,13 +672,14 @@ function M.scan_cells(args)
   local res, err = glc("modem", "scan_cell_tower", { bus = BUS, slot = slot })
   if not res then return { error = "scan failed: " .. tostring(err) } end
   append_event("user", "Cell scan", "")
-  return { towers = arr(res.towers or {}), ts = os.time() * 1000 }
+  return { towers = arr(res.towers or {}), ts = os.time() * 1000, slot = slot }
 end
 
 -- WRITE: lock to one cell via GL's stack, protected by confirm-or-revert.
--- args = { rat="4g"|"5g", pci, freq, scs?, band?, extra? } — extra is an
+-- args = { rat="4g"|"5g", pci, freq, scs?, band?, extra?, slot? } — extra is an
 -- optional table of passthrough tower fields (cellid, carrier, mcc, mnc, …)
--- from a scan row, forwarded verbatim so GL stores what it scanned.
+-- from a scan row, forwarded verbatim so GL stores what it scanned; slot is the
+-- SIM the page read its serving cell for (refused if the active SIM changed).
 function M.set_cell_lock(args)
   local rat = args and args.rat
   if rat ~= "4g" and rat ~= "5g" then return { error = "rat must be '4g' or '5g'" } end
@@ -632,6 +699,8 @@ function M.set_cell_lock(args)
 
   local sub_id, _, matched, slot = resolve_active()
   if not slot then return { error = "no active SIM slot (modem not ready)" } end
+  local changed = slot_changed(args, slot)
+  if changed then return changed end
   -- The PREV snapshot and the watchdog's revert both address `sub_id`: an
   -- unconfirmed one (PLMN unknown — SIM still searching, the §12 status-0
   -- wedge) would snapshot and later "revert" the OTHER subscription while the
@@ -708,9 +777,12 @@ function M.set_cell_lock(args)
 end
 
 -- Unlock (risk-reducing — no revert window). Also the stale-store reconciler.
+-- args.slot (optional): as set_cell_lock — never unlock a SIM the page wasn't showing.
 function M.clear_cell_lock(args)
   local sub_id, _, matched, slot = resolve_active()
   if not slot then return { error = "no active SIM slot (modem not ready)" } end
+  local changed = slot_changed(args, slot)
+  if changed then return changed end
 
   -- Which family is locked? GL clears only the one named by network_type and
   -- defaults to 4g when the store has no record — a 5G lock would survive a
@@ -769,7 +841,9 @@ end
 -- modem.set_band_config, which both applies to the modem and persists in GL's
 -- store; a failed call changes nothing, a successful one is already durable,
 -- and the watchdog restores the previous get_band_config snapshot verbatim.
--- Returns { ok, window, applied={sa=..,nsa=..,lte=..,mode=..}, sub_id } or { error }.
+-- args.slot (optional): the slot the page's picture was read for — refused when
+-- the active SIM has changed since. Returns { ok, window, applied={sa=..,nsa=..,
+-- lte=..,mode=..}, slot } or { error }.
 function M.set_bands(args)
   args = args or {}
   local reset = args.reset == true
@@ -804,8 +878,13 @@ function M.set_bands(args)
     return { error = "another change is pending; keep or revert it first" }
   end
 
-  local sub_id, _, _, slot = resolve_active()
+  -- Bands are slot-addressed end to end (GL's per-slot store, and the watchdog
+  -- restores the snapshot through it), so no sub_id is resolved: that would
+  -- spend 1-3 AT round-trips on the shared channel for a value nothing uses.
+  local slot = active_slot()
   if not slot then return { error = "no active SIM slot (modem not ready)" } end
+  local changed = slot_changed(args, slot)
+  if changed then return changed end
 
   -- Snapshot the revert target: GL's stored config for this slot, verbatim.
   local prev, perr = band_cfg_get(slot)
@@ -882,7 +961,7 @@ function M.set_bands(args)
   local f = io.open(PENDING, "w")
   if not f then return { error = "cannot write pending state" } end
   f:write(table.concat({
-    "KIND=bands", "SUB_ID=" .. sub_id, "SLOT=" .. tostring(slot),
+    "KIND=bands", "SLOT=" .. tostring(slot),
     "PREV_BAND_CONFIG='" .. cjson.encode(prev_payload) .. "'",
     "APPLIED_BAND_CONFIG='" .. cjson.encode(payload) .. "'",
   }, "\n") .. "\n")
@@ -913,7 +992,7 @@ function M.set_bands(args)
   if applied.mode and not applied.reset then bits[#bits + 1] = "mode " .. applied.mode end
   append_event("user", "Bands applied", table.concat(bits, "; "))
 
-  return { ok = true, window = 60, applied = applied, sub_id = sub_id, slot = slot }
+  return { ok = true, window = 60, applied = applied, slot = slot }
 end
 
 -- READ: the recorded history (samples + user/dog events) for the Tracking page.
@@ -1074,45 +1153,85 @@ function M.revert_now(args)
 end
 
 -- ============================ Phase 3: AT console ============================
--- Raw AT over OUR OWN channel (/dev/at_mdm0), NOT GL's modem.CPU.AT. The heavy
--- lifting — flock serialization, drain/terminator read loop, timeout — lives
--- in the Python tool; this method only clamps args, spawns it, and parses the
--- per-step envelope (MM-AT:<status>:<elapsed_ms>:<i>/<n>). The port has NO
--- sub_id: it answers for the ACTIVE subscription only. Nothing of GL's is
--- stopped (4.10's poller is cellular_manager via modem_AT on another port).
+-- Transport (2026-10-28): GL's own AT service FIRST — modem_AT behind
+-- `modem.CPU.AT get_result_AT`, the very call GL's web console makes
+-- (libcm_network.so send_at_command -> execute_at_command(bus, cmd, …,
+-- source_flag=1, sub_id = slot)). Read in the 4.10 image (modem_AT,
+-- gl-sdk4-cellular 2026.236; docs/cellular-api-4.10.md §5): it queues every
+-- caller on one IO thread, drains stale bytes before each send, discards a
+-- reply that lacks the command's expected prefix, selects the subscription
+-- with AT+QUIMSUB=<sub_id>, and tells GL's state manager (cellular.status)
+-- when a band / lock / mode / CFUN-type command runs. So the console
+--   - never reads /dev/at_mdm0 alongside port-bridge, whose modem->USB thread
+--     reads that port continuously, and
+--   - answers for the ACTIVE SIM explicitly (sub_id = slot, GL's rule for the
+--     built-in modem) instead of whatever subscription the direct port is on.
+-- The direct port (mudimodem-at.py on /dev/at_mdm0) is only the fallback for
+-- when GL's cellular stack is down (modem.CPU.AT not registered) — decided
+-- before anything was sent, so no command ever runs twice.
 --
--- io.popen blocks this nginx worker until the tool exits. The tool self-limits
--- to timeout + lock-wait, so the block is bounded (consistent with the
--- existing os.execute use in set_bands). No ubus in here, so no cosocket, so
--- this is safe even though it blocks.
-local AT_TOOL = os.getenv("MUDIMODEM_AT_TOOL") or "/usr/lib/mudimodem/mudimodem-at.py"
+-- Both paths block this nginx worker (io.popen) for at most ~timeout per step.
+-- The ubus CLI rather than oui.ubus: its -t bounds the whole wait explicitly
+-- (the ngx -> gl-session proxy applies its own default to the inner call), and
+-- its exit status tells "object not found" from a timeout. Measured with the
+-- 4.10 image's own ubusd + ubus under qemu: a missing object exits 4 (lookup
+-- failure, positive), a timed-out call exits 249 (invoke failure, -7 as a
+-- byte) — so the status is normalized before comparing.
+local AT_TOOL  = os.getenv("MUDIMODEM_AT_TOOL") or "/usr/lib/mudimodem/mudimodem-at.py"
+local UBUS_CLI = os.getenv("MUDIMODEM_UBUS") or "ubus"
+local UBUS_NOT_FOUND, UBUS_TIMEOUT = 4, 7
 
-function M.at_console(args)
-  local raw = args and args.cmd
-  if type(raw) ~= "string" then return { error = "cmd required" } end
-  -- Split into steps on newlines; trim each, drop blanks. (Was: collapse to a
-  -- space. Now each line is its own AT command in one held channel window.)
-  local steps = {}
-  -- Don't reassign the for-loop control var (Lua 5.4+ treats it as <const>).
-  for rawline in (raw .. "\n"):gmatch("(.-)\n") do
-    local line = rawline:gsub("[\r]+", ""):match("^%s*(.-)%s*$")
-    if line ~= "" then steps[#steps + 1] = line end
+-- POSIX single-quote escaping: ' -> '\''.
+local function shq(s) return "'" .. s:gsub("'", "'\\''") .. "'" end
+
+local function now_ms()
+  if ngx and ngx.now then
+    if ngx.update_time then ngx.update_time() end    -- ngx.now() is cached per loop turn
+    return math.floor(ngx.now() * 1000)
   end
-  if #steps == 0 then return { error = "cmd required" } end
-  if #steps > 8 then return { error = "too many steps (max 8)" } end
-  for _, s in ipairs(steps) do
-    if #s > 256 then return { error = "command too long (max 256 chars)" } end
+  return os.time() * 1000
+end
+
+-- The final result code in a reply (modem_AT's `data` keeps the module's own
+-- lines): the LAST of OK / ERROR / +CME ERROR / +CMS ERROR / COMMAND NOT
+-- SUPPORT. nil when none arrived — modem_AT gave up waiting for it.
+local function at_final(data)
+  local kind
+  for line in (data or ""):gmatch("[^\r\n]+") do
+    local l = line:match("^%s*(.-)%s*$")
+    if l == "OK" then kind = "ok"
+    elseif l == "ERROR" or l == "COMMAND NOT SUPPORT" or l:find("^%+CM[ES] ERROR") then kind = "error" end
   end
+  return kind
+end
 
-  local timeout = tonumber(args and args.timeout) or 8
-  if timeout < 1 then timeout = 1 end
-  if timeout > 60 then timeout = 60 end
-  timeout = math.floor(timeout)
+-- One step through GL's AT service. Returns a step table, or (nil, ubus exit
+-- status | reason) when no reply came back.
+local function gl_at_step(cmd, timeout, sub_id)
+  local req = { cmd = cmd, timeout = timeout, source_flag = 1 }
+  if sub_id then req.sub_id = sub_id end
+  local t0 = now_ms()
+  local f = io.popen(UBUS_CLI .. " -t " .. tostring(timeout + 5) ..
+    " call modem.CPU.AT get_result_AT " .. shq(cjson.encode(req)) .. " 2>/dev/null; echo \"MM-RC:$?\"")
+  if not f then return nil, "spawn failed" end
+  local out = f:read("*a") or ""
+  f:close()
+  local rc = tonumber(out:match("MM%-RC:(%d+)%s*$"))
+  if rc and rc > 128 then rc = 256 - rc end        -- ubus exits -status on an invoke failure
+  if rc ~= 0 then return nil, rc or "no exit status" end
+  local ok, obj = pcall(cjson.decode, (out:gsub("MM%-RC:%d+%s*$", "")))   -- C decode; cannot yield
+  local data = ok and type(obj) == "table" and obj.data or nil
+  if type(data) ~= "string" then return nil, "reply without data" end
+  return { cmd = cmd, status = at_final(data) or "timeout", response = data,
+           elapsed_ms = now_ms() - t0 }
+end
 
-  -- POSIX single-quote escaping: ' -> '\''. Build one invocation, all steps.
-  local function q(s) return "'" .. s:gsub("'", "'\\''") .. "'" end
-  local parts = { "python3", q(AT_TOOL), "--envelope", "--timeout", tostring(timeout), q("--") }
-  for _, s in ipairs(steps) do parts[#parts + 1] = q(s) end
+-- The fallback: every step through the direct-port tool in one held channel
+-- window (flock serialization, drain/terminator loop and timeout live in the
+-- tool); parses its per-step envelope MM-AT:<status>:<elapsed_ms>:<i>/<n>.
+local function at_console_direct(steps, timeout)
+  local parts = { "python3", shq(AT_TOOL), "--envelope", "--timeout", tostring(timeout), shq("--") }
+  for _, s in ipairs(steps) do parts[#parts + 1] = shq(s) end
   local f = io.popen(table.concat(parts, " ") .. " 2>/dev/null")
   if not f then return { error = "failed to spawn the AT tool" } end
   local out = f:read("*a") or ""
@@ -1120,7 +1239,12 @@ function M.at_console(args)
 
   -- Channel-level failure: a 2-field frame (no /count) as the first line.
   local cstatus = out:match("^MM%-AT:(%w+):%d+%s*\n") or out:match("^MM%-AT:(%w+):%d+%s*$")
-  if cstatus == "busy" then return { error = "channel busy - another command in flight" } end
+  if cstatus == "busy" then
+    -- The tool may name WHY on the next line: an earlier command's reply is
+    -- still owed (sent, timed out, may yet answer) — say which and for how long.
+    local why = out:match("^MM%-AT:busy:%d+%s*\n([^\n]+)")
+    return { error = "channel busy - " .. (why and why:gsub("%s+$", "") or "another command in flight") }
+  end
   if cstatus == "openfail" then return { error = "cannot open the AT port (/dev/at_mdm0)" } end
 
   -- Parse per-step frames: header line then response lines up to the next header.
@@ -1150,6 +1274,60 @@ function M.at_console(args)
                         response = s.response, elapsed_ms = s.elapsed_ms }
   end
   return result
+end
+
+function M.at_console(args)
+  local raw = args and args.cmd
+  if type(raw) ~= "string" then return { error = "cmd required" } end
+  -- Split into steps on newlines; trim each, drop blanks. Each line is its
+  -- own AT command; a sequence stops at the first step that isn't OK.
+  local steps = {}
+  -- Don't reassign the for-loop control var (Lua 5.4+ treats it as <const>).
+  for rawline in (raw .. "\n"):gmatch("(.-)\n") do
+    local line = rawline:gsub("[\r]+", ""):match("^%s*(.-)%s*$")
+    if line ~= "" then steps[#steps + 1] = line end
+  end
+  if #steps == 0 then return { error = "cmd required" } end
+  if #steps > 8 then return { error = "too many steps (max 8)" } end
+  for _, s in ipairs(steps) do
+    if #s > 256 then return { error = "command too long (max 256 chars)" } end
+  end
+
+  local timeout = tonumber(args and args.timeout) or 8
+  if timeout < 1 then timeout = 1 end
+  if timeout > 60 then timeout = 60 end
+  timeout = math.floor(timeout)
+
+  -- The active SIM's subscription: sub_id = slot (GL's own rule for the
+  -- built-in modem, contract doc §2.1). No slot (no SIM, modem resetting) ->
+  -- no sub_id, i.e. modem_AT's current subscription, and the page says so.
+  local slot = active_slot()
+  local res = { ok = true, requested = #steps, ran = 0, aborted = false, steps = {},
+                transport = "gl", slot = slot, sub_id = slot }
+  for i, s in ipairs(steps) do
+    local st, err = gl_at_step(s, timeout, slot)
+    if not st then
+      if i == 1 and err == UBUS_NOT_FOUND then
+        -- GL's AT service isn't registered (cellular stack down): nothing has
+        -- been sent, so the whole sequence can go to the direct port instead.
+        local d = at_console_direct(steps, timeout)
+        if d.ok then d.transport = "direct"; d.slot = slot end
+        return d
+      elseif err == UBUS_TIMEOUT then
+        st = { cmd = s, status = "timeout", response = "", elapsed_ms = (timeout + 5) * 1000 }
+      elseif i == 1 then
+        return { error = "GL's AT service gave no answer (" .. tostring(err) .. ")" }
+      else
+        st = { cmd = s, status = "error", elapsed_ms = 0,
+               response = "GL's AT service gave no answer (" .. tostring(err) .. ")\n" }
+      end
+    end
+    res.steps[i] = st
+    res.ran = i
+    if st.status ~= "ok" then break end
+  end
+  res.aborted = res.ran < #steps
+  return res
 end
 
 -- ======================= Phase: AT library sync (check/refresh) ==============
@@ -1253,6 +1431,44 @@ local function write_json_file(path, obj)
   return true
 end
 
+-- A status that still says `running` while no test is: the tool was killed
+-- (scheduler timeout, OOM), crashed, or never started. Left alone it disables
+-- Run until the next scheduled test or a reboot. The tool stamps every running
+-- status with its pid + start time; trust it only while /proc shows that pid
+-- is still our tool (a cmdline check, so a recycled pid can't pass; /proc is
+-- readable whatever the worker's uid, unlike kill -0). Before the tool's own
+-- first write (our "starting" stub, no pid) allow a short grace.
+local PROC                  = os.getenv("MUDIMODEM_PROC") or "/proc"
+local SPEEDTEST_START_GRACE = 60    -- s for the spawned tool to write its pid
+local SPEEDTEST_MAX_RUN     = 900   -- s; a real run is ~3 min at worst
+
+local function speedtest_alive(pid)
+  pid = tonumber(nn(pid))
+  if not pid or pid < 2 or pid ~= math.floor(pid) then return false end
+  local f = io.open(PROC .. "/" .. string.format("%d", pid) .. "/cmdline", "r")
+  if not f then return false end
+  local cmd = f:read("*a") or ""
+  f:close()
+  return cmd:find("mudimodem-speedtest", 1, true) ~= nil
+end
+
+local function speedtest_status()
+  local st = read_json_file(SPEEDTEST_STATUS, nil)
+  if type(st) ~= "table" or st.running ~= true then return st end
+  local started = tonumber(nn(st.started))
+  local age = started and (os.time() - started) or nil
+  local dead
+  if nn(st.pid) ~= nil then dead = not speedtest_alive(st.pid)
+  else dead = (age == nil) or (age > SPEEDTEST_START_GRACE) end
+  if not dead and age and age > SPEEDTEST_MAX_RUN then dead = true end
+  if dead then
+    local why = "the previous speed test stopped without finishing"
+    st = { running = false, phase = "error", iface = st.iface, error = why, message = why }
+    write_json_file(SPEEDTEST_STATUS, st)
+  end
+  return st
+end
+
 function M.run_speedtest(args)
   local iface = (args and args.iface) or "cellular"
   if iface ~= "cellular" and iface ~= "wired" then
@@ -1263,18 +1479,18 @@ function M.run_speedtest(args)
     return { error = "iface_down", iface = iface }
   end
 
-  local st = read_json_file(SPEEDTEST_STATUS, nil)
+  local st = speedtest_status()
   if st and st.running then return { running = true } end
 
   os.execute("mkdir -p /etc/mudimodem /tmp/mudimodem 2>/dev/null")
-  write_json_file(SPEEDTEST_STATUS, { running = true, phase = "starting", iface = iface })
+  write_json_file(SPEEDTEST_STATUS, { running = true, phase = "starting", iface = iface, started = os.time() })
   local quoted_bin = "'" .. SPEEDTEST_BIN:gsub("'", "'\\''") .. "'"
   spawn_detached("python3 " .. quoted_bin .. " --trigger manual --iface " .. iface)
   return { started = true }
 end
 
 function M.get_speedtest_status(args)
-  return read_json_file(SPEEDTEST_STATUS, { running = false })
+  return speedtest_status() or { running = false }
 end
 
 function M.get_speedtest_history(args)
@@ -1359,6 +1575,28 @@ local function read_version_file()
   return "unknown", DEFAULT_BASE
 end
 
+-- Is `a` a newer release than `b`? Dotted numbers compare numerically
+-- ("2.0.10" > "2.0.9"); anything else (e.g. "unknown") falls back to "they
+-- differ", so a box that can't name its version is still offered one. A plain
+-- inequality offered a dev/fork install that is AHEAD of main a "downgrade" as
+-- an update.
+local function version_newer(a, b)
+  local function parts(v)
+    v = tostring(v or "")
+    if not v:match("^v?%d+[%.%d]*$") then return nil end
+    local t = {}
+    for n in v:gmatch("%d+") do t[#t + 1] = tonumber(n) end
+    return t
+  end
+  local pa, pb = parts(a), parts(b)
+  if not pa or not pb then return a ~= b end
+  for i = 1, math.max(#pa, #pb) do
+    local x, y = pa[i] or 0, pb[i] or 0
+    if x ~= y then return x > y end
+  end
+  return false
+end
+
 function M.app_version(args)
   local installed, base = read_version_file()
   local out = { installed = installed, latest = nil, source = base,
@@ -1377,7 +1615,7 @@ function M.app_version(args)
   end
   out.latest = tostring(obj.version)
   out.checked = true
-  out.update_available = (out.latest ~= out.installed)
+  out.update_available = version_newer(out.latest, out.installed)
   return out
 end
 
@@ -1653,9 +1891,11 @@ local function write_history_policy(enabled)
 end
 
 local function history_dir_bytes(dir)
-  -- BusyBox du often lacks -b; sum known files with wc -c instead.
+  -- BusyBox du often lacks -b; sum known files with wc -c instead. Each stream
+  -- is two segments (collectd rotates current -> .prev once a day, so the
+  -- flash backup is append-only between rotations).
   local total = 0
-  for _, name in ipairs({ "samples.jsonl", "battery.jsonl" }) do
+  for _, name in ipairs({ "samples.jsonl", "samples.prev.jsonl", "battery.jsonl", "battery.prev.jsonl" }) do
     local f = io.open(dir .. "/" .. name, "r")
     if f then
       local sz = f:seek("end")

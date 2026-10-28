@@ -37,14 +37,23 @@ function makeVm(component) {
   }
   return vm;
 }
+// One reply queue for both transports: $rpcRequest (user-initiated) and the
+// silent $axios POST (background status poll). `transport` says which one a
+// call went through; `params` has the same [sid, object, method, args] shape.
 function stubRpc(replies) {
   const calls = [];
   global.window = {
     $rpcRequest(method, params, opts) {
-      calls.push({ method, params, opts });
+      calls.push({ method, params, opts, transport: 'rpcRequest' });
       const r = replies.shift();
       return (r instanceof Error) ? Promise.reject(r) : Promise.resolve(r);
-    }
+    },
+    $getCookie: () => 'tok',
+    $axios: { post(url, body, opts) {
+      calls.push({ method: body.method, params: body.params, opts, transport: 'silent' });
+      const r = replies.shift();
+      return (r instanceof Error) ? Promise.reject(r) : Promise.resolve({ data: { result: r } });
+    } }
   };
   return calls;
 }
@@ -382,4 +391,186 @@ test('renderGraph: x positions are evenly spaced by index, not proportional to e
 test('the chunk never issues raw AT and never calls tracking/console RPC objects', () => {
   const src = fs.readFileSync(SRC, 'utf8');
   assert.doesNotMatch(src, /get_result_AT|modem\.CPU\.AT|at_console/);
+});
+
+
+// ---- 2.x review fixes (2026-10-28) ----
+const tick = () => new Promise((r) => setImmediate(r));
+
+test('Band row: the prefix follows the CARRIER — an NSA LTE anchor on B2 is "B2"', () => {
+  const c = loadChunk();
+  const band = (r) => {
+    const vm = makeVm(c);
+    vm.resultsLoading = false;
+    vm.lastResult = Object.assign({ t: 1000, iface: 'cellular', down_mbps: 1, up_mbps: 1, latency_ms: 1 }, r);
+    const rows = walk(c.render.call(vm, h)).filter((n) => n.data && n.data.staticClass === 'mms-tip-row');
+    const row = rows.find((n) => textOf(n.children[0]) === 'Band');
+    return textOf(row.children[1]);
+  };
+  assert.strictEqual(band({ band: 2, mode: 'NR5G-NSA', pcc_rat: 'LTE' }), 'B2', 'new results: pcc_rat');
+  assert.strictEqual(band({ band: 2, mode: 'NR5G-NSA', signals: [{ rat: 'LTE', band: 2 }] }), 'B2',
+    'old results: signals[0].rat');
+  assert.strictEqual(band({ band: 71, mode: 'NR5G-SA FDD' }), 'n71', 'oldest: mode');
+  assert.strictEqual(band({ band: 66, mode: 'LTE' }), 'B66');
+});
+
+test('the status poll goes through the silent transport; the run stays on $rpcRequest', async () => {
+  const calls = stubRpc([{ started: true }, { running: true, phase: 'upload', iface: 'cellular' }]);
+  let vm;
+  try {
+    vm = makeVm(loadChunk());
+    await vm.runTest();
+    assert.strictEqual(calls[0].transport, 'rpcRequest', 'user-initiated run: $rpcRequest');
+    assert.ok(vm.statusPoll, 'polling');
+    await vm.fetchStatus(false);
+    assert.strictEqual(calls[1].params[2], 'get_speedtest_status');
+    assert.strictEqual(calls[1].transport, 'silent', 'background poll: never GL\'s banner');
+    assert.strictEqual(vm.status.phase, 'upload');
+  } finally { if (vm && vm.statusPoll) clearInterval(vm.statusPoll); unstubRpc(); }
+});
+
+test('a failed status poll is silent and changes nothing; one poll in flight at most', async () => {
+  const calls = stubRpc([new Error('network down')]);
+  try {
+    const vm = makeVm(loadChunk());
+    vm.status = { running: true, phase: 'download' };
+    const a = vm.fetchStatus(false);
+    vm.fetchStatus(false);                     // the next 1 Hz tick while the first is in flight
+    assert.strictEqual(calls.length, 1, 'no stacked requests on a slow link');
+    await a;
+    assert.deepStrictEqual(vm.status, { running: true, phase: 'download' });
+  } finally { unstubRpc(); }
+});
+
+test('a run resolving after the tab is destroyed starts no orphan poll', async () => {
+  const c = loadChunk();
+  stubRpc([{ started: true }]);
+  try {
+    const vm = makeVm(c);
+    const p = vm.runTest();
+    c.beforeDestroy.call(vm);                  // tab switch before the reply lands
+    await p;
+    assert.strictEqual(vm.statusPoll, null, 'no 1 Hz interval left behind');
+  } finally { unstubRpc(); }
+  stubRpc([{ running: true, phase: 'download', iface: 'cellular' }]);
+  try {
+    const vm = makeVm(c);
+    const p = vm.fetchStatus(true);            // mount-time check
+    c.beforeDestroy.call(vm);
+    await p;
+    assert.strictEqual(vm.statusPoll, null, 'mount-time status check: no poll either');
+  } finally { unstubRpc(); }
+});
+
+test('a terminal error status (no message, dead run) stops polling and is shown', async () => {
+  const c = loadChunk();
+  stubRpc([{ running: false, phase: 'error', pid: 4242, started: 1700000000 }, { results: [] }]);
+  try {
+    const vm = makeVm(c);
+    vm.resultsLoading = false;
+    vm.statusPoll = setInterval(() => {}, 100000);
+    await vm.fetchStatus(false);
+    assert.strictEqual(vm.statusPoll, null, 'poll stopped');
+    assert.match(textOf(c.render.call(vm, h)), /stopped without a result/, 'an honest error, not an empty span');
+  } finally { unstubRpc(); }
+  stubRpc([{ running: true, phase: 'error', message: 'download failed' }, { results: [] }]);
+  try {
+    const vm = makeVm(c);
+    vm.statusPoll = setInterval(() => {}, 100000);
+    await vm.fetchStatus(false);
+    assert.strictEqual(vm.statusPoll, null, 'phase error is terminal whatever `running` says');
+    assert.strictEqual(vm.status.running, false);
+    assert.match(textOf(c.render.call(vm, h)), /download failed/);
+  } finally { unstubRpc(); }
+});
+
+function scheduleCheckbox(c, vm) {
+  return walk(c.render.call(vm, h)).find((n) => n.tag === 'input' && n.data.attrs && n.data.attrs.type === 'checkbox');
+}
+
+test('schedule save: a resolved {error} is a refusal — shown, and the checkbox is put back', async () => {
+  const c = loadChunk();
+  const calls = stubRpc([{ error: 'cannot write schedule config' }]);
+  try {
+    const vm = makeVm(c);
+    vm.schedule = { enabled: false, interval_seconds: 21600, last_run: 0 };
+    const el = { checked: true };              // the user ticked it
+    scheduleCheckbox(c, vm).data.on.change({ target: el });
+    await tick(); await tick();
+    assert.strictEqual(calls.length, 1, 'no re-read after a refusal');
+    assert.strictEqual(vm.schedule.enabled, false);
+    assert.strictEqual(el.checked, false, 'the box is back to the real (off) state');
+    assert.match(textOf(c.render.call(vm, h)), /Couldn't save the schedule: cannot write schedule config/);
+  } finally { unstubRpc(); }
+});
+
+test('schedule save: a rejection is shown too, and the interval select is put back', async () => {
+  const c = loadChunk();
+  stubRpc([new Error('timeout')]);
+  try {
+    const vm = makeVm(c);
+    vm.schedule = { enabled: true, interval_seconds: 21600, last_run: 0 };
+    const sel = walk(c.render.call(vm, h)).find((n) => n.tag === 'select' && n.data.domProps
+      && n.data.domProps.value === 21600);
+    const el = { value: '3600' };
+    sel.data.on.change({ target: el });
+    await tick(); await tick();
+    assert.strictEqual(el.value, '21600', 'the select shows the interval actually in force');
+    assert.match(textOf(c.render.call(vm, h)), /Couldn't save the schedule: timeout/);
+  } finally { unstubRpc(); }
+});
+
+test('schedule save: success re-reads and leaves the control on the saved state', async () => {
+  const c = loadChunk();
+  stubRpc([{ ok: true, enabled: true, interval_seconds: 3600 }, { enabled: true, interval_seconds: 3600, last_run: 0 }]);
+  try {
+    const vm = makeVm(c);
+    vm.schedule = { enabled: false, interval_seconds: 3600, last_run: 0 };
+    vm.scheduleErr = 'old failure';
+    const el = { checked: true };
+    scheduleCheckbox(c, vm).data.on.change({ target: el });
+    await tick(); await tick(); await tick();
+    assert.strictEqual(vm.schedule.enabled, true);
+    assert.strictEqual(el.checked, true);
+    assert.strictEqual(vm.scheduleErr, '', 'a good save clears the old error');
+  } finally { unstubRpc(); }
+});
+
+const TWO_SIMS = [
+  { t: 1000, iface: 'cellular', slot: 1, carrier: 'T-Mobile', down_mbps: 40, up_mbps: 10, latency_ms: 60 },
+  { t: 2000, iface: 'cellular', slot: 1, carrier: 'T-Mobile', down_mbps: 45, up_mbps: 11, latency_ms: 58 },
+  { t: 3000, iface: 'cellular', slot: 2, carrier: 'AT&T', down_mbps: 90, up_mbps: 20, latency_ms: 40 },
+  { t: 4000, iface: 'cellular', slot: 2, carrier: 'AT&T', down_mbps: 95, up_mbps: 21, latency_ms: 42 },
+  { t: 5000, iface: 'wired', slot: 1, carrier: 'T-Mobile', down_mbps: 500, up_mbps: 100, latency_ms: 8 }
+];
+
+test('graph: two SIMs are never one line — it breaks at the SIM change and labels each stretch', () => {
+  const c = loadChunk();
+  const vm = makeVm(c);
+  vm.results = TWO_SIMS; vm.filterIface = 'cellular'; vm.resultsLoading = false; vm.width = 400;
+  const svg = walk(c.render.call(vm, h)).find((n) => n.tag === 'svg');
+  const paths = walk(svg).filter((n) => n.tag === 'path').map((n) => n.data.attrs.d);
+  assert.strictEqual(paths.length, 3, 'down, up, latency');
+  paths.forEach((d) => assert.strictEqual((d.match(/M/g) || []).length, 2, 'one segment per SIM: ' + d));
+  const txt = textOf(svg);
+  assert.match(txt, /SIM 1 · T-Mobile/);
+  assert.match(txt, /SIM 2 · AT&T/);
+});
+
+test('graph: a SIM selector appears when the cellular history spans two SIMs, and filters', () => {
+  const c = loadChunk();
+  const vm = makeVm(c);
+  vm.results = TWO_SIMS; vm.filterIface = 'cellular'; vm.resultsLoading = false;
+  const sel = walk(c.render.call(vm, h)).find((n) => n.tag === 'select' && n.data.staticClass === 'mms-slotsel');
+  assert.ok(sel, 'selector rendered');
+  assert.match(textOf(sel), /All SIMs.*SIM 1 · T-Mobile.*SIM 2 · AT&T/);
+  sel.data.on.change({ target: { value: '2' } });
+  assert.deepStrictEqual(vm.filtered.map((r) => r.t), [3000, 4000], 'SIM 2 only');
+  vm.filterIface = 'wired';
+  assert.deepStrictEqual(vm.filtered.map((r) => r.t), [5000], 'wired ignores the SIM filter');
+  assert.ok(!walk(c.render.call(vm, h)).some((n) => n.data && n.data.staticClass === 'mms-slotsel'),
+    'no SIM selector for wired (a stale snapshot slot is not the wired link)');
+  vm.filterIface = 'cellular';
+  vm.results = TWO_SIMS.filter((r) => r.slot === 1);
+  assert.strictEqual(vm.filtered.length, 2, 'a vanished SIM falls back to all, not to nothing');
 });

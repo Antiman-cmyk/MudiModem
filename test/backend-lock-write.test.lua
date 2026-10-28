@@ -118,6 +118,21 @@ assert(set_body:find('"lock":true') and set_body:find('"pci":516') and
        set_body:find('"band":71') and set_body:find('"network_type":"NR5G"'),
        "set_cell_tower payload wrong: " .. set_body)
 
+-- 1b. The page read its serving cell for SIM2 but SIM1 is active now (a switch
+--     in GL's Internet page / slot failover): locking SIM1 to SIM2's cell is
+--     refused before anything is snapshotted, armed or written — and so is an
+--     unlock of a SIM the page wasn't showing.
+reset()
+r = M.set_cell_lock({ rat = "5g", pci = 516, freq = 127490, scs = 15, band = 71, slot = 2 })
+assert(r.error and r.slot_changed == true and r.slot == 1, "stale-slot lock must be refused; got " .. tostring(r.error))
+assert(not io.open(PENDING, "r") and #exec_cmds == 0, "a stale-slot refusal must not arm")
+for _, c in ipairs(glc_calls) do assert(not c:find("set_cell_tower"), "no GL write on a stale slot") end
+r = M.clear_cell_lock({ slot = 2 })
+assert(r.error and r.slot_changed == true, "stale-slot unlock must be refused")
+for _, c in ipairs(glc_calls) do assert(not c:find("set_cell_tower"), "no GL unlock on a stale slot") end
+r = M.set_cell_lock({ rat = "5g", pci = 516, freq = 127490, scs = 15, band = 71, slot = 1 })
+assert(r.ok == true, "matching slot must lock; got " .. tostring(r.error))
+
 -- 2. Refuse while a lock already exists.
 reset()
 lock5_reply = '\r\n+QNWLOCK: "common/5g",516,127490,15,71\r\n\r\nOK\r\n'

@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -316,6 +317,65 @@ class CollectSample(unittest.TestCase):
         self.assertIsNone(s)
         self.assertFalse(any(c[1] == "cell_info" for c in calls))
 
+    def _run_quiet(self, table):
+        """_run with stderr captured; returns (sample, stderr text)."""
+        import io
+        old_err = sys.stderr
+        sys.stderr = io.StringIO()
+        try:
+            s = self._run(table, [])
+            return s, sys.stderr.getvalue()
+        finally:
+            sys.stderr = old_err
+
+    def setUp(self):
+        collectd._cell_fail.update({"n": 0, "last_log": None})
+
+    def test_failed_cell_info_read_skips_the_tick(self):
+        # ubus_call -> None (rc != 0, the 8 s timeout, bad JSON) used to be
+        # normalized like a no-service cell: registered:false + null metrics,
+        # appended, written to latest.json and pushed — a fake outage.
+        s, err = self._run_quiet({("cellular.modem", "status"): MODEM_STATUS_410,
+                                  ("cellular.network", "info"): NETWORK_INFO_410})
+        self.assertIsNone(s, "a failed read is a skipped tick, not a sample")
+        self.assertIn("cell_info read failed", err)
+
+    def test_error_reply_without_network_type_skips_the_tick(self):
+        s, _ = self._run_quiet({("cellular.modem", "status"): MODEM_STATUS_410,
+                                ("cellular.network", "cell_info"): {"ret": -1, "resp": "Failed"},
+                                ("cellular.network", "info"): NETWORK_INFO_410})
+        self.assertIsNone(s)
+
+    def test_genuine_no_service_still_yields_the_honest_gap_sample(self):
+        modem2 = {"modems": [dict(MODEM_STATUS_410["modems"][0], current_sim_slot=2)]}
+        s, err = self._run_quiet({("cellular.modem", "status"): modem2,
+                                  ("cellular.network", "cell_info"): CELL_INFO_410_NO_SERVICE,
+                                  ("cellular.network", "info"): NETWORK_INFO_410})
+        self.assertIsNotNone(s)
+        self.assertFalse(s["registered"])
+        self.assertEqual(err, "", "no service is not a read failure")
+
+    def test_failed_reads_are_logged_rate_limited_and_recovery_is_logged(self):
+        bad = {("cellular.modem", "status"): MODEM_STATUS_410}
+        _, e1 = self._run_quiet(bad)
+        _, e2 = self._run_quiet(bad)
+        self.assertIn("(1 so far)", e1)
+        self.assertEqual(e2, "", "the second failure inside the window is counted, not logged")
+        self.assertEqual(collectd._cell_fail["n"], 2)
+        s, e3 = self._run_quiet({("cellular.modem", "status"): MODEM_STATUS_410,
+                                 ("cellular.network", "cell_info"): CELL_INFO_410_SA,
+                                 ("cellular.network", "info"): NETWORK_INFO_410})
+        self.assertIsNotNone(s)
+        self.assertIn("recovered after 2", e3)
+        self.assertEqual(collectd._cell_fail["n"], 0)
+
+    def test_cell_info_failed_predicate(self):
+        self.assertTrue(cc.cell_info_failed(None))
+        self.assertTrue(cc.cell_info_failed([]))
+        self.assertTrue(cc.cell_info_failed({"ret": 1, "resp": "err"}))
+        self.assertFalse(cc.cell_info_failed(CELL_INFO_410_NO_SERVICE), "network_type 0 is a real answer")
+        self.assertFalse(cc.cell_info_failed(CELL_INFO_410_SA))
+
 
 class WsGate(unittest.TestCase):
     """ws_attached(): probe gl-session has_websocket on a cadence; skip pushes
@@ -370,6 +430,70 @@ class WsGate(unittest.TestCase):
             self.assertTrue(collectd.ws_attached(now=3000.0))
         finally:
             collectd.subprocess.run = old
+
+    def test_probe_cadence_ignores_a_backward_wall_clock_step(self):
+        # NTP pulling a fast clock back (or a manual set) used to freeze the
+        # probe — and with it every push — for the size of the step.
+        calls, old = self._probe('{"has_ws": false}')
+        real_time, real_mono = time.time, time.monotonic
+        mono = {"v": 5000.0}
+        try:
+            time.monotonic = lambda: mono["v"]
+            time.time = lambda: 1_800_000_000.0
+            self.assertFalse(collectd.ws_attached())
+            n = len(calls)
+            mono["v"] += collectd.WS_PROBE_IDLE_S + 1
+            time.time = lambda: 1_700_000_000.0          # a day+ backwards
+            collectd.ws_attached()
+            self.assertEqual(len(calls), n + 1, "re-probed on schedule despite the step")
+        finally:
+            time.time, time.monotonic = real_time, real_mono
+            collectd.subprocess.run = old
+
+
+class MonotonicTiming(unittest.TestCase):
+    """Every interval/gate runs on time.monotonic(); only sample stamps (`t`)
+    read the wall clock."""
+
+    def test_wall_clock_is_read_only_for_sample_stamps(self):
+        import ast
+        with open(SRC) as f:
+            tree = ast.parse(f.read())
+        owners = []
+        for fn in ast.walk(tree):
+            if isinstance(fn, ast.FunctionDef):
+                for node in ast.walk(fn):
+                    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                            and node.func.attr == "time" and isinstance(node.func.value, ast.Name)
+                            and node.func.value.id == "time"):
+                        owners.append(fn.name)
+        self.assertEqual(sorted(set(owners)), ["now_ms"],
+                         "time.time() outside now_ms: a gate/sleep would stall on a clock step")
+
+    def test_gate_fires_first_then_per_interval(self):
+        g = collectd.Gate(20)
+        self.assertTrue(g.due(now=100.0))
+        self.assertFalse(g.due(now=119.0))
+        self.assertTrue(g.due(now=120.0))
+
+    def test_carrier_cache_refreshes_on_monotonic_time(self):
+        calls = []
+        old_call = collectd.ubus_call
+        real_time, real_mono = time.time, time.monotonic
+        mono = {"v": 100.0}
+        collectd.ubus_call = lambda o, m, a=None: calls.append(m) or NETWORK_INFO_410
+        try:
+            time.monotonic = lambda: mono["v"]
+            time.time = lambda: 1_800_000_000.0
+            cache = collectd.CarrierCache()
+            cache.get(1)
+            mono["v"] += collectd.CARRIER_INTERVAL + 1
+            time.time = lambda: 1_700_000_000.0
+            cache.get(1)
+        finally:
+            time.time, time.monotonic = real_time, real_mono
+            collectd.ubus_call = old_call
+        self.assertEqual(len(calls), 2, "refreshed after CARRIER_INTERVAL of monotonic time")
 
 
 class WsPublish(unittest.TestCase):
@@ -493,6 +617,86 @@ class Trim(unittest.TestCase):
             collectd.trim(p, max_age_ms=5000, max_lines=100, ref_ms=10000)
             st1 = os.stat(p)
             self.assertEqual((st0.st_ino, st0.st_mtime), (st1.st_ino, st1.st_mtime), "untouched")
+
+
+class SharedTrim(unittest.TestCase):
+    """events.jsonl: the Lua backend and the watchdog append while we trim.
+    An event appended between the read and the rename must not be lost."""
+
+    def _seed(self, p):
+        with open(p, "w") as f:
+            for t in (1000, 2000, 9000):
+                f.write(json.dumps({"t": t, "kind": "x"}) + "\n")
+
+    def _ts(self, p):
+        with open(p) as f:
+            return [json.loads(l)["t"] for l in f if l.strip()]
+
+    def _with_replace_hook(self, hook):
+        real = collectd.os.replace
+
+        def wrapped(src, dst):
+            hook(dst, lambda: real(src, dst))
+        collectd.os.replace = wrapped
+        return real
+
+    def test_line_appended_just_before_the_rename_survives(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "events.jsonl")
+            self._seed(p)
+
+            def hook(dst, do_replace):
+                with open(dst, "a") as f:                  # an `echo >>` racing the trim
+                    f.write(json.dumps({"t": 9500, "kind": "late"}) + "\n")
+                do_replace()
+            real = self._with_replace_hook(hook)
+            try:
+                collectd.trim(p, max_age_ms=5000, max_lines=100, ref_ms=10000, shared=True)
+            finally:
+                collectd.os.replace = real
+            self.assertEqual(self._ts(p), [9000, 9500])
+
+    def test_writer_holding_the_old_inode_across_the_rename_survives(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "events.jsonl")
+            self._seed(p)
+
+            def hook(dst, do_replace):
+                f = open(dst, "a")                         # opened BEFORE the rename...
+                do_replace()
+                f.write(json.dumps({"t": 9600, "kind": "late"}) + "\n")   # ...written after
+                f.close()
+                with open(dst, "a") as g:                  # and a writer that opens the new file
+                    g.write(json.dumps({"t": 9700, "kind": "new"}) + "\n")
+            real = self._with_replace_hook(hook)
+            try:
+                collectd.trim(p, max_age_ms=5000, max_lines=100, ref_ms=10000, shared=True)
+            finally:
+                collectd.os.replace = real
+            self.assertEqual(sorted(self._ts(p)), [9000, 9600, 9700])
+
+    def test_a_partial_tail_is_an_append_in_flight_not_a_torn_line(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "events.jsonl")
+            self._seed(p)
+            with open(p, "a") as f:
+                f.write('{"t":9800,"kind"')                # the writer is mid-line
+
+            def hook(dst, do_replace):
+                with open(dst, "a") as f:                  # ...and finishes it before the rename
+                    f.write(':"y"}\n')
+                do_replace()
+            real = self._with_replace_hook(hook)
+            try:
+                collectd.trim(p, max_age_ms=5000, max_lines=100, ref_ms=10000, shared=True)
+            finally:
+                collectd.os.replace = real
+            self.assertEqual(self._ts(p), [9000, 9800])
+
+    def test_collector_trims_events_in_shared_mode(self):
+        with open(SRC) as f:
+            src = f.read()
+        self.assertIn("trim(events_path, SAMPLE_MAX_AGE, 1000, shared=True)", src)
 
 
 def _mklim(d, pid=None, limit=None):
@@ -740,6 +944,139 @@ class HistoryPersist(unittest.TestCase):
                 for t in (5, 50, 20):
                     f.write(json.dumps({"t": t}) + "\n")
             self.assertEqual(collectd.max_t_in_file(p), 50)
+
+    def _enable(self, d):
+        cfg = os.path.join(d, "history.json")
+        with open(cfg, "w") as f:
+            f.write('{"enabled":true}\n')
+        old = collectd.HISTORY_CFG
+        collectd.HISTORY_CFG = cfg
+        return old
+
+    def _simulate(self, d, days, on_flush):
+        """Drive the real flush path with a fake wall clock: one sample per
+        stream and one flush every 10 min (the live tmpfs keeps 24 h, as
+        main() does). on_flush(k, now_ms, persist_dir) after every flush."""
+        old_cfg, old_now = self._enable(d), collectd.now_ms
+        clock = {"t": 1_700_000_000_000}
+        collectd.now_ms = lambda: clock["t"]
+        persist = os.path.join(d, "persist")
+        tmp_s, tmp_b = os.path.join(d, "samples.jsonl"), os.path.join(d, "battery.jsonl")
+        cursors = {"samples": 0, "battery": 0}
+        try:
+            for k in range(days * 144):
+                clock["t"] += 600_000
+                for path in (tmp_s, tmp_b):
+                    with open(path, "a") as f:
+                        f.write(json.dumps({"t": clock["t"], "rsrp": -100}) + "\n")
+                    collectd.trim(path, collectd.SAMPLE_MAX_AGE, 10 ** 6)
+                collectd.maybe_flush_persist(tmp_s, tmp_b, persist, cursors)
+                on_flush(k, clock["t"], persist)
+        finally:
+            collectd.HISTORY_CFG, collectd.now_ms = old_cfg, old_now
+
+    def test_steady_state_backup_is_append_only(self):
+        # The old flush trim()med the backup every 10 min: once it held 24 h,
+        # each flush REWROTE the whole multi-MB file on flash (~144x a day).
+        # Now the current segment only ever grows by appends; the one
+        # whole-file operation is a rename once per 24 h window.
+        with tempfile.TemporaryDirectory() as d:
+            seen = {"body": None, "whole_file_ops": 0, "appends": 0}
+
+            def on_flush(k, now, persist):
+                for stream in ("samples", "battery"):
+                    cur = os.path.join(persist, stream + ".jsonl")
+                    with open(cur, "rb") as f:
+                        body = f.read()
+                    key = (stream, "body")
+                    prior = seen.get(key)
+                    if prior is not None:
+                        if body.startswith(prior):
+                            seen["appends"] += 1
+                        else:
+                            seen["whole_file_ops"] += 1
+                    seen[key] = body
+            self._simulate(d, 3, on_flush)
+            # 3 days, 2 streams: one rotation per stream per day at most
+            self.assertLessEqual(seen["whole_file_ops"], 6, "the backup was rewritten, not appended")
+            self.assertGreater(seen["appends"], 800)
+
+    def test_restore_after_any_flush_covers_the_whole_window(self):
+        with tempfile.TemporaryDirectory() as d:
+            W = collectd.SAMPLE_MAX_AGE
+            seen = {"rotations": 0, "max_lines": 0}
+
+            def on_flush(k, now, persist):
+                prev, cur = collectd.persist_segments(persist, "samples")
+                n = 0
+                for p in (prev, cur):
+                    if os.path.exists(p):
+                        with open(p) as f:
+                            n += sum(1 for _ in f)
+                seen["max_lines"] = max(seen["max_lines"], n)
+                if k % 7 and k not in (143, 144, 145, 287, 288, 289):
+                    return                                   # sample the check (speed)
+                live = os.path.join(d, "restore-%d" % k)
+                os.makedirs(live)
+                paths = (os.path.join(live, "samples.jsonl"), os.path.join(live, "battery.jsonl"))
+                cursors = collectd.restore_from_persist(paths, persist)
+                with open(paths[0]) as f:
+                    ts = [json.loads(l)["t"] for l in f]
+                self.assertEqual(ts[-1], now)
+                self.assertEqual(cursors["samples"], now, "the next flush appends only what is new")
+                self.assertEqual(ts, sorted(ts))
+                self.assertGreaterEqual(ts[0], now - W, "restore is filtered to the window")
+                if k >= 144:
+                    self.assertLessEqual(ts[0], now - W + 600_000,
+                                         "prev + current still cover the full 24 h at k=%d" % k)
+            self._simulate(d, 3, on_flush)
+            self.assertLessEqual(seen["max_lines"], 2 * 144 + 1, "at most two windows on disk")
+
+    def test_rotation_renames_and_expiry_deletes(self):
+        with tempfile.TemporaryDirectory() as d:
+            prev, cur = collectd.persist_segments(d, "samples")
+            W = 1000
+            with open(cur, "w") as f:
+                for t in (100, 500, 900):
+                    f.write(json.dumps({"t": t}) + "\n")
+            self.assertIsNone(collectd.rotate_segment(prev, cur, W, ref_ms=1000), "head not a window old")
+            ino = os.stat(cur).st_ino
+            self.assertEqual(collectd.rotate_segment(prev, cur, W, ref_ms=1100), "rotated")
+            self.assertEqual(os.stat(prev).st_ino, ino, "a rename, not a copy")
+            self.assertFalse(os.path.exists(cur))
+            with open(cur, "w") as f:
+                f.write(json.dumps({"t": 1200}) + "\n")
+            # backup off for a long time: everything is outside the window
+            self.assertEqual(collectd.rotate_segment(prev, cur, W, ref_ms=10 ** 6), "expired")
+            self.assertFalse(os.path.exists(prev) or os.path.exists(cur))
+
+    def test_restore_reads_a_pre_rotation_single_file_backup(self):
+        # 1.x/2.0 wrote one samples.jsonl: it is read as the current segment.
+        with tempfile.TemporaryDirectory() as d:
+            persist = os.path.join(d, "persist")
+            os.makedirs(persist)
+            now = 10 ** 9
+            with open(os.path.join(persist, "samples.jsonl"), "w") as f:
+                for t in (now - collectd.SAMPLE_MAX_AGE - 1, now - 5000, now - 10):
+                    f.write(json.dumps({"t": t}) + "\n")
+            live = os.path.join(d, "live")
+            paths = (os.path.join(live, "samples.jsonl"), os.path.join(live, "battery.jsonl"))
+            cursors = collectd.restore_from_persist(paths, persist, ref_ms=now)
+            with open(paths[0]) as f:
+                self.assertEqual([json.loads(l)["t"] for l in f], [now - 5000, now - 10])
+            self.assertEqual(cursors, {"samples": now - 10, "battery": 0})
+            self.assertFalse(os.path.exists(paths[1]), "no battery backup -> nothing seeded")
+
+    def test_flush_starts_a_fresh_line_after_a_torn_tail(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp, pst = os.path.join(d, "tmp.jsonl"), os.path.join(d, "persist.jsonl")
+            with open(pst, "w") as f:
+                f.write('{"t":1}\n{"t":2')                   # power cut mid-append
+            with open(tmp, "w") as f:
+                f.write(json.dumps({"t": 3}) + "\n")
+            collectd.flush_new_lines(tmp, pst, 2)
+            with open(pst) as f:
+                self.assertEqual(f.read().splitlines(), ['{"t":1}', '{"t":2', '{"t": 3}'])
 
     def test_maybe_flush_respects_disabled_config(self):
         with tempfile.TemporaryDirectory() as d:

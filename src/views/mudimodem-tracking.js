@@ -44,10 +44,25 @@ module.exports = (function () {
     38:2600,41:2500,48:3500,66:1700,70:1700,71:600,77:3700,78:3500,79:4700 };
   var RANGES = [[15,"15 m"],[60,"1 h"],[360,"6 h"],[1440,"24 h"]];
   var TICKSTEP = { 15:2, 60:10, 360:60, 1440:240 };
-  var RECENT_USER_MS = 8000;
+  // Attribution window around a user/watchdog event: a topology change inside
+  // it is OURS, not the network's. 4.8's symmetric 8 s was sized for a 4 s
+  // cadence and no redial. On 4.10 the collector samples every 10 s and every
+  // band apply / cell lock / revert REDIALS (the link drops for a few
+  // seconds), so the first registered sample after the change lands up to a
+  // tick + the redial + a tick later — routinely >8 s, and it was logged as a
+  // "Handover". PRE covers a sample taken while the backend was still inside
+  // the write (the event is stamped after it returns, floored to the second).
+  // POST = ~20 s redial/re-register + two 10 s ticks; a genuine handover later
+  // than that is still reported. A confirmation ("Kept") touches nothing on
+  // the modem, so it only gets the PRE slack on either side.
+  var USER_PRE_MS = 5000, USER_POST_MS = 40000;
+  var NO_RADIO_EVENT = { Kept: 1 };
   var STALL_MS = 45000;            // no push for this long => one catch-up fetch
   var HOLE_MS = 25000;             // a push landing this long after the last sample => backfill the hole
   var GAP_MS = 45000;              // no sample for this long => the lanes break (same rule as the strip)
+  // A failed WINDOW load (the preload on open, or a wider range) is retried
+  // with a bounded backoff: 2, 4, 8, 16, then every 30 s until it lands.
+  var RETRY_BASE_MS = 2000, RETRY_MAX_MS = 30000;
   // PADL / PADR clear the RSRP (left) and SINR (right) y-axis labels. Was 30/12
   // when the overlay had no numeric scale and the legend carried every domain.
   var PADL = 42, PADR = 36, BUS_H = 20, PLOT_H = 230;
@@ -63,15 +78,25 @@ module.exports = (function () {
     props: { embedded: { type: Boolean, default: false } },
 
     data: function () {
-      return { winW: 15, pinnedM: null, tick: 0, live: true, width: 900,
-        styleId: "mmt-css", cursor: null, poll: null, pushSeenAt: 0,
+      // pinnedT: the pinned slice as an ABSOLUTE box-clock sample time (never
+      // minutes-relative-to-now, which slid to a newer sample on every push).
+      // cursor: the hover position, minutes relative to the view's now.
+      // frozenAt: box-clock "now" of the view while PAUSED (null = live).
+      return { winW: 15, pinnedT: null, hashPinM: null, tick: 0, live: true, frozenAt: null,
+        width: 900, styleId: "mmt-css", cursor: null, poll: null, pushSeenAt: 0,
         samples: [], events: [], lastT: 0, serverNow: 0, serverNowAt: 0,
         loading: true, err: "", fetching: false,
         // how far back we've fetched (epoch ms, BOX clock); null = nothing yet.
         // A larger range only refetches when it reaches earlier than this.
         // pendingWindow holds a range request (in minutes) that arrived while a
         // fetch was in flight.
-        loadedFrom: null, pendingWindow: null };
+        loadedFrom: null, pendingWindow: null,
+        // preloaded: a WINDOW load has succeeded at least once. Pushes alone
+        // never set it — they only carry what happened after the page opened.
+        // loadFails/retryMs drive the backoff and the honest message.
+        // missingSince: the start of a tail (hole backfill) that failed or
+        // was dropped mid-flight; the next push asks for it again.
+        preloaded: false, loadFails: 0, retryMs: 0, missingSince: null };
     },
 
     computed: {
@@ -113,13 +138,17 @@ module.exports = (function () {
       this.parseHash();
       this._onResize = function () { self.measure(); };
       window.addEventListener("resize", this._onResize);
+      // Torn-down flag: retries are only scheduled while this is true, and a
+      // late reply after beforeDestroy changes nothing.
+      this._alive = true;
       this.fetchHistory();                        // initial: just the visible window
       // No polling: samples and events arrive as pushes. The timer is only a
       // stall guard — when no push has landed for a while (collector restart,
-      // websocket reconnect) it fetches the tail once.
+      // websocket reconnect) it fetches the tail once. It runs while PAUSED
+      // too: pausing freezes the VIEW, collection carries on underneath.
       this.pushSeenAt = Date.now();
       this.poll = setInterval(function () {
-        if (self.live && Date.now() - self.pushSeenAt > STALL_MS) self.fetchHistory({ since: self.lastT, merge: true });
+        if (Date.now() - self.pushSeenAt > STALL_MS) self.fetchHistory({ since: self.lastT, merge: true });
       }, 30000);
     },
     // Keep the viewBox width in sync with the rendered width. At mount the lanes
@@ -130,7 +159,9 @@ module.exports = (function () {
     // and Vue skips the reactive write when unchanged, so this converges — no loop.
     updated: function () { this.measure(); },
     beforeDestroy: function () {
+      this._alive = false;
       if (this.poll) clearInterval(this.poll);
+      if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; }
       if (typeof window !== "undefined" && this._onResize) window.removeEventListener("resize", this._onResize);
     },
 
@@ -167,45 +198,42 @@ module.exports = (function () {
       // Date.now() and the box's os.time() are UTC epoch. Absolute skew.) The
       // poll's `since` is exempt — lastT is a timestamp the BOX stamped on a
       // sample, so it needs no clock agreement at either end.
+      //
+      // Every reply MERGES into what is held (dedupe by t, sort) — including
+      // the window preload: pushes may have landed while it was in flight (or
+      // while it was failing and being retried), and replacing would drop them.
+      //
+      // ⚠️ rpcSilent RESOLVES null on every failure and never rejects, so the
+      // failure path lives inside .then (a .catch here was dead code once, and
+      // with it a failed preload was never retried nor reported).
       fetchHistory: function (opts) {
         opts = opts || {};
         var self = this;
         if (typeof window === "undefined" || !window.$axios) { self.loading = false; return; }
-        // One fetch at a time. On a slow load the 10s poll would otherwise fire
-        // before it settles and (with a stale lastT) re-fetch + concat overlapping
-        // data. A range request that lands mid-flight is remembered, not dropped.
-        if (self.fetching) {
-          if (opts.window != null && !opts.merge)
-            self.pendingWindow = (self.pendingWindow == null) ? opts.window : Math.max(self.pendingWindow, opts.window);
-          return;
-        }
-        self.fetching = true;
-        var merge = !!opts.merge;
         // An incremental poll rides on lastT; everything else asks for a window.
         // lastT is 0 until the first sample lands (collector just started, or an
         // empty window) — since=0 would make the box decode the whole retained
         // 24h file on every 10s tick, so fall back to the window there too.
         var incremental = (opts.since != null && opts.since > 0);
+        // One fetch at a time. On a slow load the 10s poll would otherwise fire
+        // before it settles and (with a stale lastT) re-fetch + concat overlapping
+        // data. A range request that lands mid-flight is remembered, not dropped;
+        // so is the start of a tail (a hole backfill) — the next push asks again.
+        if (self.fetching) {
+          if (opts.window != null && !opts.merge)
+            self.pendingWindow = (self.pendingWindow == null) ? opts.window : Math.max(self.pendingWindow, opts.window);
+          else if (incremental) self.noteMissing(opts.since);
+          return;
+        }
+        self.fetching = true;
         var winMs = (opts.window || self.winW) * 60000;
         var params = incremental ? { since: Math.floor(opts.since) } : { window_ms: winMs };
         this.rpcSilent("get_history", params)
           .then(function (res) {
             self.fetching = false;
+            if (self._alive === false) return;      // torn down while in flight
             if (res) {
-              var ns = res.samples || [], ne = res.events || [];
-              if (merge) {
-                // Skip what is already held (a push that landed meanwhile, or
-                // the one that revealed a hole) and keep time order: a hole
-                // backfill is OLDER than the newest pushed sample.
-                var haveT = {};
-                for (var i = 0; i < self.samples.length; i++) haveT[self.samples[i].t] = 1;
-                var add = ns.filter(function (x) { return x && x.t && !haveT[x.t]; });
-                if (add.length) self.samples = self.samples.concat(add).sort(function (a, b) { return a.t - b.t; });
-                var haveE = {};
-                for (var j = 0; j < self.events.length; j++) haveE[self.events[j].t + "|" + self.events[j].label] = 1;
-                var addE = ne.filter(function (e) { return e && !haveE[e.t + "|" + e.label]; });
-                if (addE.length) self.events = self.events.concat(addE);
-              } else { self.samples = ns; self.events = ne; }
+              self.mergeHistory(res.samples || [], res.events || []);
               self.serverNow = res.now || Date.now();
               self.serverNowAt = Date.now();
               var cut = self.serverNow - 24 * 3600 * 1000;
@@ -216,16 +244,66 @@ module.exports = (function () {
               // own clock, so setRange's backfill test compares like with like.
               var reached = incremental ? opts.since : (self.serverNow - winMs);
               self.loadedFrom = (self.loadedFrom == null) ? reached : Math.min(self.loadedFrom, reached);
+              if (incremental) {
+                if (self.missingSince != null && opts.since <= self.missingSince) self.missingSince = null;
+              } else {
+                // The window is in: stop retrying, and re-anchor a #m= pin on
+                // the box clock now that we have it.
+                self.preloaded = true; self.loadFails = 0; self.retryMs = 0;
+                if (self._retryTimer) { clearTimeout(self._retryTimer); self._retryTimer = null; }
+                if (self.hashPinM != null) {
+                  var near = self.nearestByT(self.samples, self.serverNow + self.hashPinM * 60000);
+                  if (near) self.pinnedT = near.t;
+                  self.hashPinM = null;
+                }
+              }
               self.err = ""; self.tick++;
+            } else if (incremental) {
+              self.noteMissing(opts.since);           // the next push asks again
+            } else {
+              // A WINDOW load failed. Unretried, the first push then set the
+              // cursor and the page showed only post-open samples forever.
+              self.loadFails++;
+              self.retryMs = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * Math.pow(2, self.loadFails - 1));
+              self.err = "couldn't reach the router";
+              self.scheduleRetry();
+              self.tick++;
             }
             self.loading = false;
             self.drainPending();
-          })
-          .catch(function (e) {
-            self.fetching = false;
-            self.err = (e && (e.type || e.message)) || "couldn't load history"; self.loading = false;
-            self.drainPending();
           });
+      },
+      // Merge a reply into the held samples/events: skip what is already held
+      // (a push that landed meanwhile, or the one that revealed a hole) and keep
+      // time order — a hole backfill or a late preload is OLDER than the newest
+      // pushed sample.
+      mergeHistory: function (ns, ne) {
+        var haveT = {};
+        for (var i = 0; i < this.samples.length; i++) haveT[this.samples[i].t] = 1;
+        var add = ns.filter(function (x) { return x && x.t && !haveT[x.t]; });
+        if (add.length) {
+          this.samples = this.samples.concat(add).sort(function (a, b) { return a.t - b.t; });
+          // Inserted BEFORE the tail: the incremental derivation only knows how
+          // to extend at the end, so rebuild it once.
+          this._derived = null;
+        }
+        var haveE = {};
+        for (var j = 0; j < this.events.length; j++) haveE[this.events[j].t + "|" + this.events[j].label] = 1;
+        var addE = ne.filter(function (e) { return e && !haveE[e.t + "|" + e.label]; });
+        if (addE.length) this.events = this.events.concat(addE);
+      },
+      noteMissing: function (since) {
+        this.missingSince = (this.missingSince == null) ? since : Math.min(this.missingSince, since);
+      },
+      // One pending retry at a time, only while mounted. It asks for whatever
+      // the view needs NOW (the range may have changed since the failure).
+      scheduleRetry: function () {
+        var self = this;
+        if (!this._alive || this._retryTimer) return;
+        this._retryTimer = setTimeout(function () {
+          self._retryTimer = null;
+          if (self._alive) self.fetchHistory({ window: self.neededWindowMin(self.winW) });
+        }, this.retryMs || RETRY_BASE_MS);
       },
       drainPending: function () {
         if (this.pendingWindow == null) return;
@@ -234,7 +312,8 @@ module.exports = (function () {
       },
       // A live collector sample (mudimodem.collect push): append it exactly as
       // an incremental fetch would have. The box stamped `t`, so it also
-      // advances the box-clock reference without a round-trip.
+      // advances the box-clock reference without a round-trip. While PAUSED it
+      // is still collected — only the view is frozen (see viewNow).
       onPush: function (s) {
         if (!s || !s.t || s.t <= this.lastT) return;
         var prevT = this.lastT;
@@ -252,7 +331,10 @@ module.exports = (function () {
         // collector's has_websocket gate, up to ~3 ticks after a page opens)
         // or lost (ws reconnect). The samples exist in the collector's log —
         // backfill them once; the stall guard cannot see this, the push reset it.
-        if (prevT > 0 && s.t - prevT > HOLE_MS) this.fetchHistory({ since: prevT, merge: true });
+        // A tail that failed (or was dropped mid-flight) earlier is asked again.
+        var from = (prevT > 0 && s.t - prevT > HOLE_MS) ? prevT : null;
+        if (this.missingSince != null) from = (from == null) ? this.missingSince : Math.min(from, this.missingSince);
+        if (from != null) this.fetchHistory({ since: from, merge: true });
       },
       // A user/watchdog event (mudimodem.event push) — Keep, Revert, auto-revert.
       onEventPush: function (e) {
@@ -268,7 +350,7 @@ module.exports = (function () {
       // page's one O(n)-per-10 s cost. The cache resumes from the last sample
       // it processed (found by identity from the tail, so head trimming does not
       // invalidate it); a change to the known events resets it, since those
-      // suppress derived ticks retroactively (RECENT_USER_MS around each).
+      // suppress derived ticks retroactively (the USER_PRE/POST_MS window).
       deriveNetEventsIncremental: function (samples, known) {
         var c = this._derived;
         if (c && c.known === known && c.knownLen === known.length && c.lastSample &&
@@ -291,17 +373,22 @@ module.exports = (function () {
         return full.out.slice();
       },
       // pure: derive net (handover/failover) events from consecutive samples,
-      // suppressing any within RECENT_USER_MS of a known user/watchdog event so a
-      // change WE applied isn't double-counted as a network event.
+      // suppressing any inside the attribution window of a known user/watchdog
+      // event (USER_PRE_MS before .. USER_POST_MS after) so a change WE applied
+      // isn't double-counted as a network event.
       // With `state` ({from, last, out} or {withState:true}) it resumes from a
       // prior run and returns {out, last}; without it, the plain event array.
       deriveNetEvents: function (samples, known, state) {
+        var self = this;
         var out = (state && state.out) ? state.out.slice() : [], last = (state && state.last) || null;
         var start = (state && state.from) || 0;
         var recentUser = function (t) {
-          for (var i = 0; i < known.length; i++)
-            if (Math.abs(known[i].t - t) <= RECENT_USER_MS &&
-                (known[i].kind === "user" || known[i].kind === "dog")) return true;
+          for (var i = 0; i < known.length; i++) {
+            var k = known[i];
+            if (k.kind !== "user" && k.kind !== "dog") continue;
+            var post = NO_RADIO_EVENT[k.label] ? USER_PRE_MS : USER_POST_MS;
+            if (t >= k.t - USER_PRE_MS && t <= k.t + post) return true;
+          }
           return false;
         };
         // Topology signature of a sample: slot + serving cell + RAT + the PCC's
@@ -338,9 +425,11 @@ module.exports = (function () {
             } else {
               var a = sig(last), b = sig(s);
               if (a && b && a !== b) {
+                // The prefix follows the CARRIER's RAT (an EN-DC cell's LTE
+                // anchor is B2, not "n2"), never the cell's mode.
                 var fmt = function (x) {
                   var c = pcc(x);
-                  return (c.band != null ? ((/NR5G/.test(x.mode || "") ? " n" : " B") + c.band) : "");
+                  return (c.band != null ? ((/NR5G/.test(self.carrierRat(x)) ? " n" : " B") + c.band) : "");
                 };
                 out.push({ t: s.t, kind: "net", label: "Handover",
                   detail: "Cell " + last.id + " → " + s.id + fmt(s) +
@@ -366,6 +455,29 @@ module.exports = (function () {
         if (this.serverNow) return this.serverNow + (Date.now() - this.serverNowAt);
         return Date.now();
       },
+      // The VIEW's now: frozen at the moment PAUSED was pressed, the live box
+      // clock otherwise. Everything drawn (window, x-axis, clock labels, slice)
+      // is relative to this; collection keeps using the real clock.
+      viewNow: function () { return this.frozenAt != null ? this.frozenAt : this.nowMs(); },
+      // Minutes a window fetch must ask for so the VIEW's window is covered:
+      // while paused the box has moved on past the frozen edge.
+      neededWindowMin: function (w) {
+        var extra = this.frozenAt != null ? Math.ceil((this.nowMs() - this.frozenAt) / 60000) : 0;
+        return Math.min(1440, w + Math.max(0, extra));
+      },
+      togglePause: function () {
+        if (this.live) { this.live = false; this.frozenAt = this.nowMs(); }
+        else { this.live = true; this.frozenAt = null; }
+        this.tick++;
+      },
+      // Samples collected after the freeze, waiting for RESUME. Walks the tail
+      // only (the array is ascending).
+      heldCount: function () {
+        if (this.frozenAt == null) return 0;
+        var n = 0;
+        for (var i = this.samples.length - 1; i >= 0 && this.samples[i].t > this.frozenAt; i--) n++;
+        return n;
+      },
       qFromLevel: function (l) { return ({1:"poor",2:"fair",3:"good",4:"excellent"})[l] || "none"; },
       qColor: function (q) {
         return ({ poor:"var(--error)", fair:"var(--warning)", good:"var(--info-hover)",
@@ -376,20 +488,33 @@ module.exports = (function () {
         return p(d.getHours()) + ":" + p(d.getMinutes());
       },
       freqOf: function (b) { return FREQ_N[b]; },
+      // The PRIMARY carrier's own RAT — "LTE" for an NSA anchor, while `mode`
+      // is the cell's (NR5G-NSA). Same rule as the parent's servingRat():
+      // pcc_rat (4.10 collector) -> signals[0].rat -> mode (older samples).
+      carrierRat: function (s) {
+        if (!s) return "";
+        var sig = Array.isArray(s.signals) && s.signals[0];
+        return s.pcc_rat || (sig && sig.rat) || s.mode || "";
+      },
       bandLabel: function (s) {
-        var pre = /NR5G/.test(s.mode || "") ? "n" : "B";
+        var pre = /NR5G/.test(this.carrierRat(s)) ? "n" : "B";
         return (s.band == null || s.band === "") ? "—" : pre + s.band;
       },
 
-      mOf: function (t) { return -((this.nowMs() - t) / 60000); },
+      mOf: function (t) { return -((this.viewNow() - t) / 60000); },
       xOf: function (m) {
         var plotW = this.width - PADL - PADR;
         return PADL + (m + this.winW) / this.winW * plotW;
       },
       winSamples: function () {
-        var cutoff = this.nowMs() - this.winW * 60000, self = this;
-        var win = this.samples.filter(function (s) { return s.t >= cutoff; })
-          .map(function (s) { return Object.assign({ m: self.mOf(s.t) }, s); });
+        var now = this.viewNow(), cutoff = now - this.winW * 60000;
+        // While paused, anything stamped after the freeze is held back (it is
+        // in this.samples, and shows on resume). Live, there is no upper bound:
+        // get_history's `now` is floored to the second, so the newest sample
+        // can be stamped a few hundred ms "after" it.
+        var top = this.frozenAt != null ? this.frozenAt : Infinity;
+        var win = this.samples.filter(function (s) { return s.t >= cutoff && s.t <= top; })
+          .map(function (s) { return Object.assign({ m: -((now - s.t) / 60000) }, s); });
         // The draw + bus code walk this in array order and connect consecutive
         // points, so they REQUIRE ascending t. Incremental polling builds
         // this.samples with .concat(), which can leave it out of order or with
@@ -475,16 +600,38 @@ module.exports = (function () {
         } }, opts.unit));
       },
       winEvents: function () {
-        var cutoff = this.nowMs() - this.winW * 60000, self = this;
-        return this.allEvents.filter(function (e) { return e.t >= cutoff; })
+        var now = this.viewNow(), cutoff = now - this.winW * 60000, self = this;
+        var top = this.frozenAt != null ? this.frozenAt : Infinity;
+        return this.allEvents.filter(function (e) { return e.t >= cutoff && e.t <= top; })
           .map(function (e) { return Object.assign({ m: self.mOf(e.t) }, e); });
       },
-      nearestSample: function (m) {
-        var ss = this.winSamples(); if (!ss.length) return null;
+      // Closest sample to box time `t` in an ascending array, or null.
+      nearestByT: function (ss, t) {
+        if (!ss || !ss.length) return null;
         var best = ss[0];
         for (var i = 1; i < ss.length; i++)
-          if (Math.abs(ss[i].m - m) < Math.abs(best.m - m)) best = ss[i];
+          if (Math.abs(ss[i].t - t) < Math.abs(best.t - t)) best = ss[i];
         return best;
+      },
+      nearestSample: function (m) {
+        return this.nearestByT(this.winSamples(), this.viewNow() + m * 60000);
+      },
+      // Where the slice line sits (minutes, view-relative): the pinned
+      // sample's own time when pinned, the hover position otherwise.
+      cursorM: function () {
+        if (this.pinnedT != null) return this.mOf(this.pinnedT);
+        return this.cursor;
+      },
+      // The sample the readout describes. A pin is an absolute SAMPLE time, so
+      // it keeps describing that sample however many pushes land after it; it
+      // shows nothing once that sample has left the visible window.
+      focusSample: function () {
+        if (this.pinnedT != null) {
+          var pm = this.mOf(this.pinnedT);
+          if (pm < -this.winW || pm > 0) return null;
+          return this.nearestByT(this.winSamples(), this.pinnedT);
+        }
+        return this.cursor == null ? null : this.nearestSample(this.cursor);
       },
       busRuns: function (key) {
         var ss = this.winSamples(), runs = [], self = this;
@@ -495,10 +642,19 @@ module.exports = (function () {
         };
         for (var i = 0; i < ss.length; i++) {
           var v = label(ss[i]), lastRun = runs[runs.length - 1];
-          if (lastRun && lastRun.v === v) lastRun.m1 = ss[i].m;
+          // A SIM change starts a new run even when the label matches (both
+          // SIMs on n71): two radios are never one bar.
+          var sameSim = i === 0 || String(ss[i].slot) === String(ss[i - 1].slot);
+          if (lastRun && sameSim && lastRun.v === v) lastRun.m1 = ss[i].m;
           else { if (lastRun) lastRun.m1 = ss[i].m; runs.push({ v: v, m0: ss[i].m, m1: ss[i].m, s: ss[i] }); }
         }
-        if (runs.length) runs[runs.length - 1].m1 = 0;
+        // The last run reaches "now" only while data is still arriving: past
+        // the lanes' own GAP_MS with no sample, it ends at the last sample
+        // rather than painting a bar through time we have nothing for.
+        if (runs.length) {
+          var lastS = ss[ss.length - 1];
+          runs[runs.length - 1].m1 = (this.viewNow() - lastS.t > GAP_MS) ? lastS.m : 0;
+        }
         return runs;
       },
 
@@ -518,24 +674,35 @@ module.exports = (function () {
       },
       clampM: function (m) { return Math.max(-this.winW, Math.min(0, m)); },
       onMove: function (e) {
-        if (this.pinnedM != null) return;
+        if (this.pinnedT != null) return;
         var m = this.mFromEvent(e); if (m == null) return;
         this.cursor = this.clampM(m);
       },
-      onLeave: function () { if (this.pinnedM == null) this.cursor = null; },
+      onLeave: function () { if (this.pinnedT == null) this.cursor = null; },
       onClick: function (e) {
-        if (this.pinnedM != null) { this.pinnedM = null; return; }
+        this.hashPinM = null;          // the user's own pin wins over a #m= link
+        // A second click releases a VISIBLE pin; a pin whose sample has scrolled
+        // out of the window is replaced instead (releasing an invisible pin
+        // would read as a click that did nothing).
+        if (this.pinnedT != null && this.focusSample()) { this.pinnedT = null; this.cursor = null; return; }
         var m = this.mFromEvent(e); if (m == null) return;
-        this.pinnedM = this.cursor = this.clampM(m);
+        m = this.clampM(m);
+        // Pin the SAMPLE under the pointer, by its box time — not a minute
+        // offset from now, which slid to a newer sample on every push.
+        var s = this.nearestSample(m);
+        this.pinnedT = s ? s.t : this.viewNow() + m * 60000;
+        this.cursor = this.mOf(this.pinnedT);
       },
       setRange: function (w) {
-        this.winW = w; this.pinnedM = null; this.cursor = null;
+        this.winW = w; this.pinnedT = null; this.hashPinM = null; this.cursor = null;
         // Backfill only when the new window reaches earlier than we've loaded; a
         // narrower range just re-filters the samples already in memory.
         // nowMs() is skew-corrected to the box after the first reply, and
         // loadedFrom is box-derived too, so this compares like with like.
-        var cutoff = this.nowMs() - w * 60000;
-        if (this.loadedFrom == null || cutoff < this.loadedFrom - 1000) this.fetchHistory({ window: w });
+        // While paused the window hangs off the frozen edge, not the live one.
+        var cutoff = this.viewNow() - w * 60000;
+        if (this.loadedFrom == null || cutoff < this.loadedFrom - 1000)
+          this.fetchHistory({ window: this.neededWindowMin(w) });
       },
       parseHash: function () {
         if (typeof window === "undefined" || !window.location) return;
@@ -545,8 +712,16 @@ module.exports = (function () {
         });
         var w = parseInt(q.w, 10);
         if ([15, 60, 360, 1440].indexOf(w) !== -1) this.winW = w;
+        // #m= is minutes before now. It becomes an absolute pin right away on
+        // the clock we have, and is re-anchored to the nearest SAMPLE on the
+        // box clock once the window preload lands (fetchHistory).
         var m = parseFloat(q.m);
-        if (!isNaN(m)) this.pinnedM = this.cursor = this.clampM(m);
+        if (!isNaN(m)) {
+          m = this.clampM(m);
+          this.hashPinM = m;
+          this.pinnedT = this.viewNow() + m * 60000;
+          this.cursor = m;
+        }
       },
 
       // ---- render helpers ----
@@ -601,9 +776,14 @@ module.exports = (function () {
             // cover every sample) so a NaN/outlier can't paint outside the frame.
             return plotBot - (Math.max(d0, Math.min(d1, v)) - d0) / span * PLOT_H;
           };
-          var d = "", pen = false, prevT = null;         // one path per metric
+          var d = "", pen = false, prevT = null, prevSlot = null;   // one path per metric
           ss.forEach(function (s) {
             var v = s[L.key];
+            // A SIM change breaks the pen too: SIM1's last reading and SIM2's
+            // first are two different radios, never one line.
+            var slot = s.slot == null ? null : String(s.slot);
+            if (prevSlot !== null && slot !== prevSlot) pen = false;
+            prevSlot = slot;
             // Break the pen on a missing reading AND on a time hole: no sample
             // for over GAP_MS (collector down, outage) is a gap in the data, and
             // drawing a straight bridge across it would hide the outage as a
@@ -651,14 +831,15 @@ module.exports = (function () {
             stroke: "var(--divider)", "stroke-width": 1 } }));
           kids.push(h("text", { attrs: { x: xx.toFixed(1), y: y + 14, "text-anchor": "middle",
             "font-size": 9, fill: "var(--text-badge)", "font-family": "var(--mono,ui-monospace,monospace)" } },
-            this.clock(this.nowMs() + m * 60000)));
+            this.clock(this.viewNow() + m * 60000)));
         }
         y += 22;
-        if (this.cursor != null) {
-          var cx = this.xOf(this.cursor);
+        var cm = this.cursorM();
+        if (cm != null && cm >= -this.winW && cm <= 0) {
+          var cx = this.xOf(cm);
           kids.push(h("line", { attrs: { x1: cx.toFixed(1), x2: cx.toFixed(1), y1: evTop, y2: evBot,
-            stroke: this.pinnedM != null ? "var(--primary)" : "var(--text-weak)",
-            "stroke-width": this.pinnedM != null ? 1.25 : 1 } }));
+            stroke: this.pinnedT != null ? "var(--primary)" : "var(--text-weak)",
+            "stroke-width": this.pinnedT != null ? 1.25 : 1 } }));
         }
         // preserveAspectRatio:none — STRETCH the viewBox to fill the container
         // width (CSS width:100%). The default "meet" would uniformly scale and
@@ -670,7 +851,7 @@ module.exports = (function () {
           width: W, height: y, preserveAspectRatio: "none" } }, kids);
       },
       sliceReadout: function (h) {
-        var s = this.nearestSample(this.cursor); if (!s) return null;
+        var s = this.focusSample(); if (!s) return null;
         var self = this, cx = this.xOf(s.m), near = null, evs = this.winEvents();
         for (var i = 0; i < evs.length; i++)
           if (Math.abs(this.xOf(evs[i].m) - cx) < 6) near = evs[i];
@@ -689,7 +870,7 @@ module.exports = (function () {
           row("SIM", (s.carrier || "SIM") + " · " + s.slot, "", null)
         ];
         var kids = [h("div", { staticClass: "t" },
-          this.clock(this.nowMs() + s.m * 60000) + (this.pinnedM != null ? " · pinned" : ""))];
+          this.clock(s.t) + (this.pinnedT != null ? " · pinned" : ""))];
         if (near) kids.push(h("div", { staticClass: "e",
           staticStyle: { color: near.kind === "user" ? "var(--primary)"
             : near.kind === "dog" ? "var(--warning-hover,#c4851c)" : "var(--text-weak)" } },
@@ -700,8 +881,10 @@ module.exports = (function () {
         return h("div", { staticClass: "mmt-tip" }, kids);
       },
       renderLog: function (h) {
-        var self = this;
-        var evs = this.allEvents.slice().reverse();
+        var self = this, top = this.frozenAt;
+        // Frozen with the graph while PAUSED, so the two never disagree.
+        var evs = (top == null ? this.allEvents.slice()
+          : this.allEvents.filter(function (e) { return e.t <= top; })).reverse();
         var rows = evs.map(function (e, i) {
           var src = { user: "User", dog: "Watchdog", net: "Network" }[e.kind];
           return h("tr", { key: i }, [
@@ -736,17 +919,33 @@ module.exports = (function () {
             return h("button", { key: r[0], staticClass: self.winW === r[0] ? "on" : "",
               on: { click: function () { self.setRange(r[0]); } } }, r[1]);
           })),
+          // PAUSED freezes the view (window, axis, slice, log); pushes keep
+          // being collected underneath and appear on resume.
+          self.live ? null : h("span", { staticClass: "mmt-held" }, (function () {
+            var n = self.heldCount();
+            return n ? n + " new sample" + (n === 1 ? "" : "s") + " held — resume to show" : "view frozen";
+          })()),
           h("button", { staticClass: "mmt-live" + (self.live ? "" : " off"),
-            on: { click: function () { self.live = !self.live; } } },
+            on: { click: function () { self.togglePause(); } } },
             [h("span", { staticClass: "d" }), self.live ? "LIVE" : "PAUSED"])
         ]);
-        var body;
+        // How often the failed window load is being retried, as the code does it.
+        var every = Math.round((this.retryMs || RETRY_BASE_MS) / 1000);
+        var body, note = null;
         if (hasData) {
           body = h("div", { ref: "lanes", staticClass: "mmt-lanes",
             on: { mousemove: this.onMove, mouseleave: this.onLeave, click: this.onClick } },
-            [this.renderLanes(h), this.cursor != null ? this.sliceReadout(h) : null]);
+            [this.renderLanes(h), this.cursorM() != null ? this.sliceReadout(h) : null]);
+          // Pushes are drawing, but the window before them never loaded: say
+          // so, instead of passing off "since the page opened" as the history.
+          if (this.loadFails > 0)
+            note = h("div", { staticClass: "mmt-note" }, (this.preloaded
+              ? "Couldn't load the wider range yet"
+              : "Earlier history didn't load — showing live samples since the page opened")
+              + "; retrying every " + every + " s.");
         } else {
-          var msg = this.err ? "Couldn't load history: " + this.err
+          var msg = (this.loadFails > 0 && this.err)
+              ? "Couldn't load history: " + this.err + " — retrying every " + every + " s."
             : this.loading ? "Loading history from the router…"
             : "No samples yet. The collector runs on the router and gathers continuously — "
               + "check back in a minute, or confirm the mudimodem-collectd service is running.";
@@ -759,7 +958,7 @@ module.exports = (function () {
           h("span", "a tick marks the moment — everything to its right is the radio's answer")
         ]);
         return h("div", { staticClass: "mmt" }, [
-          h("div", { staticClass: "mmt-card" }, [head, body, foot]),
+          h("div", { staticClass: "mmt-card" }, [head, note, body, foot]),
           this.renderLog(h)
         ]);
       },
@@ -779,6 +978,8 @@ module.exports = (function () {
           '.mmt-live{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--success);cursor:pointer;background:none;border:1px solid var(--border);border-radius:3px;padding:5px 10px}' +
           '.mmt-live .d{width:7px;height:7px;border-radius:50%;background:var(--success)}' +
           '.mmt-live.off{color:var(--text-badge)}.mmt-live.off .d{background:var(--text-hint)}' +
+          '.mmt-held{font-size:11px;color:var(--text-badge)}' +
+          '.mmt-note{font-size:11.5px;color:var(--warning-hover,#c4851c);padding:0 14px 8px}' +
           '.mmt-lanes{position:relative;padding:2px 0 6px;cursor:crosshair}.mmt-lanes svg{display:block;width:100%;overflow:visible}' +
           '.mmt-foot{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:8px 14px 11px;border-top:1px solid var(--divider);font-size:11px;color:var(--text-badge)}' +
           '.mmt-lg{display:inline-flex;align-items:center;gap:5px}' +

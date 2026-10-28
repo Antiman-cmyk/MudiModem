@@ -6,7 +6,7 @@
 
 CFG="${MUDIMODEM_BATTLIMIT_FILE:-/etc/mudimodem/battlimit.json}"
 BIN="${MUDIMODEM_BATTLIMIT_BIN:-/usr/bin/glbattlimit}"
-PIDF=/tmp/glbattlimit.pid
+PIDF="${MUDIMODEM_BATTLIMIT_PIDF:-/tmp/glbattlimit.pid}"
 
 case "$DRIVER" in
     cw221X|cw2217|aw35615|sgm41542*|qpnp*|pmic*) ;;

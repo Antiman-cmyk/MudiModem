@@ -59,8 +59,23 @@ gone with the LCD renderer it fed.
 | `cellular.sim info` (no args) | `sims[]{slot, mcc, mnc, iccid, …}` — PLMN for the sub_id resolver |
 | `cellular.network info` | `networks[]{bus, slot, carrier, …}` — carrier/identity, read every 60 s by collectd |
 | `cellular.network cell_info {"bus":"cpu","slot":N}` | `{network_type, tac, cell_id, signal[]{ca, network_type, band, earfcn, pci, bandwidth, rsrp, rsrq, sinr, rssi, rscp, ecio, snr, rsrp_level…snr_level (7), strength}}` — EVERY row carries `network_type` and `pci` (🟢 handler `libcm_network.so` @0x8284, both row emitters @0x88d4/@0x8ab0, ≤5 rows). EN-DC: QCAINFO `PCC` = LTE anchor → row 4, `SCC` lines whose band token starts with `N` → row 51 (`libcm_modem.so` parse_qcainfo_line @0x27bd4), cell 51; plain LTE CA → 41. ⚠️ When QCAINFO yields no carriers the handler emits ONE fallback row from the QENG servingcell struct (LTE-anchor band/pci/earfcn) stamped with the CELL's code — `cellular_compat._row_network_type` re-tags an NR-coded row on an E-UTRA channel as LTE. Top-level code: `modem_network_mode_to_public_code` (`libcmutils.so` table @0x10db7: 6→4, 7→41, 8→51, 9→5). **Executes `AT+QENG`/`AT+QCAINFO` on every call** (🟢 `libcm_modem.so` quectel_get_qcainfo_signal @0x2710c: templates @0x271dc/@0x274ec; no `AT+QNWINFO` anywhere) — collectd is the only caller, at 10 s, and everything else (speed test, cell lock) reuses its `latest.json` while it is < 30 s old |
-| `modem.CPU.AT get_result_AT {cmd, timeout, sub_id}` | provider `/usr/bin/modem_AT` (spawned per bus by `cellular_manager`); the only path with an explicit `sub_id` — used for `policy_band` / `ue_capability_band` / `QNWLOCK` reads |
+| `modem.CPU.AT get_result_AT {cmd, timeout, sub_id}` | provider `/usr/bin/modem_AT` (spawned per bus by `cellular_manager`); the only path with an explicit `sub_id` — used for `policy_band` / `ue_capability_band` / `QNWLOCK` reads. **`sub_id` = slot (1 or 2) for the built-in modem** 🟢 — see §2.1 |
 | `gl-session notify {name, data}` / `has_websocket` / `call {module, func, params}` | push bus; browser-attached probe; root loop-back into `/rpc` (`is_local` + `glinet` header) — how the watchdog restores bands from a shell |
+
+### 2.1 `sub_id` ↔ slot, settled from GL's own code (2026-10-28) 🟢
+- `libcm_network.so` `cell_info` handler @0x8384–0x86e4: slot (parsed, else
+  `get_current_sim_slot`) must be 1 or 2 (`slot-1 > 1` → error 2); vendor `quectel` →
+  `sub_id = strcasecmp(bus,"cpu")==0 ? slot : 0` → `quectel_get_qcainfo_signal(bus, …, sub_id)`.
+- The same rule reads the IMSI (@0xf62c–0xf644): `sub_id = (bus=="cpu") ? slot : 0` → the vendor
+  table's `get_sim_imsi` = `libcm_modem.so common_get_sim_imsi` @0x9a38 → **`AT+CIMI` at that
+  `sub_id`**. So GL itself identifies each slot's SIM by `AT+CIMI` per `sub_id` — what MudiModem's
+  `resolve_active` does to confirm the sub_id.
+- `libcmutils.so execute_at_command` @0x6a1c puts `"sub_id"` into the `get_result_AT` request
+  **only when it is 1 or 2**; anything else is omitted (= modem_AT's default subscription). GL
+  never sends `sub_id:0` — which is why an explicit 0 drifts between SIMs (reference §1).
+- `cellular.sim info`'s `imsi`, `mcc`, `mnc` are JSON **strings** (`libcm_sim.so` @0x647c, all
+  `jsonw_string`; leading zeros kept); `mcc`/`mnc` are the HOME network (`imsi_to_mcc_mnc`), so
+  they differ from QSPN's registered PLMN while roaming.
 
 No-service `cell_info`: `network_type 0`, empty `cell_id`/`tac`, `signal[]` rows of
 `band/earfcn/pci/bandwidth 0` and metrics `-32768` → normalized to `null`s + `signals: []`.
@@ -108,10 +123,43 @@ awareness. Written to `/tmp/mudimodem/samples.jsonl` + `latest.json`, broadcast 
   `/var/run/ngx-ubus-proxy.sock` to `gl-ngx-session` (optional 4th arg `timeout` ms).
 - `gl_modem` is a one-shot CLI now; `cellular_manager` → `modem_AT` is the AT poller.
   `/dev/at_mdm0` (bridged by `port-bridge at_mdm0 at_usb0 0`) remains our own AT channel.
-- busybox has no `pkill` (use `pgrep` + `kill`); `curl openssl flock nohup killall setsid`
-  are present.
+- busybox (1.36.1, applet list read by running it under qemu) has no `pkill` (use `pgrep` +
+  `kill`); `pgrep -f` is regex (the `[t]` self-exclusion trick works), `sleep` takes
+  fractions, `gzip -t`, `readlink -f`, `flock`, `nohup`, `timeout`, `start-stop-daemon` are
+  present. **There is NO `setsid`** (no applet, no binary) — an earlier version of this line
+  said otherwise. `mudimodem-detach` therefore only closes fds on the box; that suffices:
+  procd stops a service with `kill(pid, SIGTERM)`/`SIGKILL` on the instance pid only
+  (`/sbin/procd` @0xf364 / @0x102e0, no negative pid), and nginx signals its workers by pid, so
+  a detached child in nginx's process group survives an nginx restart.
+- `port-bridge at_mdm0 at_usb0 0` (`/usr/bin/port-bridge`): its modem→USB thread
+  (`modem_to_usb_bridge_*`) opens `at_mdm0`, then loops `poll()` → `read()` → write to the USB
+  port, holding its mutex only around each call — it reads `at_mdm0` continuously, USB host
+  attached or not. A reply that lands after `mudimodem-at.py` gave up is therefore normally
+  consumed by port-bridge, not left for the next invocation (the AT tool keeps only the known
+  minutes-long commands "owed"). ⇒ The AT console no longer reads this port in normal operation:
+- `modem_AT` (`/usr/bin/modem_AT`, gl-sdk4-cellular 2026.236; `modem.CPU.AT get_result_AT
+  {cmd, timeout, sub_id, source_flag}` → `{"data": "<module lines incl. OK/ERROR>"}`): one IO
+  thread + idle/work request queue (every caller serialized), `drain_rx_before_tx` drops stale
+  bytes before each send, a reply without the command's `expected_prefix` is discarded ("discard
+  mixed AT response"), a request whose `sub_id` (1/2) differs from the current one is preceded
+  by `AT+QUIMSUB=<n>` (@0x7a68 — so a request WITHOUT sub_id runs on whatever was selected last:
+  the "sub_id 0 drifts" mechanism), and a sensitive command (QNWPREFCFG bands/mode, QNWLOCK,
+  CFUN, COPS, QSCAN, QUIMSLOT, CLCK/CPIN/CPWD, EGMR, …) triggers `ubus call cellular.status
+  get_event` so GL's state manager refreshes. GL's own web AT console
+  (`libcm_network.so send_at_command` @0x14230) goes through it with `source_flag 1`,
+  `sub_id = slot` and a 4095-byte reply buffer — MudiModem's `at_console` now sends the same.
+- `cell_info` failure reply: `{"ret": <code>, "resp": "<text>"}` and no `network_type`
+  (handler @0x85dc–0x8624) — what `cellular_compat.cell_info_failed` keys on.
+- GL's opkg feed (`/etc/opkg/distfeeds.conf`) carries `python3-light 3.11.7-1`; every module
+  MudiModem's Python imports is in it (checked by importing them with that interpreter).
 - `quec_battery` (START=04) actively manages `vreg/charge_en/hiz_mode` on the same sysfs
-  nodes `glbattlimit` writes (🔴 duel test).
+  nodes `glbattlimit` writes. Read in the binary: `thermal_battery_state_change →
+  set_sgm41542s_func` writes `vreg = full_volt_mv*1000` — **4180 mV when warm, charge
+  current 0 when hot, otherwise derated by cycle count** (>500 → 4250, >200 → 4300,
+  >100 → 4350). Its `cap_limit` is the USB-C OTG output limit (`gl_otg.typec1.threshold`),
+  not a charge cap. ⇒ `glbattlimit` must never write a fixed 4.4 V back: it saves GL's
+  `vreg` when it gates, never raises the gate above it, and on release restores GL's value
+  only if the buck still holds the gate value it wrote itself (else GL rewrote it — leave it).
 
 ## 6. What the image settled, and the short list that only a running box can answer
 
@@ -147,8 +195,10 @@ Settled from the image (second pass, 2026-09-02):
 
 🔴 Genuinely runtime (state or timing, not derivable from files):
 1. Does `set_band_config` redial? (mitigated in the UI; a Phase-0 observation, not a blocker.)
-2. `quec_battery` vs `glbattlimit` cadence duel (`quec_battery` logs `sleep :%d s` — dynamic;
-   it existed on 4.8 too, where glbattlimit demonstrably held).
+2. `quec_battery` vs `glbattlimit` cadence (`quec_battery` logs `sleep :%d s` — dynamic;
+   it existed on 4.8 too, where glbattlimit demonstrably held). The *value* conflict is
+   settled from the image (§5: glbattlimit hands GL's own vreg back); only how often
+   quec_battery re-asserts while gated is runtime.
 3. `cellular.collect` / `modem.get_signals` cadence — `interval`/`max_count` come from a
    runtime-generated `/etc/config/collection.json`; only matters for the optional cheaper
    signal source, nothing depends on it.

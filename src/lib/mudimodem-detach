@@ -9,12 +9,28 @@
 # above stderr, detach from the session, then exec the real command.
 #
 # Usage: mudimodem-detach <command> [args…]   (caller appends '&')
+#
+# The fds actually open are read from /proc, minus the one the shell reads THIS
+# script from: dash keeps it on fd 10 and exits the moment it is closed
+# (busybox ash, the router's /bin/sh, protects its own). Without /proc, every
+# fd 3..255 is tried, as before.
 set -u
-fd=3
-while [ "$fd" -le 255 ]; do
-  eval "exec $fd>&-" 2>/dev/null
-  fd=$((fd + 1))
-done
+self=$(readlink -f "$0" 2>/dev/null)
+if [ -d "/proc/$$/fd" ]; then
+  for f in /proc/$$/fd/*; do
+    fd=${f##*/}
+    case "$fd" in ''|*[!0-9]*) continue ;; esac
+    [ "$fd" -gt 2 ] || continue
+    [ -n "$self" ] && [ "$(readlink "$f" 2>/dev/null)" = "$self" ] && continue
+    eval "exec $fd>&-" 2>/dev/null
+  done
+else
+  fd=3
+  while [ "$fd" -le 255 ]; do
+    eval "exec $fd>&-" 2>/dev/null
+    fd=$((fd + 1))
+  done
+fi
 exec </dev/null >/dev/null 2>&1
 if command -v setsid >/dev/null 2>&1; then
   exec setsid "$@"

@@ -52,11 +52,19 @@ echo "tracking chunk + menu deployed"
 # Phase 3: AT console chunk + community library + our own AT channel tool.
 ssh -o BatchMode=yes "root@$HOST" 'cat > /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-console.common.js.gz' \
   < build/gl-sdk4-ui-mudimodem-console.common.js.gz
-ssh -o BatchMode=yes "root@$HOST" 'cat > /usr/share/mudimodem/www/mudimodem/at-library.json.gz' \
-  < build/at-library.json.gz
+# AT library: the bundled snapshot only fills a missing/unreadable cache —
+# `mudimodem-lib refresh` writes the same file with newer data and nothing in
+# the library is orderable (same rule as install.sh). To push a changed
+# snapshot while iterating on it, delete the cache on the box first.
+ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /usr/share/mudimodem/www/mudimodem; f=/usr/share/mudimodem/www/mudimodem/at-library.json.gz; cat > "$f.new"
+  if gzip -t "$f" 2>/dev/null && gzip -dc "$f" 2>/dev/null | grep -q "\"entries\"" && gzip -dc "$f" 2>/dev/null | grep -q "\"revision\""; then
+    rm -f "$f.new"; echo "AT library cache kept (existing copy)"
+  else
+    mv "$f.new" "$f"; echo "AT library snapshot installed"
+  fi' < build/at-library.json.gz
 ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /usr/lib/mudimodem && cat > /usr/lib/mudimodem/mudimodem-at.py' \
   < tools/mudimodem-at.py
-echo "console chunk + AT library + AT tool deployed"
+echo "console chunk + AT tool deployed"
 
 # Shared 4.10 helpers: the Python cellular compat lib, the detach wrapper, and
 # GL's /ws seed module for mudimodem.collect (dofile'd per subscribe).
@@ -99,14 +107,6 @@ if [ -f src/sbin/mudimodem-speedtestd ]; then
   echo "speedtest scheduler deployed + service (re)started (off by default)"
 fi
 
-# Phase 5: installed-version marker, read by mudimodem.app_version.
-# version + the source the box should self-update from (MUDIMODEM_BASE, default upstream main).
-VER=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' version.json | head -n1)
-UPD_BASE="${MUDIMODEM_BASE:-https://raw.githubusercontent.com/Antiman-cmyk/MudiModem/main}"
-printf '{"version":"%s","base":"%s"}\n' "$VER" "$UPD_BASE" \
-  | ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /etc/mudimodem && cat > /etc/mudimodem/version.json'
-echo "version.json deployed ($VER, updates from $UPD_BASE)"
-
 # Confirm-or-revert watchdog + panic restore (§5). Inert until invoked; install
 # it BEFORE the backend so set_bands can always find it.
 if [ -f src/sbin/mudimodem-revert ]; then
@@ -144,9 +144,14 @@ fi
 # "Method not found" on those workers, intermittently, which pops GL's global
 # "Unknown error" banner. restart forces every worker to re-dofile the current
 # file. Costs a ~1s admin-UI blip; does NOT touch the cellular link. (CLAUDE.md §8)
+# A charge-limit watcher started from the web panel by an older glbattlimit
+# holds nginx's listening sockets (it inherited them): stop it first, or the
+# restarted nginx can't bind 80/443 (see install.sh). Re-applied further down.
 if [ -f src/rpc/mudimodem ]; then
   ssh -o BatchMode=yes "root@$HOST" 'cat > /usr/lib/oui-httpd/rpc/mudimodem' \
     < src/rpc/mudimodem
+  ssh -o BatchMode=yes "root@$HOST" '[ -x /usr/bin/glbattlimit ] && /usr/bin/glbattlimit off
+    for p in $(pgrep -f "glbattlimi[t] _watch"); do kill -9 "$p"; done; true' 2>/dev/null || true
   ssh -o BatchMode=yes "root@$HOST" '/etc/init.d/nginx restart' 2>/dev/null || true
   echo "backend deployed + nginx restarted"
 fi
@@ -163,9 +168,12 @@ if [ -f src/sbin/mudimodem-collectd ]; then
 fi
 
 # Battery charge limit: glbattlimit + hotplug + init + default policy JSON.
-# Off first if a previous watcher is active — replacing the binary mid-run is racy.
+# Off first if a previous watcher is active — replacing the binary mid-run is racy;
+# then kill a survivor an older glbattlimit leaves behind (see install.sh), and
+# re-apply the saved policy once the new files are in place.
 if [ -f src/sbin/glbattlimit ]; then
-  ssh -o BatchMode=yes "root@$HOST" '[ -x /usr/bin/glbattlimit ] && /usr/bin/glbattlimit off || true' 2>/dev/null || true
+  ssh -o BatchMode=yes "root@$HOST" '[ -x /usr/bin/glbattlimit ] && /usr/bin/glbattlimit off
+    for p in $(pgrep -f "glbattlimi[t] _watch"); do kill -9 "$p"; done; true' 2>/dev/null || true
   ssh -o BatchMode=yes "root@$HOST" 'cat > /usr/bin/glbattlimit && chmod 0755 /usr/bin/glbattlimit' \
     < src/sbin/glbattlimit
   ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /etc/hotplug.d/i2c; cat > /etc/hotplug.d/i2c/20-glbattlimit && chmod 0755 /etc/hotplug.d/i2c/20-glbattlimit' \
@@ -178,8 +186,9 @@ if [ -f src/sbin/glbattlimit ]; then
     # History eMMC backup policy — off by default; never clobber an existing choice.
     [ -f /etc/mudimodem/history.json ] || echo "{\"enabled\":false}" > /etc/mudimodem/history.json
     /etc/init.d/glbattlimit enable 2>/dev/null || true
+    /etc/init.d/glbattlimit start 2>/dev/null || true
   '
-  echo "battery charge limit stack deployed"
+  echo "battery charge limit stack deployed (saved policy re-applied)"
 fi
 
 # History persist policy (also ensured when battlimit block is skipped).
@@ -202,4 +211,14 @@ ssh -o BatchMode=yes "root@$HOST" 'rm -f /www/views/gl-sdk4-ui-mudimodem*.common
     cat "$f.tmp" > "$f"; rm -f "$f.tmp"
   fi'
 echo "2.0.0 leftovers cleared"
+
+# Last, once every file above is in place (a deploy that died half-way must not
+# claim the new version): the installed-version marker read by
+# mudimodem.app_version — version + the source the box should self-update from
+# (MUDIMODEM_BASE, default upstream main).
+VER=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' version.json | head -n1)
+UPD_BASE="${MUDIMODEM_BASE:-https://raw.githubusercontent.com/Antiman-cmyk/MudiModem/main}"
+printf '{"version":"%s","base":"%s"}\n' "$VER" "$UPD_BASE" \
+  | ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /etc/mudimodem && cat > /etc/mudimodem/version.json'
+echo "version.json deployed ($VER, updates from $UPD_BASE)"
 echo "deployed to $HOST"

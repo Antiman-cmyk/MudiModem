@@ -1799,3 +1799,107 @@ test('strip: a push landing after a hole backfills it with one since-fetch, dedu
     assert.strictEqual(calls.length, 2, 'no fetch for a regular 10 s push');
   } finally { unstubRpc(); }
 });
+
+// ---- SIM1/SIM2: per-SIM state follows the ACTIVE slot ----------------------
+test('a write carries the slot its picture was read for (backend refuses a stale one)', async () => {
+  const c = loadChunk();
+  const vm = bandsVm(c);              // meta.slot = '1'
+  vm.toggleBand('sa', 41);
+  const calls = stubRpc([{ ok: true, window: 60, applied: { sa: '41:71' } }]);
+  try {
+    vm.applyBands();
+    await new Promise((r) => setImmediate(r));
+    const sent = calls.find((x) => x.params[2] === 'set_bands').params[3];
+    assert.strictEqual(sent.slot, 1, 'set_bands names SIM 1');
+  } finally { vm.clearCountdown(); unstubRpc(); }
+});
+
+test('switching SIM re-reads the band and lock pictures and drops the old scan', async () => {
+  const c = loadChunk();
+  const vm = bandsVm(c);
+  vm.lockData = { serving: { rat: 'NR5G-SA', pci: 516, arfcn: 127490, band: 71 },
+                  lock: { l4g: { locked: false }, l5g: { locked: false } }, meta: { slot: 1 } };
+  vm.scan = { towers: [{ pci: 1, freq: 2 }], running: false, error: '', ts: 5, slot: 1 };
+  vm.lockConfirm = { pin: true };
+  const calls = stubRpc([{ supported: {}, config: {}, policy: {}, capability: {}, meta: { slot: 2, mode: 'AUTO' } },
+                         { lock: {}, meta: { slot: 2 } }]);
+  try {
+    c.watch.activeSlot.handler.call(vm, 1);   // immediate: seeds the slot, no refetch
+    assert.strictEqual(calls.length, 0, 'the first slot seen is not a switch');
+    c.watch.activeSlot.handler.call(vm, 2);
+    const methods = calls.map((x) => x.params[2]);
+    assert.ok(methods.includes('get_bands') && methods.includes('get_lock'), 'both re-read: ' + methods);
+    assert.strictEqual(vm.scan.towers.length, 0, "SIM1's scan is not offered for SIM2");
+    assert.strictEqual(vm.lockConfirm, null, 'an armed confirm for the old SIM is dropped');
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(vm.bands.meta.slot, 2, 'model is now SIM 2');
+  } finally { unstubRpc(); }
+  // Same slot is not a switch; a blip through "no slot" between two SIMs is.
+  let n = 0; vm.onSlotChange = () => { n++; };
+  c.watch.activeSlot.handler.call(vm, 2);
+  c.watch.activeSlot.handler.call(vm, undefined);
+  c.watch.activeSlot.handler.call(vm, 0);
+  assert.strictEqual(n, 0, 'no refetch without a real switch');
+  c.watch.activeSlot.handler.call(vm, 1);
+  assert.strictEqual(n, 1, '2 -> (no slot) -> 1 is a switch');
+});
+
+test('a get_bands reply from before the switch cannot overwrite the newer one', async () => {
+  const c = loadChunk();
+  const vm = bandsVm(c);
+  let resolveOld;
+  const calls = [];
+  global.window = { $rpcRequest(m, p) {
+    calls.push(p);
+    if (calls.length === 1) return new Promise((r) => { resolveOld = r; });
+    return Promise.resolve({ supported: {}, config: {}, policy: {}, capability: {}, meta: { slot: 2, mode: 'NR5G' } });
+  } };
+  try {
+    vm.fetchBands();                  // SIM1 read, slow
+    vm.fetchBands();                  // SIM2 read after the switch, fast
+    await new Promise((r) => setImmediate(r));
+    resolveOld({ supported: {}, config: {}, policy: {}, capability: {}, meta: { slot: 1, mode: 'AUTO' } });
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(vm.bands.meta.slot, 2, 'the stale SIM1 reply was dropped');
+    assert.strictEqual(vm.selMode, 'NR5G');
+  } finally { unstubRpc(); }
+});
+
+test('a stale-slot refusal re-reads instead of leaving SIM1 on screen', async () => {
+  const c = loadChunk();
+  const vm = bandsVm(c);
+  vm.toggleBand('sa', 41);
+  const calls = stubRpc([{ error: 'the active SIM changed', slot_changed: true, slot: 2 },
+                         { supported: {}, config: {}, policy: {}, capability: {}, meta: { slot: 2 } }]);
+  try {
+    vm.applyBands();
+    await new Promise((r) => setImmediate(r));
+    assert.ok(calls.some((x) => x.params[2] === 'get_bands'), 'refetched after the refusal');
+    assert.match(vm.applyError, /active SIM changed/, 'the reason stays visible');
+  } finally { unstubRpc(); }
+});
+
+test('strip trace: a SIM switch starts a new line, and the label names the sample\'s SIM', async () => {
+  const boxNow = 3000000;
+  const reply = histReply(boxNow, 10000, [-95, -94, -100, -101]);
+  reply.samples[2].slot = '2'; reply.samples[3].slot = '2';
+  stubAxios([reply]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.fetchStripHistory();
+    await new Promise((r) => setImmediate(r));
+    const d = vm.tracePath();
+    assert.strictEqual((d.match(/M/g) || []).length, 2, 'SIM1 and SIM2 are two subpaths, not one jump');
+  } finally { unstubRpc(); }
+  // Active slot is 2, but the newest sample is still SIM1's (pre-switch tick):
+  // the label and carrier follow the sample, not the slot it was not read on.
+  const c = loadChunk();
+  const st = JSON.parse(JSON.stringify(LIVE));
+  st['cellular.modems_status'].modems[0].current_sim_slot = 2;
+  const vm = makeVm(c, st);
+  assert.strictEqual(vm.servingCarrier, 'AT&T', "SIM1's sample carrier is not shown as SIM2's");
+  const axis = walk(c.render.call(vm, h)).find((n) => n.data.staticClass === 'mm-axis');
+  assert.match(textOf(axis), /T-Mobile  SIM 1/, 'the RF readings carry the carrier + SIM they came from');
+  assert.doesNotMatch(textOf(axis), /AT&T/, "the active SIM's carrier is not pinned on SIM1's readings");
+});

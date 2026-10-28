@@ -5,13 +5,37 @@
 // so this file MUST be a single expression (module.exports = {...}).
 // Vue is runtime-only: render(h) only, never `template:`.
 //
-// Transport: mudimodem.at_console — OUR OWN channel (/dev/at_mdm0), which
-// answers for the ACTIVE subscription only (no sub_id exists on that port;
-// probed 2026-07-18). The library is static JSON at /mudimodem/at-library.json
+// Transport: mudimodem.at_console. The backend sends through GL's own AT
+// service — the call GL's web console makes, with the ACTIVE SIM's slot as the
+// subscription — and falls back to the direct port /dev/at_mdm0 only while
+// GL's cellular stack is down; each reply names the transport it used
+// (`transport: "gl" | "direct"`) and the truth line repeats it. The library is
+// static JSON at /mudimodem/at-library.json
 // (gzip_static), fetched with $axios. Entries only ever FILL the prompt —
 // nothing auto-runs. set/nv entries need the banner checkbox to Send;
 // free-typed commands always send (Kevin's call, spec §1).
-module.exports = {
+//
+// The file is still ONE expression, but an IIFE: STORE below lives in its
+// closure. The parent evals this chunk ONCE and caches the options object,
+// while every switch to the "AT console" tab destroys and re-creates the
+// component — so anything that must outlive a tab switch (the transcript,
+// the command history, the once-per-page library status) lives in STORE,
+// bounded, not in the instance.
+module.exports = (function () {
+  var HISTORY_MAX = 100;
+  var STORE = {
+    // Shared BY REFERENCE with every instance's `lines` / `history` (data()
+    // hands out these very arrays — never reassign them, only mutate). A reply
+    // that lands after a tab switch therefore still reaches the transcript the
+    // re-created tab is showing.
+    lines: [],
+    history: [],
+    libStatus: null,      // last library_status answer for this page load
+    transport: "gl",      // what the last reply came through ("gl" | "direct")
+    libStatusP: null      // the one library_status request this page makes
+  };
+
+  return {
   name: "mudimodem-console",
 
   data() {
@@ -23,17 +47,19 @@ module.exports = {
       q: "",                // rail search text
       selId: null,          // selected entry id; null = free-typing
       riskOK: false,        // "Enable higher-risk commands" (localStorage)
-      lines: [],            // transcript { t, kind: cmd|resp|ok|err|urc|note, text }
+      lines: STORE.lines,   // transcript { t, kind: cmd|resp|ok|err|urc|note, text } — page-lifetime
       LINES_MAX: 400,
-      history: [],
+      history: STORE.history,   // sent commands, oldest first — page-lifetime, HISTORY_MAX
       histIdx: null,
+      histDraft: "",        // what was typed before ArrowUp started recalling
       prompt: "",
       multiline: false,
       params: {},           // param values for the selected entry
       sending: false,
       decodeRows: null,     // [[{f,v,hi},…] per matched response line]
       decodeSrc: "",
-      libStatus: null,        // {local_revision, remote_revision, update_available, checked}
+      libStatus: STORE.libStatus,   // {local_revision, remote_revision, update_available, checked}
+      transport: STORE.transport,   // "gl" (GL's AT service) | "direct" (/dev/at_mdm0 fallback)
       refreshing: false,
       refreshMsg: ""
     };
@@ -46,12 +72,16 @@ module.exports = {
     // it passes what this tab needs as a prop.
     activeSlot() { return this.cell && this.cell.slot; },
     activeCarrier() { return (this.cell && this.cell.carrier) || ""; },
-    // The port answers for the active subscription ONLY — say so, always.
+    // Which channel answers, and for which SIM — say so, always. GL's AT
+    // service is addressed to the active slot's subscription; the direct port
+    // (only while GL's stack is down) answers for whatever it is on.
     truthLine() {
       var who = this.activeCarrier
         ? this.activeCarrier + " (slot " + this.activeSlot + ")"
         : (this.activeSlot ? "slot " + this.activeSlot : "resolving…");
-      return "own channel /dev/at_mdm0 · active SIM: " + who;
+      return this.transport === "direct"
+        ? "direct port /dev/at_mdm0 (GL's AT service is down) · active SIM: " + who
+        : "GL's AT service · addressed to the active SIM: " + who;
     },
     entries() {
       var lib = this.lib || [];
@@ -108,15 +138,34 @@ module.exports = {
   },
 
   created() {
+    var self = this;
     this.injectStyle();
     if (typeof window !== "undefined" && window.localStorage) {
       this.riskOK = window.localStorage.getItem("mudimodem.riskEnabled") === "1";
     }
     this.fetchLib();
-    this.checkLibraryStatus();
+    // library_status curls GitHub on the router (up to ~8 s). Once per PAGE,
+    // not once per tab open; a re-created tab reuses the answer (or waits on
+    // the request still in flight).
+    if (STORE.libStatusP) STORE.libStatusP.then(function (st) { self.libStatus = st; });
+    else this.checkLibraryStatus();
   },
 
   methods: {
+    // Background calls (the on-open library check): POST to /rpc via $axios
+    // DIRECTLY. $rpcRequest's interceptor raises GL's global banner on any
+    // failure — e.g. its own timeout while the router waits on GitHub — before
+    // our .catch can run. Resolves the result, or null on any failure.
+    rpcSilent(method, params, timeout) {
+      if (typeof window === "undefined" || !window.$axios || !window.$axios.post) return Promise.resolve(null);
+      var sid = (window.$getCookie && window.$getCookie("Admin-Token")) || "";
+      return window.$axios.post("/rpc", {
+        jsonrpc: "2.0", id: 1, method: "call",
+        params: [sid, "mudimodem", method, params || {}]
+      }, { timeout: timeout || 15000 })
+        .then(function (r) { return (r && r.data && r.data.result) || null; })
+        .catch(function () { return null; });
+    },
     fetchLib() {
       var self = this;
       if (this.libLoading) return;
@@ -132,12 +181,17 @@ module.exports = {
           self.libErr = (e && e.message) || "load failed";
         });
     },
+    // Fail-silent by contract: any failure is libStatus null (the rail just
+    // shows no revision line). Shared through STORE for the page's lifetime.
     checkLibraryStatus() {
       var self = this;
-      if (typeof window === "undefined" || !window.$rpcRequest) return Promise.resolve();
-      return window.$rpcRequest("call", ["sid", "mudimodem", "library_status", {}], { timeout: 12000 })
-        .then(function (r) { self.libStatus = r || null; })
-        .catch(function () { self.libStatus = null; });   // fail-silent
+      var p = this.rpcSilent("library_status", {}, 15000).then(function (r) {
+        STORE.libStatus = r || null;
+        self.libStatus = STORE.libStatus;
+        return STORE.libStatus;
+      });
+      STORE.libStatusP = p;
+      return p;
     },
     refreshLibrary() {
       var self = this;
@@ -200,11 +254,16 @@ module.exports = {
       if ((ev.key === "ArrowUp" || ev.key === "ArrowDown")
           && !this.paramMode && !this.promptMultiline) {
         if (!this.history.length) return;
+        // ArrowDown with no recall in progress has nowhere to go — it must
+        // leave what is being typed alone (it used to clear the prompt).
+        if (ev.key === "ArrowDown" && this.histIdx === null) return;
         if (ev.preventDefault) ev.preventDefault();
+        if (this.histIdx === null) this.histDraft = this.prompt;   // starting a recall
         var i = this.histIdx === null ? this.history.length : this.histIdx;
         i += (ev.key === "ArrowUp" ? -1 : 1);
         if (i < 0) i = 0;
-        if (i >= this.history.length) { this.histIdx = null; this.prompt = ""; return; }
+        // Walked back past the newest entry: give the typed draft back.
+        if (i >= this.history.length) { this.histIdx = null; this.prompt = this.histDraft; return; }
         this.histIdx = i;
         this.prompt = this.history[i];
         this.selId = null;
@@ -297,6 +356,7 @@ module.exports = {
       var wire = steps.join("\n");
       steps.forEach(function (s) { self.push("cmd", s); });
       this.history.push(wire); this.histIdx = null;
+      if (this.history.length > HISTORY_MAX) this.history.splice(0, this.history.length - HISTORY_MAX);
       this.decodeRows = null;
       if (typeof window === "undefined" || !window.$rpcRequest) {
         this.push("err", "RPC unavailable"); return;
@@ -309,6 +369,9 @@ module.exports = {
         .then(function (r) {
           self.sending = false;
           if (r && r.error) { self.push("err", r.error); return; }
+          if (r && (r.transport === "gl" || r.transport === "direct")) {
+            STORE.transport = self.transport = r.transport;
+          }
           var got = (r && r.steps) || [];
           var combined = "";
           got.forEach(function (st) {
@@ -319,8 +382,9 @@ module.exports = {
               if (l) self.push(self.classifyLine(l), l);
             });
             if (st.status === "timeout") {
-              self.push("err", "no terminator after " + TOOL_T +
-                "s — the response may still arrive; the channel is drained on the next send");
+              self.push("err", "no terminator after " + TOOL_T + "s — " + (self.transport === "direct"
+                ? "the response may still arrive; until it does (or is given up on), the next send waits for it or reports the channel busy"
+                : "GL's AT service stopped waiting; it drops a late answer before the next command, so nothing gets mixed up"));
             }
           });
           if (r && r.aborted) {
@@ -636,4 +700,5 @@ module.exports = {
       detail
     ].filter(Boolean));
   }
-};
+  };
+})();

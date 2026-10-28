@@ -181,6 +181,16 @@ def normalize_signal(row, network_type=None, index=0):
     }
 
 
+def cell_info_failed(payload):
+    """True when a `cell_info` READ failed, as opposed to a reply that says
+    "no service". The callers' ubus helper yields None on rc != 0 / timeout /
+    bad JSON, and an error reply carries no `network_type`; every real reply
+    has one — a no-service cell answers network_type 0 (+ sentinel rows).
+    Building a sample from a failed read would fake an outage
+    (registered:false, null metrics), so callers skip it instead."""
+    return not isinstance(payload, dict) or payload.get("network_type") in (None, "")
+
+
 def normalize_cell_info(payload):
     """cellular.network cell_info -> {network_type, rat, cell_id, tac,
     signals[]}. A no-service payload (network_type 0, empty ids, sentinel

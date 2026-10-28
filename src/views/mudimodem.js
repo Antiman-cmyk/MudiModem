@@ -49,7 +49,7 @@ module.exports = {
       STRIP_GAP_MS: 45000,    // a hole wider than this breaks the line, not bridges it
       STRIP_HOLE_MS: 25000,   // a push landing this long after the last point => backfill the hole
       pushSeenAt: 0,          // browser clock of the last collector push
-      hist: [],               // [{t, v}] oldest-first, BOX timestamps, rsrp only
+      hist: [],               // [{t, v, s}] oldest-first, BOX timestamps, rsrp + the sample's SIM slot
       histLastT: 0,           // newest t held — the incremental `since` cursor
       histPreloaded: false,   // the 15-min window has been fetched once (gates {since})
       histNow: 0,             // box clock as of the last reply
@@ -59,6 +59,9 @@ module.exports = {
       styleId: "mudimodem-css",
       bands: null,          // get_bands result, once fetched
       bandsLoading: false,
+      bandsSeq: 0,          // bumps per fetch; a reply from an older one is dropped
+      lockSeq: 0,           // same, for get_lock
+      seenSlot: null,       // last real active slot (current_sim_slot) this page saw
       bandsError: "",
       sel: { sa: null, nsa: null, LTE: null },   // desired allowlists per editable RAT
       selMode: null,        // desired network mode (AUTO | NR5G | LTE)
@@ -77,7 +80,7 @@ module.exports = {
       scanConfirm: false,   // explicit confirm gate before firing the disruptive scan
       // Scanned neighbour towers (Task 5 fills the scan card); pinTarget reads
       // scan.towers now to confirm an SCS reading when one is available.
-      scan: { towers: [], running: false, error: "", ts: 0 },
+      scan: { towers: [], running: false, error: "", ts: 0, slot: null },
       // Tracking tab: the graph lives in its OWN chunk (gl-sdk4-ui-mudimodem-
       // tracking). Rather than route away (which hides our strip + tab bar), we
       // lazy-load that chunk on first open and render it as an in-page child
@@ -205,7 +208,10 @@ module.exports = {
     // Carrier of the ACTIVE SIM, for the strip label: the sample carries it; the
     // networks_info entry is the fallback (then the home PLMN name).
     servingCarrier() {
-      if (this.serving.carrier) return this.serving.carrier;
+      // The sample names its own SIM; right after a switch it can still be the
+      // OTHER SIM's, and its carrier must not be labelled with this slot.
+      var sameSim = this.serving.slot == null || String(this.serving.slot) === String(this.activeSlot);
+      if (sameSim && this.serving.carrier) return this.serving.carrier;
       if (this.activeNet.carrier) return this.activeNet.carrier;
       return this.activeNet.mcc ? (this.activeNet.mcc + this.activeNet.mnc) : "";
     },
@@ -247,28 +253,7 @@ module.exports = {
     },
     rsrpQ() { return this.qFromLevel(this.serving.rsrp_level); },
     sinrQ() { return this.qFromLevel(this.serving.sinr_level); },
-    rsrqQ() { return this.qFromLevel(this.serving.rsrq_level); },
-    facts() {
-      var c = this.serving, out = [];
-      var push = function (k, v) { if (v !== undefined && v !== null && v !== "") out.push([k, v]); };
-      push("Mode", c.mode);
-      push("Band", this.bandLabel === "—" ? null : this.bandLabel);
-      push("Bandwidth", c.dl_bandwidth);
-      push("Cell ID", c.id);
-      push("TAC", c.tac);
-      push("PCI", c.pci);
-      push("Channel", this.chanLabel(this.servingRat, c.band, c.tx_channel));
-      push("CA", this.caLabel || null);
-      // `!= null` not `!== undefined`: the /ws seed keeps JSON nulls (cjson),
-      // and "null dB" is not a reading.
-      push("RSRP", c.rsrp != null ? c.rsrp + " dBm" : null);
-      push("RSRQ", c.rsrq != null ? c.rsrq + " dB" : null);
-      push("SINR", c.sinr != null ? c.sinr + " dB" : null);
-      if (c.rssi != null) push("RSSI", c.rssi + " dBm");
-      push("Carrier", this.servingCarrier);
-      push("SIM slot", this.activeSlot);
-      return out;
-    }
+    rsrqQ() { return this.qFromLevel(this.serving.rsrq_level); }
   },
 
   watch: {
@@ -277,6 +262,22 @@ module.exports = {
     "serving.t": {
       immediate: true,
       handler(t) { this.onSamplePush(this.serving); }
+    },
+    // The band grid, the lock picture and a scan all belong to ONE SIM. When
+    // GL's active slot changes (a switch on its Internet page, slot failover)
+    // they describe the other SIM: re-read them, never edit SIM2 through
+    // SIM1's picture (the backend also refuses a write tagged with a stale slot).
+    // Compared against the last REAL slot: a blip through "no slot" (modem
+    // resetting) between SIM1 and SIM2 is still a switch.
+    activeSlot: {
+      immediate: true,
+      handler(n) {
+        var s = Number(n);
+        if (!(s > 0)) return;
+        var prev = this.seenSlot;
+        this.seenSlot = s;
+        if (prev && prev !== s) this.onSlotChange();
+      }
     },
     tab(t) {
       if (t === "bands" && !this.bands && !this.bandsLoading) this.fetchBands();
@@ -464,8 +465,11 @@ module.exports = {
       }
       if (!light) { this.bandsLoading = true; this.bandsError = ""; }
       this.clearResetNote();
+      var seq = ++this.bandsSeq;
       window.$rpcRequest("call", ["sid", "mudimodem", "get_bands", light ? { light: 1 } : {}], { timeout: 15000 })
         .then(function (res) {
+          // A newer fetch (e.g. after a SIM switch) owns the model now.
+          if (seq !== self.bandsSeq) return;
           // A soft error ({error}) RESOLVES through $rpcRequest (it only rejects
           // on err_msg/err_code). Storing it as `bands` would make renderGroup
           // dereference d.supported and throw — freezing the tab on the
@@ -475,6 +479,7 @@ module.exports = {
             return;
           }
           if (light) {
+            if (!self.bands) return;
             self.bands.config = res.config;
             self.bands.meta = Object.assign({}, self.bands.meta, res.meta);
           } else {
@@ -486,9 +491,10 @@ module.exports = {
           self.selMode = (res.meta && res.meta.mode) || "AUTO";
         })
         .catch(function (e) {
+          if (seq !== self.bandsSeq) return;
           if (!light) self.bandsError = (e && (e.type || e.message)) || "request failed";
         })
-        .then(function () { if (!light) self.bandsLoading = false; });
+        .then(function () { if (!light && seq === self.bandsSeq) self.bandsLoading = false; });
     },
     seedFor(group) {
       var cfg = (this.bands.config && this.bands.config[group]) || [];
@@ -503,15 +509,44 @@ module.exports = {
         this.lockError = "RPC helper unavailable"; return;
       }
       this.lockLoading = true; this.lockError = "";
+      var seq = ++this.lockSeq;
       window.$rpcRequest("call", ["sid", "mudimodem", "get_lock", {}], { timeout: 20000 })
         .then(function (res) {
+          if (seq !== self.lockSeq) return;   // a newer read owns the picture
           // {error} resolves, not rejects — keep the previous picture (if any)
           // and say why instead of rendering the error object as a lock state.
           if (!res || res.error) { self.lockError = (res && res.error) || "request failed"; return; }
           self.lockData = res;
         })
-        .catch(function (e) { self.lockError = (e && (e.type || e.message)) || "request failed"; })
-        .then(function () { self.lockLoading = false; });
+        .catch(function (e) { if (seq === self.lockSeq) self.lockError = (e && (e.type || e.message)) || "request failed"; })
+        .then(function () { if (seq === self.lockSeq) self.lockLoading = false; });
+    },
+    // The slot a picture was read for (get_bands / get_lock meta.slot), sent
+    // with every write so the backend can refuse one aimed at a SIM that is no
+    // longer active. undefined when unknown (the backend then skips the check).
+    slotOf(d) {
+      var n = d && d.meta ? Number(d.meta.slot) : NaN;
+      return isFinite(n) && n > 0 ? n : undefined;
+    },
+    // Active SIM changed: everything per-SIM on this page describes the other
+    // one. Drop what can't be refetched (a scan, an armed confirm) and re-read
+    // the rest. A pending change belongs to the old SIM and its watchdog — the
+    // banner stays, and its own Keep/Revert refetch on completion.
+    onSlotChange() {
+      this.lockConfirm = null;
+      this.scanConfirm = false;
+      if (!this.scan.running) this.scan = { towers: [], running: false, error: "", ts: 0, slot: null };
+      this.applyError = "";
+      this.clearResetNote();
+      if (this.bands || this.bandsLoading) this.fetchBands();
+      if (this.lockData || this.lockLoading || this.tab === "lock") this.fetchLock();
+    },
+    // A write the backend refused because the active SIM changed under the
+    // page: re-read so the user sees the SIM that is actually active.
+    onStaleSlot(res) {
+      if (!res || !res.slot_changed) return false;
+      this.onSlotChange();
+      return true;
     },
     scsFor(band) { return this.SCS_DEFAULT[band]; },
     // Build the lock target for the serving cell. SCS: last scan result for
@@ -522,7 +557,7 @@ module.exports = {
       if (!s || s.pci == null || s.arfcn == null) return null;
       var isNR = /NR5G/.test(s.rat || "");
       var t = { rat: isNR ? "5g" : "4g", pci: s.pci, freq: s.arfcn,
-                band: s.band, label: "current cell PCI " + s.pci };
+                band: s.band, label: "current cell PCI " + s.pci, slot: this.slotOf(this.lockData) };
       if (isNR) {
         var match = (this.scan.towers || []).filter(function (tw) {
           return String(tw.pci) === String(s.pci) && String(tw.freq) === String(s.arfcn);
@@ -541,9 +576,14 @@ module.exports = {
       if (target.scs !== undefined) args.scs = target.scs;
       if (target.band !== undefined) args.band = target.band;
       if (target.extra) args.extra = target.extra;
+      if (target.slot !== undefined) args.slot = target.slot;
       window.$rpcRequest("call", ["sid", "mudimodem", "set_cell_lock", args], { timeout: 30000 })
         .then(function (res) {
-          if (!res || res.error) { self.lockError = (res && res.error) || "lock failed"; return; }
+          if (!res || res.error) {
+            self.lockError = (res && res.error) || "lock failed";
+            if (self.onStaleSlot(res)) self.lockConfirm = null;
+            return;
+          }
           self.lockConfirm = null;
           self.startCountdown(res.window || 60, res.applied, "cell");
         })
@@ -618,9 +658,10 @@ module.exports = {
       var self = this;
       if (this.lockBusy || this.pending) return;
       this.lockBusy = true; this.lockError = "";
-      window.$rpcRequest("call", ["sid", "mudimodem", "clear_cell_lock", {}], { timeout: 30000 })
+      var slot = this.slotOf(this.lockData);
+      window.$rpcRequest("call", ["sid", "mudimodem", "clear_cell_lock", slot !== undefined ? { slot: slot } : {}], { timeout: 30000 })
         .then(function (res) {
-          if (res && res.error) { self.lockError = res.error; return; }
+          if (res && res.error) { self.lockError = res.error; self.onStaleSlot(res); return; }
           self.fetchLock();
           self.fetchBands({ light: true });   // meta.lock / mode from GL's store only — no AT
         })
@@ -642,6 +683,7 @@ module.exports = {
           if (!res || res.error) { self.scan.error = (res && res.error) || "scan failed"; return; }
           self.scan.towers = res.towers || [];   // renderScanCard sorts at paint time
           self.scan.ts = res.ts || Date.now();
+          self.scan.slot = res.slot != null ? Number(res.slot) : null;   // the SIM these cells were scanned for
         })
         .catch(function (e) { self.scan.error = (e && (e.type || e.message)) || "scan failed"; })
         .then(function () { self.scan.running = false; self.fetchLock(); });
@@ -651,7 +693,8 @@ module.exports = {
       var isNR = /5G/.test(row.network_type || "");
       var t = { rat: isNR ? "5g" : "4g", pci: Number(row.pci), freq: Number(row.freq),
                 band: row.band !== undefined ? Number(row.band) : undefined,
-                label: "scanned cell PCI " + row.pci, extra: row };
+                label: "scanned cell PCI " + row.pci, extra: row,
+                slot: this.scan.slot != null ? this.scan.slot : this.slotOf(this.lockData) };
       if (isNR) { t.scs = Number(row.scs); t.scsAssumed = false; }
       return t;
     },
@@ -1099,12 +1142,18 @@ module.exports = {
         include("LTE", "lte");
         if (this.modeChanged()) payload.mode = this.selMode;
       }
+      var slot = this.slotOf(this.bands);
+      if (slot !== undefined) payload.slot = slot;
       this.applying = true;
       this.applyError = "";
       this.clearResetNote();
       window.$rpcRequest("call", ["sid", "mudimodem", "set_bands", payload], { timeout: 20000 })
         .then(function (res) {
-          if (!res || res.error) { self.applyError = (res && res.error) || "apply failed"; return; }
+          if (!res || res.error) {
+            self.applyError = (res && res.error) || "apply failed";
+            if (self.onStaleSlot(res)) self.applyError = res.error;   // onSlotChange cleared it; keep the why
+            return;
+          }
           self.startCountdown(res.window || 60, res.applied);
         })
         .catch(function (e) {
@@ -1228,7 +1277,7 @@ module.exports = {
           var v = parseFloat(ns[i] && ns[i].rsrp);
           // Drop samples with no reading (out of service): a hole in the data is
           // drawn as a hole, not interpolated across.
-          if (!isNaN(v) && ns[i].t) fresh.push({ t: ns[i].t, v: v });
+          if (!isNaN(v) && ns[i].t) fresh.push({ t: ns[i].t, v: v, s: ns[i].slot });
         }
         self.histNow = res.now || Date.now();
         self.histNowAt = Date.now();
@@ -1268,7 +1317,7 @@ module.exports = {
       this.histLastT = s.t;
       this.histNow = s.t; this.histNowAt = Date.now();
       var v = parseFloat(s.rsrp);
-      if (!isNaN(v)) this.hist.push({ t: s.t, v: v });
+      if (!isNaN(v)) this.hist.push({ t: s.t, v: v, s: s.slot });
       var cut = s.t - this.STRIP_MIN * 60000;
       if (this.hist.length && this.hist[0].t < cut) {
         this.hist = this.hist.filter(function (p) { return p.t >= cut; });
@@ -1339,16 +1388,20 @@ module.exports = {
       var dom = this.stripRsrpDomain(pts.map(function (p) { return p.v; }));
       var FLOOR = dom[0], CEIL = dom[1], W = 320, H = 40, ySpan = CEIL - FLOOR;
       var span = this.STRIP_MIN * 60000, end = this.stripEnd(), start = end - span;
-      var d = "", prev = null;
+      var d = "", prev = null, prevSim = null;
       for (var i = 0; i < pts.length; i++) {
-        var t = pts[i].t;
+        var t = pts[i].t, sim = pts[i].s;
         var x = ((t - start) / span) * W;
         if (x < 0) x = 0; else if (x > W) x = W;
         var cl = Math.max(FLOOR, Math.min(CEIL, pts[i].v));
         var y = ySpan ? H - ((cl - FLOOR) / ySpan) * H : H / 2;
-        d += ((prev === null || t - prev > this.STRIP_GAP_MS) ? "M" : "L") +
+        // A SIM switch starts a new line: SIM1's and SIM2's RSRP are two
+        // different radios, not one trace that jumped.
+        var newSim = sim != null && prevSim != null && String(sim) !== String(prevSim);
+        d += ((prev === null || t - prev > this.STRIP_GAP_MS || newSim) ? "M" : "L") +
              x.toFixed(1) + "," + y.toFixed(1);
         prev = t;
+        if (sim != null) prevSim = sim;
       }
       return d;
     },
@@ -1978,6 +2031,10 @@ module.exports = {
     var stripKids;
     if (this.hasData) {
       var rsrpColor = this.qColor(this.rsrpQ);
+      // The axis describes THESE readings: the sample's own SIM and carrier —
+      // right after a switch that is still the previous SIM, not the active one.
+      var rfSlot = c.slot != null ? c.slot : this.activeSlot;
+      var rfCarrier = c.carrier || (String(rfSlot) === String(this.activeSlot) ? this.servingCarrier : "");
       stripKids = [
         h("div", { staticClass: "mm-trace" }, [
           h("div", { staticStyle: { display: "flex", justifyContent: "space-between", alignItems: "center" } }, [
@@ -1999,8 +2056,7 @@ module.exports = {
           h("div", { staticClass: "mm-axis" }, [
             h("span", String(this.stripAxisDomain()[0])),
             h("span", (c.mode || "") + (this.caLabel ? " " + this.caLabel : "") +
-              (this.servingCarrier ? "  " + this.servingCarrier : "") +
-              (this.activeSlot ? "  SIM " + this.activeSlot : "")),
+              (rfCarrier ? "  " + rfCarrier : "") + (rfSlot ? "  SIM " + rfSlot : "")),
             h("span", this.stripAxisDomain()[1] + " dBm")
           ])
         ]),

@@ -94,7 +94,7 @@ reset()
 local r = M.set_bands({ sa = { 78, 28 } })
 assert(r.ok == true, "set_bands should succeed; got: " .. tostring(r.error))
 assert(r.applied.sa == "28:78" and r.applied.mode == "NR5G", "applied wrong: " .. cjson.encode(r.applied))
-assert(r.sub_id == 1 and r.slot == 1, "sub_id/slot wrong")
+assert(r.slot == 1, "slot wrong")
 assert(#set_calls == 1, "exactly one set_band_config")
 local p = set_calls[1]
 assert(p.bus == "cpu" and p.slot == 1 and p.band_enable == true and p.network_mode == "NR5G", "payload head wrong")
@@ -110,13 +110,19 @@ local snap = cjson.decode(pget("PREV_BAND_CONFIG"))
 assert(snap.band_enable == true and snap.network_mode == "NR5G" and list(snap.band_list["NR-SA"]) == "78",
        "pending must capture the previous config verbatim")
 assert(pget("KIND") == "bands" and pget("SLOT") == "1", "pending KIND/SLOT wrong")
-assert(#at_cmds == 1 and at_cmds[1] == "AT+QSPN", "no raw AT band traffic (only the sub_id resolve)")
--- 1a. The sub_id resolve is cached: a second call spends no QSPN at all.
-at_cmds = {}
-os.remove(PENDING); os.remove(ARMED)
-assert(M.set_bands({ sa = { 78 } }).ok)
-assert(#at_cmds == 0, "sub_id must come from the per-worker cache on the second call")
-print("  ok  - happy path: snapshot, armed, one set_band_config, unchanged RATs kept")
+assert(pget("SUB_ID") == nil, "bands are slot-addressed: no sub_id in the pending file")
+assert(#at_cmds == 0, "set_bands is slot-addressed end to end: no AT at all (not even a QSPN); spent: " .. table.concat(at_cmds, ","))
+print("  ok  - happy path: snapshot, armed, one set_band_config, unchanged RATs kept, zero AT")
+
+-- 1a. A page showing SIM2's picture while SIM1 is active is refused before
+--     anything is armed or written (the active SIM changed under it).
+reset()
+r = M.set_bands({ sa = { 78 }, slot = 2 })
+assert(r.error and r.slot_changed == true and r.slot == 1, "stale-slot write must be refused; got " .. cjson.encode(r))
+assert(#set_calls == 0 and #exec_cmds == 0, "a stale-slot refusal must not arm or write")
+r = M.set_bands({ sa = { 78 }, slot = 1 })
+assert(r.ok, "a matching slot must pass: " .. tostring(r.error))
+print("  ok  - write refused when the active SIM changed under the page")
 
 -- 1b. Multi-RAT + mode: every list sorted, mode applied.
 reset()
@@ -204,28 +210,94 @@ snap = cjson.decode(pget("PREV_BAND_CONFIG"))
 assert(snap.network_mode == "LTE:NR5G", "snapshot must keep GL's mode verbatim")
 print("  ok  - unrecognised stored mode passes through untouched")
 
--- 1g. sub_id 0 is never cached: a PLMN match at 0 must be re-verified next call.
-reset()
--- (A different SIM — mnc 02 — so the per-worker cache entry left by the earlier
--- cases, keyed slot:PLMN, cannot answer for it.)
-local qspn_by_sid = { [1] = "46000", [0] = "46002", [2] = "46000" }   -- only sub 0 is the active SIM
-package.loaded["oui.ubus"].call = (function(orig)
-  return function(o, m, prm)
-    if o == "modem.CPU.AT" and prm and prm.cmd == "AT+QSPN" then
-      at_cmds[#at_cmds + 1] = prm.cmd
-      return { data = '\r\n+QSPN: "X","X","",0,"' .. qspn_by_sid[prm.sub_id] .. '"\r\n\r\nOK\r\n' }
+-- 1g. sub_id resolution (get_bands' AT reads) — the SIM1/SIM2 cases.
+--     A shim per case: QSPN / CIMI answers per sub_id, the active slot, and
+--     cellular.sim info for that slot. Every case is a fresh SIM (distinct
+--     iccid), so the per-worker cache cannot answer for it.
+local function resolve_case(c)
+  at_cmds = {}
+  local subs = {}
+  package.loaded["oui.ubus"].call = function(o, m, prm)
+    if o == "modem.CPU.AT" and prm then
+      at_cmds[#at_cmds + 1] = prm.cmd .. "@" .. tostring(prm.sub_id)
+      subs[#subs + 1] = prm.sub_id
+      if prm.cmd == "AT+QSPN" and c.qspn[prm.sub_id] then
+        return { data = '\r\n+QSPN: "X","X","",0,"' .. c.qspn[prm.sub_id] .. '"\r\n\r\nOK\r\n' }
+      elseif prm.cmd == "AT+CIMI" and c.cimi and c.cimi[prm.sub_id] then
+        return { data = "\r\n" .. c.cimi[prm.sub_id] .. "\r\n\r\nOK\r\n" }
+      elseif prm.cmd == "AT+CIMI" then
+        return { data = "\r\nERROR\r\n" }
+      end
+      return { data = "\r\nOK\r\n" }
+    elseif o == "cellular.modem" and m == "status" then
+      return { modems = { { bus = "cpu", current_sim_slot = c.slot } } }
     elseif o == "cellular.sim" and m == "info" then
-      return { sims = { { slot = 1, mcc = "460", mnc = "02" } } }
+      return { sims = { c.sim } }
     end
-    return orig(o, m, prm)
+    return base_ubus_call(o, m, prm)
   end
-end)(package.loaded["oui.ubus"].call)
-r = M.set_bands({ sa = { 78 } })
-assert(r.ok and r.sub_id == 0, "sub 0 must be usable when it is the only PLMN match; got " .. tostring(r.sub_id))
-at_cmds = {}; os.remove(PENDING); os.remove(ARMED)
-assert(M.set_bands({ sa = { 78 } }).ok)
-assert(#at_cmds >= 1, "a sub_id-0 match must NOT be cached (re-verified by QSPN every call)")
-print("  ok  - sub_id 0 is never pinned by the cache")
+  local res = M.get_bands({})
+  package.loaded["oui.ubus"].call = base_ubus_call
+  for _, sid in ipairs(subs) do assert(sid ~= 0, "sub_id 0 must never be sent; sent: " .. table.concat(at_cmds, ",")) end
+  return res.meta
+end
+local cap = ngx.location.capture
+ngx.location.capture = function(uri, opts)   -- get_band_config for whichever slot is active
+  local req = cjson.decode(opts.body)
+  if req.method == "get_band_config" then return { status = 200, body = "0 " .. cjson.encode(band_cfg) } end
+  return cap(uri, opts)
+end
+
+-- (a) The reported bug: TWO SIMs OF THE SAME CARRIER, SIM2 active. The PLMN
+--     matches at sub_id 1 too; leading with 1 picked SIM1 for SIM2.
+local meta = resolve_case({ slot = 2, qspn = { [1] = "310260", [2] = "310260" },
+  sim = { bus = "cpu", slot = 2, iccid = "8901-a", mcc = "310", mnc = "260" } })
+assert(meta.sub_id == 2 and meta.plmn_matched == true, "SIM2 must resolve to sub_id 2, got " .. tostring(meta.sub_id))
+print("  ok  - same-carrier SIM2 resolves to its own sub_id, not SIM1's")
+
+-- (b) IMSI (AT+CIMI) tells same-carrier SIMs apart even if the sub order lied.
+meta = resolve_case({ slot = 2, qspn = { [1] = "310260", [2] = "310260" },
+  cimi = { [1] = "310260000000001", [2] = "310260000000002" },
+  sim = { bus = "cpu", slot = 2, iccid = "8901-b", mcc = "310", mnc = "260", imsi = "310260000000002" } })
+assert(meta.sub_id == 2 and meta.plmn_matched == true, "IMSI must pick sub_id 2")
+meta = resolve_case({ slot = 1, qspn = { [1] = "310260", [2] = "310260" },
+  cimi = { [1] = "310260000000002", [2] = "310260000000001" },     -- mapping swapped on this unit
+  sim = { bus = "cpu", slot = 1, iccid = "8901-c", mcc = "310", mnc = "260", imsi = "310260000000001" } })
+assert(meta.sub_id == 2 and meta.plmn_matched == true, "IMSI must win over the slot-first guess")
+print("  ok  - IMSI separates same-carrier SIMs")
+
+-- (c) Roaming: QSPN reports the VISITED network, the SIM's mcc/mnc is home —
+--     a PLMN match can never confirm; the IMSI does.
+meta = resolve_case({ slot = 1, qspn = { [1] = "310260", [2] = "310410" },
+  cimi = { [1] = "234150000000009", [2] = "310410000000003" },
+  sim = { bus = "cpu", slot = 1, iccid = "8944-d", mcc = "234", mnc = "15", imsi = "234150000000009" } })
+assert(meta.sub_id == 1 and meta.plmn_matched == true, "a roaming SIM must be confirmed by IMSI")
+print("  ok  - roaming SIM confirmed by IMSI")
+
+-- (d) CIMI answers but no candidate carries the SIM's IMSI: unconfirmed — a
+--     PLMN fallback could only land on the wrong SIM. Fallback = the slot's own.
+meta = resolve_case({ slot = 2, qspn = { [1] = "310260", [2] = "310260" },
+  cimi = { [1] = "310260000000007", [2] = "310260000000008" },
+  sim = { bus = "cpu", slot = 2, iccid = "8901-e", mcc = "310", mnc = "260", imsi = "310260000000002" } })
+assert(meta.sub_id == 2 and meta.plmn_matched == false, "IMSI mismatch must stay unconfirmed")
+for _, c in ipairs(at_cmds) do assert(not c:find("QSPN", 1, true), "no PLMN fallback once CIMI answered: " .. c) end
+print("  ok  - IMSI mismatch is unconfirmed, no PLMN guess")
+
+-- (e) Only sub_id 0 would match: 0 is never sent, the answer is unconfirmed and
+--     falls back to the slot's own sub_id (never sub_id 1 for slot 2).
+meta = resolve_case({ slot = 2, qspn = { [0] = "46002", [1] = "46000", [2] = "46000" },
+  sim = { bus = "cpu", slot = 2, iccid = "8986-f", mcc = "460", mnc = "02" } })
+assert(meta.sub_id == 2 and meta.plmn_matched == false, "unconfirmed SIM2 must fall back to sub_id 2, got " .. tostring(meta.sub_id))
+print("  ok  - sub_id 0 never sent; unconfirmed falls back to the slot's own sub_id")
+
+-- (f) A confirmed answer is cached per SIM: a second read spends no QSPN.
+local same = { slot = 2, qspn = { [1] = "310410", [2] = "310260" },
+  sim = { bus = "cpu", slot = 2, iccid = "8901-g", mcc = "310", mnc = "260" } }
+resolve_case(same)
+resolve_case(same)
+assert(#at_cmds == 2, "cached sub_id: only the two band reads remain; spent: " .. table.concat(at_cmds, ","))
+print("  ok  - confirmed sub_id cached per SIM")
+ngx.location.capture = cap
 package.loaded["oui.ubus"].call = base_ubus_call
 
 -- 1h. get_bands {light=1}: config + mode + lock from GL's store, ZERO AT (no

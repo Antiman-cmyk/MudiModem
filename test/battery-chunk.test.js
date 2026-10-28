@@ -1491,3 +1491,217 @@ test('onPush: a battery sample landing after a hole backfills it (since = previo
     assert.deepStrictEqual(vm.samples.map((s) => s.t), [1000, 21000, 41000, 61000], 'filled, sorted, pushed point not duplicated');
   } finally { unstubRpc(); }
 });
+
+
+// ---- 2.x review fixes (2026-10-28) ----
+
+function captureTimers() {
+  const realSet = global.setTimeout, realClear = global.clearTimeout, pending = [];
+  global.setTimeout = (fn, ms) => { const t = { fn, ms }; pending.push(t); return t; };
+  global.clearTimeout = (t) => { const i = pending.indexOf(t); if (i >= 0) pending.splice(i, 1); };
+  return { pending, restore() { global.setTimeout = realSet; global.clearTimeout = realClear; } };
+}
+const settle = () => new Promise((r) => setImmediate(r));
+
+// rpcSilent resolves null and never rejects: a failed first load used to be
+// followed by pushes that cleared the note, set the cursor and kept the stall
+// guard quiet — the window before the tab opened never loaded.
+test('a failed preload is retried with backoff, says so honestly, and merges with pushes', async () => {
+  const calls = stubRpc([null, null]);
+  const timers = captureTimers();
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, { loading: true });
+    vm._alive = true;                                    // mounted
+    await vm.fetchHistory();
+    assert.equal(vm.preloaded, false);
+    assert.equal(timers.pending.length, 1, 'a retry is scheduled');
+    assert.equal(timers.pending[0].ms, 2000);
+    let out = textOf(render(vm, c));
+    assert.match(out, /Couldn't reach the router — retrying every 2 s\./,
+      'the note states the cadence the code actually uses');
+    assert.doesNotMatch(out, /every 10 s/, 'no invented cadence');
+    const now = Date.now();
+    vm.onPush({ t: now - 20000, cap: 70, cur: -300, online: 0 });
+    vm.onPush({ t: now, cap: 70, cur: -300, online: 0 });
+    timers.pending.shift().fn();                         // retry #1 fails
+    await settle();
+    assert.equal(calls.filter((x) => x.params[2] === 'get_battery_history').length, 2);
+    assert.equal(timers.pending[0].ms, 4000, 'backoff doubles');
+    out = textOf(render(vm, c));
+    assert.match(out, /Earlier battery history didn't load.*retrying every 4 s/,
+      'with pushed samples drawn, the missing history is still called out');
+    // retry #2 succeeds: older samples + the two pushed ones again
+    calls.length = 0;
+    global.window.$axios.post = (url, body) => {
+      calls.push({ params: body.params });
+      return Promise.resolve({ data: { result: { now, samples: [
+        { t: now - 600000, cap: 72 }, { t: now - 580000, cap: 72 },
+        { t: now - 20000, cap: 70 }, { t: now, cap: 70 }] } } });
+    };
+    timers.pending.shift().fn();
+    await settle();
+    assert.equal(vm.preloaded, true);
+    assert.deepEqual(vm.samples.map((s) => s.t), [now - 600000, now - 580000, now - 20000, now],
+      'deduped and ascending — the pushes survive the late window');
+    assert.equal(timers.pending.length, 0, 'no more retries');
+    assert.doesNotMatch(textOf(render(vm, c)), /retrying/);
+  } finally { timers.restore(); unstubRpc(); }
+});
+
+test('the preload backoff is bounded, and beforeDestroy cancels it', async () => {
+  stubRpc([null, null, null, null, null, null, null]);
+  const timers = captureTimers();
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, {});
+    vm._alive = true;
+    await vm.fetchHistory();
+    const steps = [timers.pending[0].ms];
+    for (let i = 0; i < 5; i++) { timers.pending.shift().fn(); await settle(); steps.push(timers.pending[0].ms); }
+    assert.deepEqual(steps, [2000, 4000, 8000, 16000, 30000, 30000]);
+    c.beforeDestroy.call(vm);
+    assert.equal(timers.pending.length, 0);
+  } finally { timers.restore(); unstubRpc(); }
+});
+
+test('a hole backfill that failed is asked again on the next push', async () => {
+  const calls = stubRpc([null, { now: 81000, samples: [{ t: 21000, cap: 70 }, { t: 41000, cap: 70 }] }]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, { loading: false, preloaded: true });
+    vm.samples = [{ t: 1000, cap: 70 }]; vm.lastT = 1000;
+    vm.onPush({ t: 61000, cap: 70 });                   // hole -> since 1000 -> fails
+    await settle();
+    vm.onPush({ t: 81000, cap: 70 });                   // regular push re-asks
+    const asks = calls.filter((x) => x.params[2] === 'get_battery_history').map((x) => x.params[3]);
+    assert.deepEqual(asks, [{ since: 1000 }, { since: 1000 }]);
+    await settle();
+    assert.deepEqual(vm.samples.map((s) => s.t), [1000, 21000, 41000, 61000, 81000]);
+    assert.equal(vm.missingSince, null);
+  } finally { unstubRpc(); }
+});
+
+test('a pinned slice stays on its sample while pushes keep arriving', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const vm = makeVm(c, { samples: seed(now, 40, 20000, (i) => ({ cur: -300 - i })),
+    serverNow: now, serverNowAt: Date.now(), lastT: now, winW: 15, width: 900, loading: false, bl: {} });
+  vm.$refs = { lanes: { getBoundingClientRect: () => ({ left: 0, width: 900 }) } };
+  render(vm, c);                                        // stashes _lastBounds / _lastSs
+  vm.onClick({ clientX: 700 });
+  assert.ok(vm.samples.some((s) => s.t === vm.pinnedT), 'pinned a SAMPLE time');
+  const pinned = vm.samples.find((s) => s.t === vm.pinnedT);
+  const readout = () => {
+    const foot = walk(render(vm, c)).find((n) => n.data && /mmb-lanes-foot/.test(n.data.staticClass || ''));
+    return textOf(foot);
+  };
+  assert.match(readout(), new RegExp(pinned.cur + ' mA'));
+  // Three more pushes (a minute). A minutes-relative pin slid three samples newer.
+  for (let i = 1; i <= 3; i++) vm.onPush(Object.assign({}, pinned, { t: now + i * 20000, cur: -999 }));
+  assert.match(readout(), new RegExp(pinned.cur + ' mA'), 'still describes the pinned sample');
+  vm.onClick({ clientX: 100 });
+  assert.equal(vm.pinnedT, null, 'a second click releases it');
+});
+
+test('the state band ends at the last sample once samples stop, not at "now"', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const live = makeVm(c, { samples: seed(now - 10000, 5, 20000), serverNow: now, serverNowAt: Date.now(), winW: 15 });
+  assert.equal(live.stateRuns().slice(-1)[0].m1, 0, 'still arriving: reaches now');
+  const stopped = makeVm(c, { samples: seed(now - 300000, 5, 20000), serverNow: now, serverNowAt: Date.now(), winW: 15 });
+  const last = stopped.stateRuns().slice(-1)[0];
+  assert.ok(Math.abs(last.m1 + 5) < 0.05, 'ends at the last sample (-5 min), got ' + last.m1);
+});
+
+// The limit card used to be read once on mount (and after an apply): with the
+// tab open "current ~X%" froze and "Armed" outlived plugging the charger in.
+test('a push showing the charger plugged in re-reads the limit card through the SILENT transport', async () => {
+  const calls = stubRpc([Object.assign({}, BL_ACTIVE)]);
+  try {
+    const c = loadChunk();
+    const now = Date.now();
+    const vm = makeVm(c, { loading: false, preloaded: true, bl: Object.assign({}, BL_ARMED), blDraft: 80,
+      serverNow: now, serverNowAt: Date.now() });
+    vm.samples = [{ t: now - 20000, cap: 72, cur: -300, online: 0, lim: 0, lim_gauge: null }];
+    vm.lastT = now - 20000;
+    assert.match(textOf(vm.renderLimitCard(h)), /Armed ·/);
+    vm.onPush({ t: now - 10000, cap: 72, cur: -300, online: 0, lim: 0, lim_gauge: null });
+    assert.equal(calls.length, 0, 'nothing changed: no re-read');
+    vm.onPush({ t: now, cap: 72, cur: 0, online: 1, lim: 1, lim_gauge: 71 });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].method, 'call', 'went through $axios.post (rpcSilent), not $rpcRequest');
+    assert.equal(calls[0].params[2], 'get_battlimit');
+    await settle();
+    const txt = textOf(vm.renderLimitCard(h));
+    assert.match(txt, /Active ·/, 'the card follows the plug-in');
+    assert.doesNotMatch(txt, /will apply when the charger connects/);
+  } finally { unstubRpc(); }
+});
+
+test('the limiter starting or its target moving also re-reads; a failed re-read keeps the card', async () => {
+  const calls = stubRpc([null]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, { bl: Object.assign({}, BL_ENABLED_NOT_ACTIVE), blDraft: 80 });
+    vm.samples = [{ t: 1000, online: 1, lim: 0, lim_gauge: null }]; vm.lastT = 1000;
+    vm.onPush({ t: 21000, online: 1, lim: 1, lim_gauge: 71 });
+    assert.equal(calls.length, 1);
+    await settle();
+    assert.deepEqual(vm.bl, BL_ENABLED_NOT_ACTIVE, 'a failed silent re-read does not blank the card');
+    assert.equal(vm.blErr, '');
+  } finally { unstubRpc(); }
+});
+
+test('a background re-read does not move the slider under an unreleased drag', async () => {
+  stubRpc([Object.assign({}, BL_ACTIVE, { limit_gui: 90 })]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, { bl: Object.assign({}, BL_ACTIVE), blDraft: 65 });   // dragged, not released
+    await vm.refreshBattLimit();
+    assert.equal(vm.blDraft, 65, 'the thumb stays where the user holds it');
+    assert.equal(vm.bl.limit_gui, 90);
+    const idle = makeVm(c, { bl: Object.assign({}, BL_ACTIVE), blDraft: 80 });
+    stubRpc([Object.assign({}, BL_ACTIVE, { limit_gui: 90 })]);
+    await idle.refreshBattLimit();
+    assert.equal(idle.blDraft, 90, 'an untouched slider follows a target changed elsewhere');
+  } finally { unstubRpc(); }
+});
+
+test('the limit card is also re-read at a slow cadence while the tab stays open', async () => {
+  const calls = stubRpc([Object.assign({}, BL_ACTIVE), Object.assign({}, BL_ACTIVE, { capacity_gui: 79 })]);
+  const realSI = global.setInterval;
+  let tick = null;
+  global.setInterval = (fn) => { tick = fn; return 1; };
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, {});
+    vm.fetchHistory = function () {};
+    c.mounted.call(vm);
+    await settle();
+    assert.equal(calls.length, 1, 'mount read');
+    tick();                                             // 30 s later: too soon
+    assert.equal(calls.length, 1);
+    vm.blFetchedAt = Date.now() - 61000;                // a minute on
+    tick();
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].method, 'call', 'silent transport');
+    await settle();
+    assert.equal(vm.bl.capacity_gui, 79, '"current" is no longer frozen');
+  } finally { global.setInterval = realSI; unstubRpc(); }
+});
+
+test('the "Limit charging" checkbox is put back when the write fails', async () => {
+  stubRpc([Object.assign(new Error('rpc down'), { type: 'timeout' })]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, { bl: Object.assign({}, BL_OFF), blDraft: 80 });
+    const box = walk(vm.renderLimitCard(h)).find((n) => n.data.attrs && n.data.attrs.type === 'checkbox');
+    const el = { checked: true };                       // the user ticked it
+    box.data.on.change({ target: el });
+    await settle();
+    assert.equal(vm.bl.enabled, false, 'the limit is still off');
+    assert.equal(el.checked, false, 'and so is the box — Vue would not have patched it');
+    assert.match(vm.blErr, /timeout|rpc down/);
+  } finally { unstubRpc(); }
+});

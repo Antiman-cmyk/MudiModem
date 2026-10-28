@@ -57,4 +57,14 @@ local d = M.set_history_persist({ enabled = "yes" })
 assert(d.error, "non-boolean enabled is an error")
 assert(d.enabled == false, "state unchanged after bad set")
 
+-- Backup size counts both segments of both streams (collectd rotates the
+-- current segment over .prev once a day instead of rewriting it).
+os.execute("mkdir -p '" .. PERSIST .. "'")
+for name, n in pairs({ ["samples.jsonl"] = 10, ["samples.prev.jsonl"] = 20,
+                       ["battery.jsonl"] = 3, ["battery.prev.jsonl"] = 4 }) do
+  local w = io.open(PERSIST .. "/" .. name, "w"); w:write(string.rep("x", n)); w:close()
+end
+local e = M.get_history_persist({})
+assert(e.size_bytes == 37, "size must sum all four segments, got " .. tostring(e.size_bytes))
+
 print("backend-history-persist OK")
