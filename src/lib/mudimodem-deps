@@ -1,0 +1,77 @@
+#!/bin/sh
+# /usr/lib/mudimodem/mudimodem-deps — the ONE place that knows MudiModem's opkg
+# runtime: python3-light, which the collector, the speed test and the AT /
+# library tools run on. GL's 4.10 image ships no Python.
+#
+# A firmware upgrade with "Keep Settings" restores every path in keep.d — our
+# files come back — but wipes the rest of the overlay, opkg packages included,
+# and GL's package restore is a button, not a boot step. Without this the box
+# boots with our daemons and no interpreter, and procd respawns them into
+# "not found" until it gives up.
+#
+#   check    exit 0 iff python3 imports everything our tools use (silent)
+#   install  install python3-light now (install.sh / deploy.sh)
+#   heal     boot path, spawned detached by the python services' init scripts
+#            when check fails: wait up to 10 min for the package feed, install,
+#            then start those services
+set -u
+
+PKG=python3-light
+IMPORTS="import fcntl, gzip, json, select, signal, subprocess, tempfile"
+SERVICES="mudimodem-collectd mudimodem-speedtestd"
+INITD=${MUDIMODEM_INITD:-/etc/init.d}
+LOCK=${MUDIMODEM_DEPS_LOCK:-/tmp/mudimodem-deps.lock}
+TRIES=${MUDIMODEM_DEPS_TRIES:-40}    # feed retries, 15 s apart
+NAP=${MUDIMODEM_DEPS_NAP:-15}
+
+log() { logger -t mudimodem-deps "$*" 2>/dev/null; echo "mudimodem-deps: $*"; }
+
+do_check() { python3 -c "$IMPORTS" >/dev/null 2>&1; }
+
+# Two concurrent opkg runs corrupt its status database, and both python
+# services can spawn a heal in the same boot: one runner at a time.
+lock() {
+  exec 9>"$LOCK"
+  flock -n 9 || { log "another install is running"; exit 0; }
+}
+
+add_pkg() {
+  opkg install "$PKG" >/dev/null 2>&1
+  # opkg's status DB can claim the package while its files are gone; the
+  # interpreter is the truth, so reinstall once before giving up.
+  do_check || opkg install --force-reinstall "$PKG" >/dev/null 2>&1
+  do_check && { log "$PKG ready"; return 0; }
+  log "ERROR: python3 still cannot run our tools after installing $PKG"
+  return 1
+}
+
+do_install() {
+  do_check && return 0
+  lock
+  opkg update >/dev/null 2>&1 || log "opkg update failed (trying the cached package lists)"
+  add_pkg
+}
+
+do_heal() {
+  do_check && return 0
+  lock
+  log "$PKG missing (wiped by a firmware upgrade?) - waiting for the package feed"
+  i=1
+  until opkg update >/dev/null 2>&1; do
+    [ "$i" -ge "$TRIES" ] && { log "ERROR: no package feed after $TRIES tries; retrying next boot"; return 1; }
+    i=$((i + 1))
+    sleep "$NAP"
+  done
+  add_pkg || return 1
+  for s in $SERVICES; do
+    "$INITD/$s" enabled && "$INITD/$s" start
+  done
+  return 0
+}
+
+case "${1:-}" in
+  check)   do_check ;;
+  install) do_install ;;
+  heal)    do_heal ;;
+  *)       echo "usage: ${0##*/} {check|install|heal}" >&2; exit 2 ;;
+esac

@@ -25,25 +25,34 @@ echo "firmware OK: $GLVER"
 
 ./tools/build.sh
 
-# Same as install.sh: the collector / speed test / AT tool need python3-light.
-ssh -o BatchMode=yes "root@$HOST" 'opkg list-installed 2>/dev/null | grep -q "^python3-light " || { opkg update >/dev/null 2>&1; opkg install python3-light; }' 2>/dev/null || true
+# Same as install.sh: python3 for the collector / speed test / AT tool, BEFORE
+# any of those services restarts below (their init scripts would otherwise
+# spawn a heal that races this opkg run).
+ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /usr/lib/mudimodem && cat > /usr/lib/mudimodem/mudimodem-deps && chmod 0755 /usr/lib/mudimodem/mudimodem-deps' \
+  < src/lib/mudimodem-deps
+ssh -o BatchMode=yes "root@$HOST" '/usr/lib/mudimodem/mudimodem-deps install' || true
 
-ssh -o BatchMode=yes "root@$HOST" 'cat > /www/views/gl-sdk4-ui-mudimodem.common.js.gz' \
+# Web payload under /usr/share/mudimodem/www (a firmware upgrade never restores
+# /www) + the gl-conf.d alias that serves it; nginx loads it at the restart below.
+ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /usr/share/mudimodem/www/views /usr/share/mudimodem/www/mudimodem /etc/nginx/gl-conf.d'
+ssh -o BatchMode=yes "root@$HOST" 'cat > /etc/nginx/gl-conf.d/mudimodem.conf' \
+  < src/nginx/mudimodem.conf
+ssh -o BatchMode=yes "root@$HOST" 'cat > /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem.common.js.gz' \
   < build/gl-sdk4-ui-mudimodem.common.js.gz
 ssh -o BatchMode=yes "root@$HOST" 'cat > /usr/share/oui/menu.d/mudimodem.json' \
   < src/menu/mudimodem.json
 
 # Tracking page (hidden level:0 route) — second chunk + menu entry.
-ssh -o BatchMode=yes "root@$HOST" 'cat > /www/views/gl-sdk4-ui-mudimodem-tracking.common.js.gz' \
+ssh -o BatchMode=yes "root@$HOST" 'cat > /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-tracking.common.js.gz' \
   < build/gl-sdk4-ui-mudimodem-tracking.common.js.gz
 ssh -o BatchMode=yes "root@$HOST" 'cat > /usr/share/oui/menu.d/mudimodem-tracking.json' \
   < src/menu/mudimodem-tracking.json
 echo "tracking chunk + menu deployed"
 
 # Phase 3: AT console chunk + community library + our own AT channel tool.
-ssh -o BatchMode=yes "root@$HOST" 'cat > /www/views/gl-sdk4-ui-mudimodem-console.common.js.gz' \
+ssh -o BatchMode=yes "root@$HOST" 'cat > /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-console.common.js.gz' \
   < build/gl-sdk4-ui-mudimodem-console.common.js.gz
-ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /www/mudimodem && cat > /www/mudimodem/at-library.json.gz' \
+ssh -o BatchMode=yes "root@$HOST" 'cat > /usr/share/mudimodem/www/mudimodem/at-library.json.gz' \
   < build/at-library.json.gz
 ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /usr/lib/mudimodem && cat > /usr/lib/mudimodem/mudimodem-at.py' \
   < tools/mudimodem-at.py
@@ -66,7 +75,7 @@ ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /usr/lib/mudimodem && cat > /usr/lib
 echo "library check/refresh tool deployed"
 
 # Phase: Speedtest chunk + menu + own-script runner + optional scheduler.
-ssh -o BatchMode=yes "root@$HOST" 'cat > /www/views/gl-sdk4-ui-mudimodem-speedtest.common.js.gz' \
+ssh -o BatchMode=yes "root@$HOST" 'cat > /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-speedtest.common.js.gz' \
   < build/gl-sdk4-ui-mudimodem-speedtest.common.js.gz
 ssh -o BatchMode=yes "root@$HOST" 'cat > /usr/share/oui/menu.d/mudimodem-speedtest.json' \
   < src/menu/mudimodem-speedtest.json
@@ -77,7 +86,7 @@ echo "speedtest chunk + menu + runner deployed"
 # Battery tab (issue #1) — chunk only; no menu JSON (it is an in-page tab, not
 # a standalone route) and no new backend file (get_battery_history ships inside
 # the existing rpc/mudimodem).
-ssh -o BatchMode=yes "root@$HOST" 'cat > /www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz' \
+ssh -o BatchMode=yes "root@$HOST" 'cat > /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz' \
   < build/gl-sdk4-ui-mudimodem-battery.common.js.gz
 echo "battery chunk deployed"
 
@@ -180,42 +189,8 @@ ssh -o BatchMode=yes "root@$HOST" '
 '
 echo "history persist policy present (default off)"
 
-# Preserve our files across a firmware upgrade (they live outside /etc/config).
-# Idempotent: only add lines not already present. Must list EVERY file pushed
-# above — test/test_install_wiring.sh checks it against install.sh's list.
-ssh -o BatchMode=yes "root@$HOST" 'f=/etc/sysupgrade.conf; touch "$f"; for p in \
-  /www/views/gl-sdk4-ui-mudimodem.common.js.gz \
-  /www/views/gl-sdk4-ui-mudimodem-tracking.common.js.gz \
-  /usr/share/oui/menu.d/mudimodem.json \
-  /usr/share/oui/menu.d/mudimodem-tracking.json \
-  /usr/lib/mudimodem/cellular_compat.py \
-  /usr/lib/mudimodem/mudimodem-detach \
-  /usr/share/gl-ngx/websocket/mudimodem.lua \
-  /usr/lib/oui-httpd/rpc/mudimodem \
-  /usr/sbin/mudimodem-revert \
-  /etc/init.d/mudimodem-revert \
-  /usr/sbin/mudimodem-selfupdate \
-  /usr/sbin/mudimodem-collectd \
-  /etc/init.d/mudimodem-collectd \
-  /www/views/gl-sdk4-ui-mudimodem-console.common.js.gz \
-  /www/mudimodem/at-library.json.gz \
-  /usr/lib/mudimodem/mudimodem-at.py \
-  /usr/share/gl-validator.d/mudimodem.lua \
-  /usr/lib/mudimodem/mudimodem-lib \
-  /www/views/gl-sdk4-ui-mudimodem-speedtest.common.js.gz \
-  /www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz \
-  /usr/share/oui/menu.d/mudimodem-speedtest.json \
-  /usr/lib/mudimodem/mudimodem-speedtest.py \
-  /usr/sbin/mudimodem-speedtestd \
-  /etc/init.d/mudimodem-speedtestd \
-  /etc/mudimodem/version.json \
-  /usr/bin/glbattlimit \
-  /etc/hotplug.d/i2c/20-glbattlimit \
-  /etc/init.d/glbattlimit \
-  /etc/mudimodem/battlimit.json \
-  /etc/mudimodem/history.json \
-  /etc/mudimodem/history \
-  ; do \
-  grep -qxF "$p" "$f" || echo "$p" >> "$f" ; done'
-echo "sysupgrade.conf registered"
+# Survive a firmware upgrade: abfota_update keeps exactly what keep.d lists.
+ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /lib/upgrade/keep.d && cat > /lib/upgrade/keep.d/mudimodem' \
+  < src/upgrade/keep.d/mudimodem
+echo "keep.d registered"
 echo "deployed to $HOST"

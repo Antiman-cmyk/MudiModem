@@ -142,6 +142,11 @@ curl -fsSL "$B/install.sh" | MUDIMODEM_BASE="$B" sh
 curl -fsSL https://raw.githubusercontent.com/Antiman-cmyk/MudiModem/main/uninstall.sh | sh
 ```
 
+**GL firmware upgrades:** leave **Keep Settings** on and MudiModem comes back with the new firmware.
+The upgrade does remove opkg packages, so on the first boot afterwards MudiModem reinstalls Python by
+itself once the router is online; live data returns a little later than the rest of the admin. With
+Keep Settings off, GL keeps nothing at all, so run the installer again.
+
 Both scripts **refuse to run against anything that isn't a GL-E5800** on firmware 4.10 or newer.
 (This tree's default source is `Antiman-cmyk/MudiModem`; the original project by kevinherzig is the
 1.x / firmware-4.8 line.)

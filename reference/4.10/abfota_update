@@ -1,0 +1,821 @@
+#!/bin/sh
+
+. /lib/functions/gl_util.sh
+
+<<COMMENT
+-------------------------------------------------------------------------------------------------
+  Copyright (c) 2021 Quectel Wireless Solution, Co., Ltd. All Rights Reserved.
+  Quectel Wireless Solution Proprietary and Confidential.
+-------------------------------------------------------------------------------------------------
+
+-------------------------------------------------------------------------------------------------
+  EDIT HISTORY
+  This section contains comments describing changes made to the file.
+  Notice that changes are listed in reverse chronological order.
+  $Header: $
+  when       who          what, where, why
+  --------   ---          -----------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------
+COMMENT
+
+# AB dual system full update script version information define
+VERSION='1.2'
+
+# fota full update error code define
+E_SCRIPT_ARGUMENT_ERROR='1'
+E_SDCARD_NOEXIST='2'
+E_UPDATE_PACKAGE_NOEXIST='3'
+E_UNZIPFAILED='4'
+E_PARTITIONFLUSHERROR='5'
+E_XMLPARSEERROR='6'
+E_DIFFUBIUNATTACH='7'
+E_NOSPACELEFT='8'
+E_FILECHECKFAILED='9'
+E_BSPATCHFAILED='10'
+E_NOTFINDPARTITION='11'
+E_UBIVOLUMEERROR='12'
+E_NOFOTACONFIGFILE='13'
+E_GETOLDSOFTWAREFAILED='14'
+E_FILENOTEXIST='15'  
+E_TASKBUSY='16'
+E_UPDATE_PACKAGE_ILLEGAL='17'
+E_EXTRACT_FAILED='18'
+E_PROJECT_NO_MATCH='19'
+
+# Script Define
+True="0"
+False="1"
+
+# Slot A or B
+Slot_A='0'
+Slot_B='1'
+
+BACKUP_PREFIX="b_"
+
+#fota info state
+G_STAT_SUCCEED='0'
+G_STAT_UPDATE='1'
+G_STAT_BACKUP='2'
+G_STAT_FAILED='3'
+G_STAT_WRITEDONE='4'
+G_STAT_NEEDSYNC='5'
+
+C_MTDTOOL="mtdimg"
+C_UBITOOL="ubimg"
+C_DISKTOOL="dd"
+G_STORAGE_TYPE="mtd"
+G_EMMC_BLOCKDEVICE_PATH="/dev/block/bootdevice/by-name/"
+
+# PACKAGE & UNZIP PATH
+G_PACKAGEPATH="/cache/ufs"
+G_PACKAGENAME=""
+G_PACKAGE=""
+G_UNZIPPATH=""
+G_SWCOUNT='0'
+G_UPDATE_STAGE="success"
+G_VERSION_DIFF_FLAG=0
+G_PACKAGE_CHECK_FLAG=0
+
+#script stat
+G_CURRENT_STAT="SUCCEED"
+#G_PARTITION_OPERATIONS_CNT='0'
+
+# full fota & diff fota compatible
+G_FotaConfig=""
+G_FotaConfigName="fotaconfig.xml"
+G_UnActiveSlot=""
+G_ActiveSlot=""
+G_UBIAattachList=""
+G_RUNTMP="/var/run/fota"
+G_CACHETMP="/cache/fota"
+G_RECOVERYTMP="/cache/recovery"
+G_NEWFILE="${G_RUNTMP}/newfile.hex"
+#fota update process bar
+FOTARATE='0'
+
+#fota server message type
+MSG_TYPE_BAR='1'
+MSG_TYPE_CTL='2'
+
+#fota server message ctrl info
+FOTA_PROCESS_START='1'
+FOTA_PROCESS_EXIT='2'
+
+#fota script log
+G_FotaScriptLog="/cache/fota/abfota_script.log"
+
+#checksum flag
+G_CHECKSUM_FLAG='0'
+
+G_Ab_Noota=""
+G_Ab_NootaName="quectel_ab_noota_filelist.txt"
+G_TempBackPath_data="/usrdata/cfg_bak_data"
+G_TempBackPath_etc="/usrdata/cfg_bak_etc"
+G_TempBackPath="/overlay/cfg_bak"
+G_TempBackPath_var="/overlay/cfg_bak_var"
+
+KEEPCFGPATH="/lib/upgrade/keep.d"
+KEEPCFGUPDATE="false"
+
+ETCBACKUP_DIR=/etc/backup/
+INSTALLED_PACKAGES=${ETCBACKUP_DIR}/installed_packages.txt
+
+SendBarToServer()
+{
+    local acc="${1}"
+    FOTABAR=$((acc+FOTABAR))
+    if [ ${FOTABAR} -le '99' ];then
+        fotainfo --send-urc "+QABFOTA: \"UPDATE\",${FOTABAR}"
+    fi
+}
+
+SendEndToServer()
+{
+    fotainfo --send-urc "+QABFOTA: \"UPDATE\",100"
+}
+
+FotaServerExit()
+{
+    fotasend -p "/usr/bin/abfota_update" --type ${MSG_TYPE_CTL} ${FOTA_PROCESS_EXIT}
+}
+
+UpdateLog()
+{
+    echo "[DUAL SYSTEM UPDATE] ${1}" > /dev/kmsg
+    echo "[DUAL SYSTEM UPDATE] ${1}" 2>&1 | tee -a ${G_FotaScriptLog}
+}
+
+ErrorLog()
+{
+    echo "[DUAL SYSTEM ERROR] ${1}" > /dev/kmsg
+    echo "[DUAL SYSTEM ERROR] ${1}" 2>&1 | tee -a ${G_FotaScriptLog}
+}
+
+FotaClearLog()
+{
+    rm -fr ${G_FotaScriptLog}
+}
+
+FotaClearCache()
+{
+    rm -fr ${G_RUNTMP}
+    #rm -fr ${G_UNZIPPATH}
+    rm -fr ${G_CACHETMP}
+    rm -fr ${G_RECOVERYTMP}
+    sync
+}
+
+FotaClearPackage()
+{
+    G_PACKAGENAME=`fotainfo --get-package |grep package| sed 's/.*:\(.*\)/\1/g'`
+    G_PACKAGE="${G_PACKAGEPATH}/${G_PACKAGENAME}"
+    if [ -f ${G_PACKAGE} ]; then
+        rm -fr ${G_PACKAGE}
+        sync
+        fotainfo --set-package ""
+        sync
+    fi
+}
+
+FotaClearAll()
+{
+    FotaClearPackage
+    FotaClearCache
+    FotaClearLog
+    sync
+}
+
+Signal_SIGTERM_Hander()
+{
+    local imagetype="${1}"
+    local unactivepart="${2}"
+
+    UpdateLog "received signal : SIGTERM"
+
+    G_UPDATE_STAGE=`fotainfo --get-stage |grep stage| sed 's/.*:\(.*\)/\1/g'`
+    UpdateLog "update stage=\"${G_UPDATE_STAGE}\""
+    if [ ${G_UPDATE_STAGE} != "success" ];then
+        if [ ${G_UPDATE_STAGE} = "start" ];then
+            UpdateLog "Dual system update failed in early stage, no need to sync."
+            sleep 1
+            sync
+            fotainfo --set-stage "success"
+            fotainfo --set-stat ${G_STAT_FAILED}
+            sync
+            return
+        fi
+        fotainfo --set-stat ${G_STAT_NEEDSYNC}
+        sync
+        ErrorLog "Dual system update failed, need sync!"
+        sleep 1
+        DualSystemSYNCProcess 1
+    fi
+}
+
+Register_Signal()
+{
+    local signalcode="${1}"
+    local signalhander="${2}"
+
+    UpdateLog "register signal ${signalhander} ${signalcode}"
+    trap "${signalhander}" ${signalcode}
+}
+
+Signal_SIGTERM_Trigger()
+{
+    UpdateLog "trigger signal : SIGTERM"
+    kill -s SIGTERM
+}
+
+FotaExitTriggerSignal()
+{
+    local exitcode="${1}"
+    local imagetype="${2}"
+    local unactivepart="${3}"
+
+    # Signal_SIGTERM_Trigger
+    Signal_SIGTERM_Hander ${imagetype} ${unactivepart}
+
+    [ -e /etc/ab_keep_cfg ] && rm -rf /etc/ab_keep_cfg
+
+    exit ${exitcode}
+}
+
+FotaExit()
+{
+    local exitcode="${1}"
+    local exitinfo="${2}"
+    local imagetype="${3}"
+    local unactivepart="${4}"
+    #FotaClearCache
+    #FotaServerExit
+    [ -n "${exitinfo}" ] && ErrorLog "${exitinfo}"
+    fotainfo --set-stat ${G_STAT_FAILED}
+    FotaClearPackage
+    sync
+    FotaExitTriggerSignal ${exitcode} ${imagetype} ${unactivepart}
+}
+
+# We don't need cmd return val
+WrapFuncLog()
+{
+    local cmd="${1}"
+    local arg="${2}"
+
+    ${cmd} ${arg} 2>&1 | xargs -r  echo "[UPDATE] {}" >&2
+}
+
+UnzipPackageFileToDir()
+{
+    local filename="${1}"
+    local dstdir="${2}"
+    local filesize=""
+    [ ! -e ${dstdir} ] && return ${False}
+
+    unzip -o ${G_PACKAGE} ${filename} -d ${dstdir}
+    if [ $? -eq 0 ];then
+        filesize=`ls -lh ${dstdir}/${filename} | awk '{print $5}'`
+        UpdateLog "${dstdir}/${filename} ${filesize}"
+        return ${True}
+    else
+        return ${False}
+    fi
+}
+
+UnzipFileAndCheck()
+{
+    local filename="${1}"
+    local dstdir="${2}"
+    local tmp=""
+    
+    tmp=`UnzipPackageFileToDir ${filename} ${dstdir}`
+    if [ $? -eq 0 ];then
+        [ ! -e "${dstdir}/${filename}" ] && FotaExit ${E_FILENOTEXIST} "Can't Find ${filename} file in ${G_PACKAGE}"
+        return ${True}
+    fi
+    rm -fr "${dstdir}/${filename}" && sync
+    return ${False}
+}
+
+UnzipPackageToDefaultDir()
+{
+    local filename="${1}"
+    local dstdir=""
+    local tmp=""
+
+    dstdir="${G_RUNTMP}"
+    UnzipFileAndCheck "${filename}" "${dstdir}" && echo "${dstdir}/${filename}" && return ${True}
+
+    FotaExit ${E_UNZIPFAILED} "unzip ${filename} from update package failed"
+}
+
+CurrentActiveSystemIS_A()
+{
+    active_slot=$(abctl --boot_slot)
+    if [ "$active_slot" == "_b" ];then
+        return ${False}
+    else
+        return ${True}
+    fi
+}
+
+ActiveUpateSuccessPartition()
+{
+    FotaClearCache
+    DualSystemClear_mount_bind_flag
+    CurrentActiveSystemIS_A
+    if [ $? -eq ${True} ];then
+        abctl --set_active ${Slot_B}
+    else
+        abctl --set_active ${Slot_A}
+    fi
+
+    fotainfo --set-stat ${G_STAT_BACKUP}
+    UpdateLog "abfota update successfully, reboot now"
+    [ -e /etc/ab_keep_cfg ] && rm -rf /etc/ab_keep_cfg
+    sync
+    sleep 1
+    reboot
+    sleep 300
+    ErrorLog "Normal reboot failed, try sys_reboot!"
+    sys_reboot
+}
+
+GetPartitionPrefix()
+{
+    CurrentActiveSystemIS_A
+    if [ $? -eq ${True} ];then
+        G_UnActiveSlot="_b"
+        G_ActiveSlot="_a"
+        UpdateLog "Current Active_slot is **A**"
+    else
+        G_UnActiveSlot="_a"
+        G_ActiveSlot="_b"
+        UpdateLog "Current Active_slot is **B**"
+    fi
+}
+
+GetBindFlagCfg()
+{
+    local partition="${1}"
+    bindflag=`xmllint --xpath "string(//fota/partition[@name='${partition}']/bindflag)" ${G_FotaConfig}`
+    return ${True}
+}
+
+GetFotaConfig()
+{
+    local dstfile=""
+    dstfile=`UnzipPackageToDefaultDir ${G_FotaConfigName}` || FotaExitTriggerSignal $?
+    if [ -n "${dstfile}" ];then
+        G_FotaConfig="${dstfile}"
+    fi
+}
+
+
+GetAbNootaFileList()
+{
+    if [ ${KEEPCFGUPDATE} = "true" ] || [ -e /etc/ab_keep_cfg ]; then
+        [ -d ${G_RUNTMP} ] || mkdir -p ${G_RUNTMP}
+        [ -f ${G_RUNTMP}/${G_Ab_NootaName} ] || touch ${G_RUNTMP}/${G_Ab_NootaName}
+
+        touch /tmp/tmpfile.txt
+        ls ${KEEPCFGPATH} | while read -r line; do
+            if [ -e "$KEEPCFGPATH/$line" ]; then
+                cat ${KEEPCFGPATH}/$line >> /tmp/tmpfile.txt
+            elif [ -d "$KEEPCFGPATH/$line" ]; then
+                cat ${$KEEPCFGPATH}/$line/* >> /tmp/tmpfile.txt
+            fi
+        done
+
+        grep -v -E '^#|^$' /tmp/tmpfile.txt >> ${G_RUNTMP}/${G_Ab_NootaName}
+        rm /tmp/tmpfile.txt
+        G_Ab_Noota=${G_RUNTMP}/${G_Ab_NootaName}
+    else
+        unzip -o ${G_PACKAGE} ${G_Ab_NootaName} -d ${G_RUNTMP}
+        if [ $? -eq 0 ] && [ -f ${G_RUNTMP}/${G_Ab_NootaName} ];then
+            filesize=`ls -l ${G_RUNTMP}/${G_Ab_NootaName} | awk '{print $5}'`
+            UpdateLog "${G_RUNTMP}/${G_Ab_NootaName} ${filesize}"
+            G_Ab_Noota=${G_RUNTMP}/${G_Ab_NootaName}
+        fi
+    fi
+}
+
+ParseFotaConfigText()
+{
+    local part=${1}
+    local item=${2}
+    local vol=${3}
+    local ret=""
+
+    if [ -n "${vol}" ];then
+        ret=`xmllint --xpath "string(//fota/partition[@name='${part}']/ubivolume[@vol_name='${vol}']/${item})" ${G_FotaConfig}`
+    else
+        ret=`xmllint --xpath "string(//fota/partition[@name='${part}']/${item})" ${G_FotaConfig}`
+    fi
+    if [ -z "${ret}" ];then
+        FotaExit ${E_XMLPARSEERROR} "Can't get text \"${item}\" from ${part} partition  in ${G_FotaConfig}"
+    fi
+    echo ${ret}
+}
+
+FileMd5Check()
+{
+    local need_ckeck_file=${1}
+    local target_md5=${2}
+
+    UpdateLog "Check ${need_ckeck_file} software image md5 ${target_md5} (wait for a little time ...)"
+
+    result=`md5sum ${need_ckeck_file} | cut -d ' ' -f 1`
+    if [ "${result}" != "${target_md5}" ];then
+        FotaExit ${E_FILECHECKFAILED} "Check ${need_ckeck_file} software image md5 failed"
+    else
+        UpdateLog "Check ${need_ckeck_file} software image MD5 OK"
+        size=`ls -lh ${need_ckeck_file} | awk '{print $5}'`
+        UpdateLog "${need_ckeck_file} ${size}"
+        return ${True}
+    fi
+}
+
+ValidateFotaPackage()
+{
+   local package_file=$1
+   local package_size=0
+   local package_md5sum=""
+   local update_binary="META-INF/com/google/android/update-binary"
+   local project_ver="project-name"
+   local project_etc_ver="/etc/quectel-project-version"
+
+   if [ ! -f $package_file ];then
+        FotaExit ${E_UPDATE_PACKAGE_NOEXIST} "Package $package_file does not exist!"
+   fi
+
+   package_size=$(ls -l $package_file | awk '{print $5}')
+   package_md5sum=$(md5sum $package_file | cut -d ' ' -f 1)
+   UpdateLog "Package file $package_file size=$package_size"
+   UpdateLog "Package file $package_file md5sum=\"$package_md5sum\""
+
+   unzip -tq $package_file
+   if [ ! $? -eq 0 ];then
+        FotaExit ${E_UNZIPFAILED} "Package $package_file is a bad zip!"
+   fi
+
+   # quectel 2025/04/09  Added project matching mechanism for fool-proofing
+   unzip -o $package_file $project_ver -d ${G_RUNTMP}
+
+   if [ ! -f "${G_RUNTMP}/$project_ver" ];then
+        # project-name does not exist, no project matching
+        # UpdateLog "$project_ver file does not exist, no verification"
+        :
+   else
+        project_etc_name=$(grep "^Project Name:" "$project_etc_ver" | awk -F': ' '{print $2}' | awk -F'_' '{print $1}')
+
+        if [ -z "$project_etc_name" ]; then
+            # Failed to advance project name from $project_etc_ver
+            FotaExit ${E_EXTRACT_FAILED} "Failed to extract project_etc_name from $project_etc_ver file!"
+        else
+            project_name=$(cat "${G_RUNTMP}/$project_ver" | tr -d '[:space:]')
+
+            if [ -z "$project_name" ]; then
+                # Failed to advance project name from $project_ver
+                FotaExit ${E_EXTRACT_FAILED} "${G_RUNTMP}/$project_ver file memory is empty"
+            fi
+
+            if [ "$project_etc_name" != "$project_name" ]; then
+                #Project name does not match, upgrade not allowed
+                FotaExit ${E_PROJECT_NO_MATCH} "$project_etc_name != $project_name ,Project name does not match, upgrade not allowed"
+            fi
+        fi
+
+   fi
+
+   unzip -o $package_file $update_binary -d ${G_RUNTMP}
+   if [ ! $? -eq 0 ] || [ ! -f "${G_RUNTMP}/$update_binary" ];then
+        FotaExit ${E_FILENOTEXIST} "Invalid FOTA Package, $package_file does not contain $update_binary!"
+   fi
+
+   G_PACKAGE_CHECK_FLAG=1
+}
+
+FotaInitial()
+{
+    G_PACKAGE="${G_PACKAGEPATH}/${G_PACKAGENAME}"
+    FotaClearCache
+    WrapFuncLog "mkdir" "-p ${G_CACHETMP}"
+    WrapFuncLog "mkdir" "-p ${G_RUNTMP}"
+
+    if [ -z "${G_PACKAGENAME}" ]; then
+        FotaExit ${E_UPDATE_PACKAGE_NOEXIST} "Package Name is NULL"
+    fi
+
+    ValidateFotaPackage $G_PACKAGE
+
+    GetAbNootaFileList
+    #GetFotaConfig
+    #GetPartitionPrefix
+    #GetBindFlagCfg "system"
+}
+
+CheckCurrentStorage()
+{
+    if [ -f /proc/mtd ] && [ `cat /proc/mtd | wc -l` -ge "2" ]; then
+        G_STORAGE_TYPE="mtd"
+    else
+        G_STORAGE_TYPE="mmc"
+    fi
+}
+
+CheckFotaSuccess()
+{
+   ota_status=$(cat /cache/recovery/ota_status)
+   if [ "${ota_status:0:11}" != "OTA_SUCCESS" ];then
+       cat /cache/recovery/last_log > /dev/console
+       FotaExit ${E_UNZIPFAILED} "Recovery update failed!"
+   fi
+}
+
+ZipPackageSecureVerify()
+{
+    secure_crt="/etc/qsec/certs/secure.crt"
+
+    if [ ! -e /usr/bin/secure_verify ] || [ ! -e $secure_crt ];then
+        return
+    fi
+
+    secure_verify  -i ${G_PACKAGE} -c $secure_crt
+    if [ $? -ne 0 ];then
+        # secure verify failed
+        fotainfo --send-urc "+QIND: \"QABFOTA\",\"END\",513"
+        FotaExit ${E_UPDATE_PACKAGE_ILLEGAL} "secure verify ${G_PACKAGE} failed!"
+    fi
+}
+
+BackupUserConfigurationsBeforeUpdate()
+{
+    if [ -z ${G_Ab_Noota} ] ;then
+        UpdateLog "noota config file not found, skip backup!"
+        return ${False}
+    fi
+
+    UpdateLog "Backup user configurations before update"
+
+    rm -rf $G_TempBackPath_data
+    mkdir -p $G_TempBackPath_data
+
+    if [ "$overlay_rootfs" = "false" ];then
+        rm -rf $G_TempBackPath_etc
+        mkdir -p $G_TempBackPath_etc
+    else
+        rm -rf $G_TempBackPath
+        mkdir -p $G_TempBackPath
+    fi
+
+    rm -fr $G_TempBackPath_var
+    mkdir -p $G_TempBackPath_var
+
+    sync
+
+    cat "${G_Ab_Noota}" | while read -r line; do
+        case "$line" in
+            "/data/"*)
+                #UpdateLog "[data] line: $line"                
+                if test -e $line; then
+                    source_dir=$(dirname "$line")
+                    relative_path=${source_dir#/}
+                    target_path="$G_TempBackPath_data/$relative_path"
+                    mkdir -p "$target_path" || exit 1
+                    cp -a "$line" "$target_path/" -rf
+                fi
+                ;;
+            "/etc/"*)
+                #UpdateLog "[etc] line: $line"
+                if test -e $line; then
+                    source_dir=$(dirname "$line")
+                    relative_path=${source_dir#/}
+                    if [ "$overlay_rootfs" = "false" ]; then
+                        target_path="$G_TempBackPath_etc/$relative_path"
+                    else
+                        target_path="$G_TempBackPath/$relative_path"
+                    fi
+                    mkdir -p "$target_path" || exit 1
+                    cp -a "$line" "$target_path/" -rf
+                fi
+                ;;                      
+            "/bin/"*|"/lib/"*|"/sbin/"*|"/usr/"*)
+                if [ "$overlay_rootfs" = "false" ]; then
+                    continue
+                fi
+
+                #UpdateLog "[] line: $line"
+                if test -e $line; then
+                    source_dir=$(dirname "$line")
+                    relative_path=${source_dir#/}
+                    target_path="$G_TempBackPath/$relative_path"
+                    mkdir -p "$target_path" || exit 1
+                    cp -a "$line" "$target_path/"
+                fi
+                ;;
+            "/var/"*)
+                #UpdateLog "[var] line: $line"
+                if test -e $line; then
+                    source_dir=$(dirname "$line")
+                    relative_path=${source_dir#/}
+                    target_path="$G_TempBackPath_var/$relative_path"
+                    mkdir -p "$target_path" || exit 1
+                    cp "$line" "$target_path/" -fr
+                fi
+                ;;
+            *)
+                #Only backup files in /data and /etc directories. 
+                ;;
+        esac
+    done
+    sync
+
+    return ${True}
+}
+
+BackupPackage()
+{
+    mkdir -p ${ETCBACKUP_DIR}
+
+    # Format: pkg-name<TAB>{rom,overlay,unkown}
+    # rom is used for pkgs in /rom, even if updated later
+    find /usr/lib/opkg/info -name "*.control" \( \
+        \( -exec test -f /rom/{} \; -exec echo {} rom \; \) -o \
+        \( -exec test -f /overlay/upper/{} \; -exec echo {} overlay \; \) -o \
+        \( -exec echo {} unknown \; \) \
+        \) | sed -e 's,.*/,,;s/\.control /\t/' | grep -v "rom$" | cut -f1 |tr "\n" " " > ${INSTALLED_PACKAGES}
+}
+
+StartFotaUpdate()
+{
+    if [ ! ${G_PACKAGE_CHECK_FLAG} -eq 1 ];then
+		FotaExit ${E_UNZIPFAILED} "Package checked failed!"
+    fi
+
+    ZipPackageSecureVerify
+
+    BackupPackage
+    BackupUserConfigurationsBeforeUpdate
+
+    fotainfo --set-stat ${G_STAT_UPDATE} --set-stage "updating"
+    recovery --update_package=${G_PACKAGE}
+    sync
+    CheckFotaSuccess
+}
+
+CheckAndSyncActivepart()
+{
+    active_part=$(fotainfo --get-activepart |grep activepart| sed 's/.*:\(.*\)/\1/g')
+    CurrentActiveSystemIS_A
+    if [ $? -eq ${True} ];then
+        active_slot=0
+    else
+        active_slot=1
+    fi
+
+    if [ $active_part -ne $active_slot ];then
+        UpdateLog "Current active partition is not current slot[$active_slot]"
+        UpdateLog "Sync active partition to current slot[$active_slot]"
+        fotainfo --set-activepart ${active_slot}
+        return ${False}
+    fi
+    return ${True}
+}
+
+DualSystemSYNCProcess()
+{
+    CheckAndSyncActivepart
+    isSync=$?
+    G_CURRENT_STAT=`fotainfo --get-stat |grep STAT|sed 's/FOTA STAT:\(.*\) .*/\1/g'`
+    #If unexpect power-cut happened before setting update state to "BACKUP"
+    #we need to check and sync here.
+    if [ ${G_CURRENT_STAT} = "WRITEDONE" ]; then
+        if [ $isSync -eq ${True} ]; then
+            UpdateLog "Update interrupted before activing inactive partitions, so need to active here again"
+            ActiveUpateSuccessPartition
+            FotaExitTriggerSignal 0
+        fi
+        UpdateLog "The slot has been switched, we should refresh update state to \"BACKUP\""
+        fotainfo --set-stat ${G_STAT_BACKUP}
+        G_CURRENT_STAT=`fotainfo --get-stat |grep STAT|sed 's/FOTA STAT:\(.*\) .*/\1/g'`
+    fi
+    if [ ${G_CURRENT_STAT} = "NEEDSYNC" ] || [ ${G_CURRENT_STAT} = "BACKUP" ];then
+        UpdateLog "Force sync partitions due to update state \"${G_CURRENT_STAT}\""
+        /etc/scripts/ab-update.sh force
+        if [ ${G_CURRENT_STAT} = "BACKUP" ];then
+            fotainfo --set-stat ${G_STAT_SUCCEED} --set-stage "success"
+            FotaClearAll
+        elif [ ${G_CURRENT_STAT} = "NEEDSYNC" ];then
+            fotainfo --set-stat ${G_STAT_FAILED} --set-stage "success"
+            FotaClearPackage
+        fi
+        sync
+        sync
+        sleep 1
+        if [ $1 -eq 0 ];then
+            FotaExitTriggerSignal 0
+        fi
+    fi
+
+    if [ ${G_CURRENT_STAT} != "UPDATE" ];then
+        /etc/scripts/ab-update.sh 
+    fi
+}
+
+DualSystemClear_mount_bind_flag()
+{
+    if [ "${bindflag}" = "FALSE" ];then
+        return 0
+    fi
+
+    #UpdateLog "Clear bind_flag"
+    rm -f /usrdata/bind_flag
+    if [ "$overlay_rootfs" = "false" ];then
+        if [ -d /overlay/etc-upper ];then
+            rm -rf /overlay/etc-upper
+            rm -rf /overlay/.etc-work
+            touch /usrdata/.overlay_clr_flag
+        fi
+    else
+        touch /overlay/.overlay_clr_flag
+    fi
+    sync
+}
+
+main()
+{
+    CheckCurrentStorage
+    DualSystemSYNCProcess 0
+
+    if [ ${G_CURRENT_STAT} = "SUCCEED" ]; then
+        FotaClearAll
+        exit 0
+    elif [ ${G_CURRENT_STAT} = "FAILED" ]; then
+        #delete update package
+        FotaClearPackage
+        exit 0
+    fi
+
+    if [ ${G_CURRENT_STAT} = "UPDATE" ];then
+        sysupgrade_led_display
+        FotaInitial
+        StartFotaUpdate
+        fotainfo --set-stat ${G_STAT_WRITEDONE} --set-stage "success"
+        SendEndToServer
+        ActiveUpateSuccessPartition
+        FotaExitTriggerSignal 0
+    fi
+}
+
+avoid_reentry_and_exit()
+{
+   pidfile=/var/run/abfota_update.pid
+   curpid=$$
+   if [ -e $pidfile ];then
+       lastpid=$(cat $pidfile)
+       if [ -d /proc/$lastpid ];then
+          echo "Last abfota_update task[$lastpid] still working! Exit!!!" | tee /dev/kmsg
+          exit ${E_TASKBUSY}
+       fi
+   fi
+   echo $curpid > $pidfile
+}
+
+avoid_reentry_and_exit
+
+[ $# -ne 0 ] && echo  "$0 $@" | tee /dev/kmsg
+[ $# -ne 0 ] && [ $1 = "version" ] && cat /etc/quectel-project-version && exit 0
+[ $# -ne 0 ] && [ $1 = 'start-fota' ] && [ "$2" != "-T" ] && fotainfo --set-stat ${G_STAT_UPDATE} --set-stage "start" && sleep 1
+G_CURRENT_STAT=`fotainfo --get-stat |grep STAT|sed 's/FOTA STAT:\(.*\) .*/\1/g'`
+G_PACKAGENAME=`fotainfo --get-package |grep package| sed 's/.*:\(.*\)/\1/g'`
+G_UPDATE_STAGE=`fotainfo --get-stage |grep stage| sed 's/.*:\(.*\)/\1/g'`
+
+overlay_rootfs=false
+grep -rn "ql_overlay_rootfs=1" /proc/cmdline > /dev/null
+if [ $? -eq 0 ];then
+    overlay_rootfs=true
+fi
+
+
+if [ $2 = '-k' ]
+then
+    KEEPCFGUPDATE="true"
+    mkdir -p /etc/ab_keep_cfg
+else
+    [ ${G_CURRENT_STAT} != "UPDATE" ] && [ -e /etc/ab_keep_cfg ] && rm -rf /etc/ab_keep_cfg
+fi
+
+[ $2 = '-T' ] && {
+    fwtool -q -i /tmp/sysupgrade.meta "${G_PACKAGEPATH}/${G_PACKAGENAME}"
+    ValidateFotaPackage "${G_PACKAGEPATH}/${G_PACKAGENAME}"
+    if [ ${G_PACKAGE_CHECK_FLAG} -eq 1 ];then
+        exit 0
+    else
+        exit $?
+    fi
+}
+
+# Register_Signal 15 Signal_SIGTERM_Hander
+umask 0022
+main
