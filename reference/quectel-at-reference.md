@@ -579,6 +579,11 @@ object we call from the Lua backend. But smd9 is **not the only AT port**:
 | `/dev/smd11` | — | `MCM_atcop_svc` | AT command processor |
 | `/dev/smd10/21/22`, `smdcntl*` | — | free | not AT-verified |
 
+> 🟢 **4.10 update (2026-10-28):** `modem_AT` was rewritten — request queue, drain-before-send and
+> an expected-prefix check that discards crossed replies (`docs/cellular-api-4.10.md` §5) — and the
+> AT console now uses it (`sub_id` = active slot), with `/dev/at_mdm0` only as the fallback when GL's
+> stack is down. The 4.8 observations below are kept as history.
+
 ### ⚠️ The crossed-response bug (why we might want our own channel)
 `ubus call modem.CPU.AT get_result_AT` is **NOT isolated per-caller.** When the modem is churning
 (unstable SIM state → GL's `cellular_manager` polls smd9 hard), a query returns **the response to

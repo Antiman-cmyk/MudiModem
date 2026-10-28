@@ -136,7 +136,18 @@ awareness. Written to `/tmp/mudimodem/samples.jsonl` + `latest.json`, broadcast 
   port, holding its mutex only around each call — it reads `at_mdm0` continuously, USB host
   attached or not. A reply that lands after `mudimodem-at.py` gave up is therefore normally
   consumed by port-bridge, not left for the next invocation (the AT tool keeps only the known
-  minutes-long commands "owed").
+  minutes-long commands "owed"). ⇒ The AT console no longer reads this port in normal operation:
+- `modem_AT` (`/usr/bin/modem_AT`, gl-sdk4-cellular 2026.236; `modem.CPU.AT get_result_AT
+  {cmd, timeout, sub_id, source_flag}` → `{"data": "<module lines incl. OK/ERROR>"}`): one IO
+  thread + idle/work request queue (every caller serialized), `drain_rx_before_tx` drops stale
+  bytes before each send, a reply without the command's `expected_prefix` is discarded ("discard
+  mixed AT response"), a request whose `sub_id` (1/2) differs from the current one is preceded
+  by `AT+QUIMSUB=<n>` (@0x7a68 — so a request WITHOUT sub_id runs on whatever was selected last:
+  the "sub_id 0 drifts" mechanism), and a sensitive command (QNWPREFCFG bands/mode, QNWLOCK,
+  CFUN, COPS, QSCAN, QUIMSLOT, CLCK/CPIN/CPWD, EGMR, …) triggers `ubus call cellular.status
+  get_event` so GL's state manager refreshes. GL's own web AT console
+  (`libcm_network.so send_at_command` @0x14230) goes through it with `source_flag 1`,
+  `sub_id = slot` and a 4095-byte reply buffer — MudiModem's `at_console` now sends the same.
 - `cell_info` failure reply: `{"ret": <code>, "resp": "<text>"}` and no `network_type`
   (handler @0x85dc–0x8624) — what `cellular_compat.cell_info_failed` keys on.
 - GL's opkg feed (`/etc/opkg/distfeeds.conf`) carries `python3-light 3.11.7-1`; every module

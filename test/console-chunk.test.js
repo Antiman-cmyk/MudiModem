@@ -82,7 +82,7 @@ test('renders without store or library (honest empty states, no throw)', () => {
   const vm = makeVm(c, {});
   const txt = textOf(c.render.call(vm, h));
   assert.match(txt, /Raw AT/, 'console card renders');
-  assert.match(txt, /at_mdm0/, 'truth line names the channel even with no store');
+  assert.match(txt, /GL's AT service/, 'truth line names the channel even with no store');
 });
 
 test('truth line shows the ACTIVE SIM handed down by the parent (props, no socket reads)', () => {
@@ -717,5 +717,41 @@ test('the page-lifetime transcript and history stay bounded', () => {
     assert.strictEqual(again.history.length, 100, 'history capped');
     assert.strictEqual(again.history[99], 'AT+N149', 'keeps the newest');
     assert.strictEqual(again.lines.length, vm.LINES_MAX, 'transcript capped at LINES_MAX');
+  } finally { global.window = saved; }
+});
+
+test('the truth line and timeout hint follow the transport the backend reports', async () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  vm.lib = LIB;
+  vm.cell = { slot: 2, carrier: 'AT&T' };
+  assert.match(vm.truthLine, /GL's AT service .*AT&T \(slot 2\)/, 'GL path is the default');
+  const saved = global.window;
+  try {
+    global.window = {
+      $rpcRequest: () => Promise.resolve({
+        ok: true, requested: 1, ran: 1, aborted: false, transport: 'direct', slot: 2, steps: [
+          { cmd: 'AT+SOMETHINGSLOW', status: 'timeout', response: '' }
+        ]
+      })
+    };
+    vm.prompt = 'AT+SOMETHINGSLOW'; vm.selId = null;
+    vm.send();
+    await new Promise((r) => setTimeout(r, 0));
+    assert.match(vm.truthLine, /direct port \/dev\/at_mdm0/, 'a fallback reply relabels the channel');
+    assert.match(vm.lines.find((l) => l.kind === 'err').text, /channel busy/, 'direct-port timeout hint');
+    // A re-created tab (tab switch) keeps the last known transport.
+    const vm2 = makeVm(c, {});
+    vm2.cell = { slot: 2 };
+    assert.match(vm2.truthLine, /direct port/, 'transport survives a tab switch');
+    global.window.$rpcRequest = () => Promise.resolve({
+      ok: true, requested: 1, ran: 1, aborted: false, transport: 'gl', slot: 2, steps: [
+        { cmd: 'AT+X', status: 'timeout', response: '' }
+      ]
+    });
+    vm.prompt = 'AT+X'; vm.send();
+    await new Promise((r) => setTimeout(r, 0));
+    assert.match(vm.truthLine, /GL's AT service/, 'back on GL');
+    assert.match(vm.lines.filter((l) => l.kind === 'err').pop().text, /drops a late answer/, 'GL timeout hint');
   } finally { global.window = saved; }
 });

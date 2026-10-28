@@ -5,9 +5,12 @@
 // so this file MUST be a single expression (module.exports = {...}).
 // Vue is runtime-only: render(h) only, never `template:`.
 //
-// Transport: mudimodem.at_console — OUR OWN channel (/dev/at_mdm0), which
-// answers for the ACTIVE subscription only (no sub_id exists on that port;
-// probed 2026-07-18). The library is static JSON at /mudimodem/at-library.json
+// Transport: mudimodem.at_console. The backend sends through GL's own AT
+// service — the call GL's web console makes, with the ACTIVE SIM's slot as the
+// subscription — and falls back to the direct port /dev/at_mdm0 only while
+// GL's cellular stack is down; each reply names the transport it used
+// (`transport: "gl" | "direct"`) and the truth line repeats it. The library is
+// static JSON at /mudimodem/at-library.json
 // (gzip_static), fetched with $axios. Entries only ever FILL the prompt —
 // nothing auto-runs. set/nv entries need the banner checkbox to Send;
 // free-typed commands always send (Kevin's call, spec §1).
@@ -28,6 +31,7 @@ module.exports = (function () {
     lines: [],
     history: [],
     libStatus: null,      // last library_status answer for this page load
+    transport: "gl",      // what the last reply came through ("gl" | "direct")
     libStatusP: null      // the one library_status request this page makes
   };
 
@@ -55,6 +59,7 @@ module.exports = (function () {
       decodeRows: null,     // [[{f,v,hi},…] per matched response line]
       decodeSrc: "",
       libStatus: STORE.libStatus,   // {local_revision, remote_revision, update_available, checked}
+      transport: STORE.transport,   // "gl" (GL's AT service) | "direct" (/dev/at_mdm0 fallback)
       refreshing: false,
       refreshMsg: ""
     };
@@ -67,12 +72,16 @@ module.exports = (function () {
     // it passes what this tab needs as a prop.
     activeSlot() { return this.cell && this.cell.slot; },
     activeCarrier() { return (this.cell && this.cell.carrier) || ""; },
-    // The port answers for the active subscription ONLY — say so, always.
+    // Which channel answers, and for which SIM — say so, always. GL's AT
+    // service is addressed to the active slot's subscription; the direct port
+    // (only while GL's stack is down) answers for whatever it is on.
     truthLine() {
       var who = this.activeCarrier
         ? this.activeCarrier + " (slot " + this.activeSlot + ")"
         : (this.activeSlot ? "slot " + this.activeSlot : "resolving…");
-      return "own channel /dev/at_mdm0 · active SIM: " + who;
+      return this.transport === "direct"
+        ? "direct port /dev/at_mdm0 (GL's AT service is down) · active SIM: " + who
+        : "GL's AT service · addressed to the active SIM: " + who;
     },
     entries() {
       var lib = this.lib || [];
@@ -360,6 +369,9 @@ module.exports = (function () {
         .then(function (r) {
           self.sending = false;
           if (r && r.error) { self.push("err", r.error); return; }
+          if (r && (r.transport === "gl" || r.transport === "direct")) {
+            STORE.transport = self.transport = r.transport;
+          }
           var got = (r && r.steps) || [];
           var combined = "";
           got.forEach(function (st) {
@@ -370,8 +382,9 @@ module.exports = (function () {
               if (l) self.push(self.classifyLine(l), l);
             });
             if (st.status === "timeout") {
-              self.push("err", "no terminator after " + TOOL_T +
-                "s — the response may still arrive; until it does (or is given up on), the next send waits for it or reports the channel busy");
+              self.push("err", "no terminator after " + TOOL_T + "s — " + (self.transport === "direct"
+                ? "the response may still arrive; until it does (or is given up on), the next send waits for it or reports the channel busy"
+                : "GL's AT service stopped waiting; it drops a late answer before the next command, so nothing gets mixed up"));
             }
           });
           if (r && r.aborted) {

@@ -536,13 +536,21 @@ router and searchable. It's a differentiator no router UI has.
 - **`verified: []` + `source` are load-bearing** — an unverified community command must render as
   "*nobody yet*", not hide. Keeps the library from becoming a folk-remedy collection. AT is
   vendor- *and* firmware-specific; `AT+QNWPREFCFG` is Quectel-only.
-- ⭐ **Transport: our own AT channel, not GL's `modem.CPU.AT`.** (4.10: nothing of GL's is
-  SIGSTOPped any more — `gl_modem` no longer exists as a daemon.) GL's channel (`/dev/smd9`) crosses
-  responses under heavy polling (reference §10). `/dev/at_mdm0` is a free, world-accessible, separate
-  AT port; **`tools/mudimodem-at.py`** (CPython stdlib, no compile, no `pyserial`) drives it cleanly.
-  The backend can spawn it per command. ⚠️ It has **no `sub_id`** (active-subscription context only),
-  so it's right for the console + active-SIM work but NOT the cross-SIM band model — that stays on
-  GL's channel. Gotchas (open blocking = no `EBUSY`; not a tty; filter URCs) are in the file header.
+- ⭐ **Transport (changed 2026-10-28): GL's own AT service FIRST, the direct port only as fallback.**
+  `at_console` runs `ubus -t <timeout+5> call modem.CPU.AT get_result_AT
+  {cmd, timeout, sub_id = active slot, source_flag: 1}` — byte-for-byte what GL's web console sends
+  (`libcm_network.so send_at_command`). 4.10's `modem_AT` (rewritten, gl-sdk4-cellular 2026.236)
+  fixed what made the 4.8 channel unusable: one IO thread with a request queue,
+  `drain_rx_before_tx`, an `expected_prefix` check that discards a crossed reply, `AT+QUIMSUB=<sub_id>`
+  per request, and a `cellular.status get_event` notice when a band/lock/mode/CFUN-type command
+  runs, so GL's state manager sees console changes (contract doc §5). Why move: `/dev/at_mdm0` is
+  read continuously by `port-bridge` (contention), and it answers for whatever subscription that
+  port is on — with SIM2 active it may still answer for SIM1; GL's service is addressed per SIM.
+  **`tools/mudimodem-at.py` on `/dev/at_mdm0`** remains only for when `modem.CPU.AT` is not
+  registered (ubus exit 4 on the FIRST step — nothing sent, so nothing runs twice); replies carry
+  `transport: "gl" | "direct"` and the console labels it. Limits: GL's console caps a reply at
+  4095 bytes (same buffer here); the per-step timeout stays 1–60 s. Direct-port gotchas (open
+  blocking = no `EBUSY`; not a tty; filter URCs) are in the tool's header.
 - ✅ Built 2026-07-18 — see §12 and the Phase-3 spec/plan.
 
 ## 8. Dev gotchas

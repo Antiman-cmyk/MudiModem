@@ -280,14 +280,21 @@ printf '%s' "$CONBODY" | node -e '
     console.log("   console chunk eval OK ->", c.name);
   })' || fail "console chunk eval failed"
 
-echo "8c. at_console backend (clamps + envelope, against the fake tool)"
-ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /tmp/mmtest'
+echo "8c. at_console backend (GL AT service + direct-port fallback, against FAKES only)"
+# Both transports are faked: the real `ubus` would send the test's commands to
+# the live modem through GL's AT service (the test refuses to run without the fake).
+ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /tmp/mmtest/tmp'
 ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mmtest/fake-at.py' < test/fake-at-tool.py
+ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mmtest/fake-ubus-at.py' < test/fake-ubus-at.py
 ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mmtest/t.lua' < test/backend-console.test.lua
-ssh -o BatchMode=yes "root@$HOST" 'MUDIMODEM_AT_TOOL=/tmp/mmtest/fake-at.py lua /tmp/mmtest/t.lua >/dev/null; rc=$?; rm -rf /tmp/mmtest; exit $rc' \
+ssh -o BatchMode=yes "root@$HOST" 'chmod +x /tmp/mmtest/fake-ubus-at.py; MM_TMP=/tmp/mmtest/tmp MUDIMODEM_UBUS=/tmp/mmtest/fake-ubus-at.py MUDIMODEM_AT_TOOL=/tmp/mmtest/fake-at.py lua /tmp/mmtest/t.lua >/dev/null; rc=$?; rm -rf /tmp/mmtest; exit $rc' \
   || fail "at_console backend test failed on-device"
 
-echo "8d. LIVE: one read-only AT through the real tool (per-step envelope)"
+echo "8d. LIVE: one read-only AT through GL's AT service (the console's primary transport)"
+ssh -o BatchMode=yes "root@$HOST" \
+  'ubus -t 10 call modem.CPU.AT get_result_AT "{\"cmd\":\"AT\",\"timeout\":5,\"source_flag\":1}" | grep -q "OK"' \
+  || fail "live AT through modem.CPU.AT did not answer OK"
+echo "8d2. LIVE: one read-only AT through the direct-port fallback tool (per-step envelope)"
 ssh -o BatchMode=yes "root@$HOST" \
   'python3 /usr/lib/mudimodem/mudimodem-at.py --envelope --timeout 6 "AT" | head -1 | grep -qE "^MM-AT:ok:[0-9]+:1/1$"' \
   || fail "live AT through /dev/at_mdm0 did not return a per-step MM-AT:ok frame"

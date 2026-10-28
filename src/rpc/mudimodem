@@ -1153,45 +1153,85 @@ function M.revert_now(args)
 end
 
 -- ============================ Phase 3: AT console ============================
--- Raw AT over OUR OWN channel (/dev/at_mdm0), NOT GL's modem.CPU.AT. The heavy
--- lifting — flock serialization, drain/terminator read loop, timeout — lives
--- in the Python tool; this method only clamps args, spawns it, and parses the
--- per-step envelope (MM-AT:<status>:<elapsed_ms>:<i>/<n>). The port has NO
--- sub_id: it answers for the ACTIVE subscription only. Nothing of GL's is
--- stopped (4.10's poller is cellular_manager via modem_AT on another port).
+-- Transport (2026-10-28): GL's own AT service FIRST — modem_AT behind
+-- `modem.CPU.AT get_result_AT`, the very call GL's web console makes
+-- (libcm_network.so send_at_command -> execute_at_command(bus, cmd, …,
+-- source_flag=1, sub_id = slot)). Read in the 4.10 image (modem_AT,
+-- gl-sdk4-cellular 2026.236; docs/cellular-api-4.10.md §5): it queues every
+-- caller on one IO thread, drains stale bytes before each send, discards a
+-- reply that lacks the command's expected prefix, selects the subscription
+-- with AT+QUIMSUB=<sub_id>, and tells GL's state manager (cellular.status)
+-- when a band / lock / mode / CFUN-type command runs. So the console
+--   - never reads /dev/at_mdm0 alongside port-bridge, whose modem->USB thread
+--     reads that port continuously, and
+--   - answers for the ACTIVE SIM explicitly (sub_id = slot, GL's rule for the
+--     built-in modem) instead of whatever subscription the direct port is on.
+-- The direct port (mudimodem-at.py on /dev/at_mdm0) is only the fallback for
+-- when GL's cellular stack is down (modem.CPU.AT not registered) — decided
+-- before anything was sent, so no command ever runs twice.
 --
--- io.popen blocks this nginx worker until the tool exits. The tool self-limits
--- to timeout + lock-wait, so the block is bounded (consistent with the
--- existing os.execute use in set_bands). No ubus in here, so no cosocket, so
--- this is safe even though it blocks.
-local AT_TOOL = os.getenv("MUDIMODEM_AT_TOOL") or "/usr/lib/mudimodem/mudimodem-at.py"
+-- Both paths block this nginx worker (io.popen) for at most ~timeout per step.
+-- The ubus CLI rather than oui.ubus: its -t bounds the whole wait explicitly
+-- (the ngx -> gl-session proxy applies its own default to the inner call), and
+-- its exit status tells "object not found" from a timeout. Measured with the
+-- 4.10 image's own ubusd + ubus under qemu: a missing object exits 4 (lookup
+-- failure, positive), a timed-out call exits 249 (invoke failure, -7 as a
+-- byte) — so the status is normalized before comparing.
+local AT_TOOL  = os.getenv("MUDIMODEM_AT_TOOL") or "/usr/lib/mudimodem/mudimodem-at.py"
+local UBUS_CLI = os.getenv("MUDIMODEM_UBUS") or "ubus"
+local UBUS_NOT_FOUND, UBUS_TIMEOUT = 4, 7
 
-function M.at_console(args)
-  local raw = args and args.cmd
-  if type(raw) ~= "string" then return { error = "cmd required" } end
-  -- Split into steps on newlines; trim each, drop blanks. (Was: collapse to a
-  -- space. Now each line is its own AT command in one held channel window.)
-  local steps = {}
-  -- Don't reassign the for-loop control var (Lua 5.4+ treats it as <const>).
-  for rawline in (raw .. "\n"):gmatch("(.-)\n") do
-    local line = rawline:gsub("[\r]+", ""):match("^%s*(.-)%s*$")
-    if line ~= "" then steps[#steps + 1] = line end
+-- POSIX single-quote escaping: ' -> '\''.
+local function shq(s) return "'" .. s:gsub("'", "'\\''") .. "'" end
+
+local function now_ms()
+  if ngx and ngx.now then
+    if ngx.update_time then ngx.update_time() end    -- ngx.now() is cached per loop turn
+    return math.floor(ngx.now() * 1000)
   end
-  if #steps == 0 then return { error = "cmd required" } end
-  if #steps > 8 then return { error = "too many steps (max 8)" } end
-  for _, s in ipairs(steps) do
-    if #s > 256 then return { error = "command too long (max 256 chars)" } end
+  return os.time() * 1000
+end
+
+-- The final result code in a reply (modem_AT's `data` keeps the module's own
+-- lines): the LAST of OK / ERROR / +CME ERROR / +CMS ERROR / COMMAND NOT
+-- SUPPORT. nil when none arrived — modem_AT gave up waiting for it.
+local function at_final(data)
+  local kind
+  for line in (data or ""):gmatch("[^\r\n]+") do
+    local l = line:match("^%s*(.-)%s*$")
+    if l == "OK" then kind = "ok"
+    elseif l == "ERROR" or l == "COMMAND NOT SUPPORT" or l:find("^%+CM[ES] ERROR") then kind = "error" end
   end
+  return kind
+end
 
-  local timeout = tonumber(args and args.timeout) or 8
-  if timeout < 1 then timeout = 1 end
-  if timeout > 60 then timeout = 60 end
-  timeout = math.floor(timeout)
+-- One step through GL's AT service. Returns a step table, or (nil, ubus exit
+-- status | reason) when no reply came back.
+local function gl_at_step(cmd, timeout, sub_id)
+  local req = { cmd = cmd, timeout = timeout, source_flag = 1 }
+  if sub_id then req.sub_id = sub_id end
+  local t0 = now_ms()
+  local f = io.popen(UBUS_CLI .. " -t " .. tostring(timeout + 5) ..
+    " call modem.CPU.AT get_result_AT " .. shq(cjson.encode(req)) .. " 2>/dev/null; echo \"MM-RC:$?\"")
+  if not f then return nil, "spawn failed" end
+  local out = f:read("*a") or ""
+  f:close()
+  local rc = tonumber(out:match("MM%-RC:(%d+)%s*$"))
+  if rc and rc > 128 then rc = 256 - rc end        -- ubus exits -status on an invoke failure
+  if rc ~= 0 then return nil, rc or "no exit status" end
+  local ok, obj = pcall(cjson.decode, (out:gsub("MM%-RC:%d+%s*$", "")))   -- C decode; cannot yield
+  local data = ok and type(obj) == "table" and obj.data or nil
+  if type(data) ~= "string" then return nil, "reply without data" end
+  return { cmd = cmd, status = at_final(data) or "timeout", response = data,
+           elapsed_ms = now_ms() - t0 }
+end
 
-  -- POSIX single-quote escaping: ' -> '\''. Build one invocation, all steps.
-  local function q(s) return "'" .. s:gsub("'", "'\\''") .. "'" end
-  local parts = { "python3", q(AT_TOOL), "--envelope", "--timeout", tostring(timeout), q("--") }
-  for _, s in ipairs(steps) do parts[#parts + 1] = q(s) end
+-- The fallback: every step through the direct-port tool in one held channel
+-- window (flock serialization, drain/terminator loop and timeout live in the
+-- tool); parses its per-step envelope MM-AT:<status>:<elapsed_ms>:<i>/<n>.
+local function at_console_direct(steps, timeout)
+  local parts = { "python3", shq(AT_TOOL), "--envelope", "--timeout", tostring(timeout), shq("--") }
+  for _, s in ipairs(steps) do parts[#parts + 1] = shq(s) end
   local f = io.popen(table.concat(parts, " ") .. " 2>/dev/null")
   if not f then return { error = "failed to spawn the AT tool" } end
   local out = f:read("*a") or ""
@@ -1234,6 +1274,60 @@ function M.at_console(args)
                         response = s.response, elapsed_ms = s.elapsed_ms }
   end
   return result
+end
+
+function M.at_console(args)
+  local raw = args and args.cmd
+  if type(raw) ~= "string" then return { error = "cmd required" } end
+  -- Split into steps on newlines; trim each, drop blanks. Each line is its
+  -- own AT command; a sequence stops at the first step that isn't OK.
+  local steps = {}
+  -- Don't reassign the for-loop control var (Lua 5.4+ treats it as <const>).
+  for rawline in (raw .. "\n"):gmatch("(.-)\n") do
+    local line = rawline:gsub("[\r]+", ""):match("^%s*(.-)%s*$")
+    if line ~= "" then steps[#steps + 1] = line end
+  end
+  if #steps == 0 then return { error = "cmd required" } end
+  if #steps > 8 then return { error = "too many steps (max 8)" } end
+  for _, s in ipairs(steps) do
+    if #s > 256 then return { error = "command too long (max 256 chars)" } end
+  end
+
+  local timeout = tonumber(args and args.timeout) or 8
+  if timeout < 1 then timeout = 1 end
+  if timeout > 60 then timeout = 60 end
+  timeout = math.floor(timeout)
+
+  -- The active SIM's subscription: sub_id = slot (GL's own rule for the
+  -- built-in modem, contract doc §2.1). No slot (no SIM, modem resetting) ->
+  -- no sub_id, i.e. modem_AT's current subscription, and the page says so.
+  local slot = active_slot()
+  local res = { ok = true, requested = #steps, ran = 0, aborted = false, steps = {},
+                transport = "gl", slot = slot, sub_id = slot }
+  for i, s in ipairs(steps) do
+    local st, err = gl_at_step(s, timeout, slot)
+    if not st then
+      if i == 1 and err == UBUS_NOT_FOUND then
+        -- GL's AT service isn't registered (cellular stack down): nothing has
+        -- been sent, so the whole sequence can go to the direct port instead.
+        local d = at_console_direct(steps, timeout)
+        if d.ok then d.transport = "direct"; d.slot = slot end
+        return d
+      elseif err == UBUS_TIMEOUT then
+        st = { cmd = s, status = "timeout", response = "", elapsed_ms = (timeout + 5) * 1000 }
+      elseif i == 1 then
+        return { error = "GL's AT service gave no answer (" .. tostring(err) .. ")" }
+      else
+        st = { cmd = s, status = "error", elapsed_ms = 0,
+               response = "GL's AT service gave no answer (" .. tostring(err) .. ")\n" }
+      end
+    end
+    res.steps[i] = st
+    res.ran = i
+    if st.status ~= "ok" then break end
+  end
+  res.aborted = res.ran < #steps
+  return res
 end
 
 -- ======================= Phase: AT library sync (check/refresh) ==============
