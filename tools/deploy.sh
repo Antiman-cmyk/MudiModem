@@ -193,4 +193,13 @@ echo "history persist policy present (default off)"
 ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /lib/upgrade/keep.d && cat > /lib/upgrade/keep.d/mudimodem' \
   < src/upgrade/keep.d/mudimodem
 echo "keep.d registered"
+
+# Same as install.sh: drop a 2.0.0 install's /www payload and sysupgrade.conf entries.
+ssh -o BatchMode=yes "root@$HOST" 'rm -f /www/views/gl-sdk4-ui-mudimodem*.common.js.gz; rm -rf /www/mudimodem
+  f=/etc/sysupgrade.conf
+  if [ -f "$f" ] && grep -q -e mudimodem -e glbattlimit "$f"; then
+    grep -v -e mudimodem -e glbattlimit "$f" > "$f.tmp" || true
+    cat "$f.tmp" > "$f"; rm -f "$f.tmp"
+  fi'
+echo "2.0.0 leftovers cleared"
 echo "deployed to $HOST"

@@ -734,6 +734,9 @@ MudiModem/
   the 4.10 image (§9). Differences from upstream on purpose: ONE copy of the web payload (no
   `/www` dual-write), keep.d *replaces* sysupgrade.conf (never read on the E5800), the library
   refresh writes the served copy, the rc.d links come from each script's START/STOP (test-checked).
+  **Updating from 2.0.0 is handled** (1.x→2 is not, owner's rule): install.sh, uninstall.sh and
+  deploy.sh delete 2.0.0's `/www` payload and its `sysupgrade.conf` entries (every one names
+  `mudimodem` or `glbattlimit`); `verify.sh` 1b asserts none are left.
   Not yet run on a box: `verify.sh` 1b + an actual upgrade with Keep Settings are the gates.
 - ✅ Recon complete: oui page/menu/rpc mechanism mapped, dot restriction + ACL model understood,
   Lua-plugin backend contract confirmed, four-file architecture + auto-revert designed.

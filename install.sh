@@ -188,6 +188,18 @@ echo "  battery charge limit stack installed"
 echo "registering files for firmware upgrades:"
 cp_install src/upgrade/keep.d/mudimodem /lib/upgrade/keep.d/mudimodem 0644
 
+# Updating from 2.0.0: it kept the web payload in /www (now served from
+# /usr/share by the alias nginx loaded above) and registered its files in
+# /etc/sysupgrade.conf (never read on the E5800). Drop both leftovers.
+rm -f /www/views/gl-sdk4-ui-mudimodem*.common.js.gz
+rm -rf /www/mudimodem
+f=/etc/sysupgrade.conf
+if [ -f "$f" ] && grep -q -e mudimodem -e glbattlimit "$f"; then
+  grep -v -e mudimodem -e glbattlimit "$f" > "$f.tmp" || true
+  cat "$f.tmp" > "$f"; rm -f "$f.tmp"
+  echo "  2.0.0 sysupgrade.conf entries removed"
+fi
+
 echo ""
 echo "MudiModem installed. Reload the GL admin in your browser — a MODEM item"
 echo "appears in the top navigation. No reboot needed."

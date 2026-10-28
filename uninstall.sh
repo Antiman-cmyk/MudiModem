@@ -83,6 +83,17 @@ rm -f /usr/bin/mudi.py /usr/bin/mudi-watch.py /etc/config/mudi || true
 echo "removing files:"
 for p in $FILES $DIRS; do [ -e "$p" ] && rm -rf "$p" && echo "  $p"; done
 
+# A box still on 2.0.0 (or updated from it before install.sh cleaned up) has
+# its web payload in /www and its files registered in /etc/sysupgrade.conf.
+rm -f /www/views/gl-sdk4-ui-mudimodem*.common.js.gz
+rm -rf /www/mudimodem
+f=/etc/sysupgrade.conf
+if [ -f "$f" ] && grep -q -e mudimodem -e glbattlimit "$f"; then
+  grep -v -e mudimodem -e glbattlimit "$f" > "$f.tmp" || true
+  cat "$f.tmp" > "$f"; rm -f "$f.tmp"
+  echo "  2.0.0 sysupgrade.conf entries removed"
+fi
+
 # Restart nginx so the cached RPC plugin and our gl-conf.d alias are dropped
 # and the removed chunks 404.
 /etc/init.d/nginx restart 2>/dev/null || true
