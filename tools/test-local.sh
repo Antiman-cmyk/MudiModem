@@ -61,5 +61,6 @@ for shell in sh "busybox sh"; do
   run "$shell test/battlimit-hotplug.test.sh" $shell test/battlimit-hotplug.test.sh
 done
 command -v shellcheck >/dev/null && run "shellcheck" shellcheck -s sh -S warning -e SC2086,SC2034,SC1090,SC2016,SC3043 \
-  src/sbin/mudimodem-revert src/sbin/mudimodem-selfupdate install.sh uninstall.sh src/lib/mudimodem-detach
+  src/sbin/mudimodem-revert src/sbin/mudimodem-selfupdate install.sh uninstall.sh src/lib/mudimodem-detach \
+  src/sbin/glbattlimit src/hotplug/20-glbattlimit src/etc/init.d/* tools/deploy.sh
 exit $rc

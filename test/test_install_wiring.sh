@@ -81,4 +81,78 @@ for p in $install_paths; do
     || fail "install sysupgrade path missing from uninstall FILES: $p"
 done
 
+# --- firmware gate: the SAME numeric compare in install/deploy/verify, and it
+# fails closed on a non-numeric version (dash's `[` errors -> would pass) ---
+gate() { grep -E '^(GLMAJ=|case "\$GLMAJ\$GLMIN"|if \[ -z "\$\{GLVER:-\}" \])' "$1" | sed 's/; then.*/; then/'; }
+[ "$(gate install.sh | wc -l)" -eq 3 ] || fail "install.sh firmware gate: expected the GLMAJ / case / if lines"
+[ "$(gate install.sh)" = "$(gate tools/deploy.sh)" ] || fail "install.sh and deploy.sh firmware gates differ"
+[ "$(gate install.sh)" = "$(gate tools/verify.sh)" ] || fail "install.sh and verify.sh firmware gates differ"
+gate_src=$(gate install.sh)
+for v in 4.10.0:ok 4.10:ok 4.11.2:ok 5.0:ok 4.8.5:refuse 4.9.0:refuse 4.8-rc1:refuse 4.x:refuse 3.215:refuse :refuse; do
+  got=$( (GLVER=${v%:*}; eval "$gate_src echo refuse; else echo ok; fi") 2>/dev/null )
+  [ "$got" = "${v##*:}" ] || fail "firmware gate: '${v%:*}' -> '$got', want ${v##*:}"
+done
+
+# --- order: python before any python service starts; version.json only after
+# every file is installed (a half-done install must not claim the new version) ---
+first() { grep -nE "$2" "$1" | head -n1 | cut -d: -f1; }
+last()  { grep -nE "$2" "$1" | tail -n1 | cut -d: -f1; }
+py=$(first install.sh 'opkg install python3-light')
+for svc in mudimodem-speedtestd mudimodem-collectd; do
+  [ "$py" -lt "$(first install.sh "init.d/$svc restart")" ] || fail "install.sh restarts $svc before installing python3-light"
+done
+[ "$(first tools/deploy.sh 'opkg install python3-light')" -lt "$(first tools/deploy.sh 'mudimodem-speedtestd restart')" ] \
+  || fail "deploy.sh restarts a python service before installing python3-light"
+[ "$(first install.sh '> /etc/mudimodem/version.json')" -gt "$(last install.sh '^[[:space:]]*(gz_install|cp_install)[[:space:]]')" ] \
+  || fail "install.sh writes version.json before the last file is installed"
+[ "$(first tools/deploy.sh 'cat > /etc/mudimodem/version.json')" -gt "$(grep -n 'cat > /' tools/deploy.sh | grep -v version.json | tail -n1 | cut -d: -f1)" ] \
+  || fail "deploy.sh writes version.json before the last file is pushed"
+
+# --- battery limit: stopped for the binary swap, survivors killed, policy re-applied ---
+for f in install.sh tools/deploy.sh; do
+  off=$(first "$f" 'glbattlimit off'); kill=$(first "$f" 'glbattlimi\[t\] _watch')
+  swap=$(first "$f" 'cat > /usr/bin/glbattlimit|src/sbin/glbattlimit[[:space:]]+/usr/bin/glbattlimit')
+  re=$(first "$f" 'init.d/glbattlimit start')
+  [ -n "$off" ] && [ -n "$kill" ] && [ -n "$swap" ] && [ -n "$re" ] || fail "$f: battlimit off / survivor kill / swap / re-apply missing"
+  [ "$off" -lt "$swap" ] && [ "$kill" -lt "$swap" ] && [ "$swap" -lt "$re" ] || fail "$f: battlimit stop -> swap -> re-apply out of order"
+done
+grep -q 'mudimodem-detach' src/sbin/glbattlimit || fail "glbattlimit must launch its watcher through mudimodem-detach (nginx fds)"
+
+# --- AT library: the bundled snapshot never replaces a readable cache ---
+grep -qE '^gz_install src/at-library' install.sh && fail "install.sh installs the AT library snapshot unconditionally (clobbers a refreshed cache)"
+eval "$(grep '^lib_ok()' install.sh)"
+LT=$(mktemp -d)
+gzip -c src/at-library.snapshot.json > "$LT/good.gz"
+head -c 200 "$LT/good.gz" > "$LT/trunc.gz"
+echo '{}' | gzip -c > "$LT/empty.gz"
+cp src/at-library.snapshot.json "$LT/plain.json"
+lib_ok "$LT/good.gz"  || { rm -rf "$LT"; fail "lib_ok rejects a good library cache"; }
+for bad in trunc.gz empty.gz plain.json missing.gz; do
+  lib_ok "$LT/$bad" && { rm -rf "$LT"; fail "lib_ok accepts a bad cache ($bad)"; }
+done
+rm -rf "$LT"
+
+# --- uninstall: a pending change is reverted BEFORE anything is removed, and a
+# failed revert aborts (the watchdog stays armed) ---
+rn=$(first uninstall.sh 'mudimodem-revert restore-now')
+[ -n "$rn" ] || fail "uninstall.sh must revert a pending change (restore-now)"
+for later in 'glbattlimit off' 'rm -rf /usr/lib/mudimodem' 'removing files' 'mudimodem-rever\[t\] watch'; do
+  [ "$rn" -lt "$(first uninstall.sh "$later")" ] || fail "uninstall.sh: restore-now must come before '$later'"
+done
+UT=$(mktemp -d)
+blk=$(sed -n '/^if \[ -f \/etc\/mudimodem\/pending \]/,/^done$/p' uninstall.sh \
+      | sed "s|/etc/mudimodem/pending|$UT/pending|g; s|/usr/sbin/mudimodem-revert|$UT/revert|g; s|pgrep|false|g")
+touch "$UT/pending"
+printf '#!/bin/sh\necho "{\\"ok\\":false}"; exit 1\n' > "$UT/revert"; chmod +x "$UT/revert"
+( set -eu; eval "$blk"; echo CONTINUED ) > "$UT/out" 2>&1 && { rm -rf "$UT"; fail "uninstall.sh went on after a failed restore-now"; }
+grep -q ABORTING "$UT/out" || { rm -rf "$UT"; fail "uninstall.sh: no abort message on a failed revert"; }
+printf '#!/bin/sh\necho "{\\"ok\\":true}"; exit 0\n' > "$UT/revert"
+( set -eu; eval "$blk"; echo CONTINUED ) > "$UT/out" 2>&1 && grep -q CONTINUED "$UT/out" \
+  || { cat "$UT/out" >&2; rm -rf "$UT"; fail "uninstall.sh stopped although restore-now succeeded"; }
+rm -rf "$UT"
+
+# --- boot-check retries in the background, never blocking boot ---
+grep -qE 'mudimodem-revert boot-check.*&[[:space:]]*$' src/etc/init.d/mudimodem-revert \
+  || fail "init.d/mudimodem-revert must run boot-check in the background"
+
 echo "install wiring OK"
