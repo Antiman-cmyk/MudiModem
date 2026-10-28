@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Linear sequence of string references (ADRP+ADD) in the RE segment of a
 section-less aarch64 ELF, filtered to strings of interest."""
-import re, subprocess, sys
+import re, subprocess, sys, tempfile
 path=sys.argv[1]; want=set(sys.argv[2:])
 data=open(path,'rb').read()
 seg=None
@@ -9,8 +9,10 @@ for line in subprocess.run(['readelf','-l','-W',path],capture_output=True,text=T
     m=re.match(r'\s*LOAD\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s+0x[0-9a-f]+\s+0x([0-9a-f]+)\s+0x[0-9a-f]+\s+R E',line)
     if m: seg=(int(m.group(1),16),int(m.group(2),16),int(m.group(3),16)); break
 off,vaddr,size=seg
-open('seg.bin','wb').write(data[off:off+size])
-dis=subprocess.run(['aarch64-linux-gnu-objdump','-D','-b','binary','-m','aarch64','--adjust-vma=0x%x'%vaddr,'seg.bin'],capture_output=True,text=True).stdout
+# objdump reads the raw segment from a file; keep it out of the working tree.
+with tempfile.NamedTemporaryFile(suffix='.bin') as seg_bin:
+    seg_bin.write(data[off:off+size]); seg_bin.flush()
+    dis=subprocess.run(['aarch64-linux-gnu-objdump','-D','-b','binary','-m','aarch64','--adjust-vma=0x%x'%vaddr,seg_bin.name],capture_output=True,text=True).stdout
 # strings table: vaddr -> string
 strs={}
 for m in re.finditer(rb'[\x20-\x7e]{3,60}\0',data[off:off+size]):
