@@ -67,6 +67,12 @@ at 'AT+QNWPREFCFG=\"policy_band\"' 1      # ← WRONG: double-escaped → ERROR
 
 **RULE: never send `sub_id=0`. Always resolve the active slot and pass its explicit sub_id.**
 
+> 🟢 **2026-10-28, from GL's own code in the 4.10 image** (`docs/cellular-api-4.10.md` §2.1): for
+> the built-in modem GL uses **`sub_id = slot`** (1 or 2) for every per-SIM AT read, including
+> `AT+CIMI`, and omits `sub_id` entirely for anything else — it never sends 0. The table above
+> (sub_id 0 ↔ AT&T) recorded what the *floating default* answered at the time; sub_id 2 is
+> slot 2's own subscription.
+
 CLAUDE.md §6 previously said *"`sub_id` MUST equal the active slot"*. That is **coincidentally true
 here** (slot 1 ↔ sub_id 1) and **wrong in general** — slot 2 maps to sub_id **0**.
 

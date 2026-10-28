@@ -55,7 +55,9 @@ object/method/key strings a stretch of code uses).
 - DTB: `/soc/backlight` (`pwm-backlight`, 120 levels) → `soc:backlight`; charger/gauge nodes
   `sgm41542S`, `sgm,sgm41600`, `cellwise,cw2217`, `qcom,battery-charger`, `awinic,aw35615`.
 - Baseband in the OTA: NA `RG650VNA01ACR02A04G8G` (= the 4.8 box's), EU `RG650VEU00ADR02A04G8G`.
-- busybox applets: no `pkill`; `pgrep pidof killall flock nohup setsid timeout` present.
+- busybox applets: no `pkill`, **no `setsid`** (corrected 2026-10-28 by running the image's
+  busybox under qemu: `busybox --list`); `pgrep pidof killall flock nohup timeout
+  start-stop-daemon` present.
 
 ## Additions 2026-09-02 (second pass — cell_info rows, tower lock, redial)
 - `set/get/scan_cell_tower` are exported by **`libcm_network.so`** (0x11e18 / 0x12384 / 0x12b24),
@@ -69,3 +71,21 @@ object/method/key strings a stretch of code uses).
 - With `qemu-user-static` installed, the image's own `lua`, `cjson.so` and `jsonfilter` run on the
   dev box: `qemu-aarch64-static -L <rootfs> <rootfs>/usr/bin/lua …` (qemu redirects absolute paths
   that exist under the rootfs). `tools/test-local.sh` uses this for the router-Lua test pass.
+
+## Running the image's own userland (2026-10-28)
+- Busybox applets: `qemu-aarch64-static -L firmware/rootfs firmware/rootfs/bin/busybox <applet> …`;
+  a directory of one-line wrappers (one per `busybox --list` entry) on `PATH` runs whole shell
+  test suites under the router's ash + applets. Set `QEMU_LD_PREFIX=firmware/rootfs` once
+  `binfmt_misc` has the aarch64 entry (`cat /usr/lib/binfmt.d/qemu-aarch64.conf >
+  /proc/sys/fs/binfmt_misc/register`), or busybox's own re-execs fail to find the musl loader.
+- ⚠️ `-L` redirects every path that EXISTS under the rootfs. The image ships an empty `/proc`
+  mount point, so LISTING `/proc` (pgrep, a /proc scan) silently sees nothing while
+  `/proc/<pid>/…` falls through to the host. `rmdir firmware/rootfs/proc` before relying on it.
+- Python: `python3-light` / `python3-base` / `libpython3-3.11` from the feed in
+  `etc/opkg/distfeeds.conf` (`…/packages/aarch64_cortex-a53/packages/Packages.gz`), each `.ipk`
+  is a tar.gz whose `data.tar.gz` unpacks into the rootfs. The test suites additionally need
+  `python3-unittest`, and `test/speedtest.test.py`'s fake HTTP server `python3-email` +
+  `python3-codecs` (idna) — test-only; the shipped code needs none of them.
+- `re-tools/xref.py <elf> find <text>` lists code that references a string or a GOT import
+  (`got:kill`); `xref.py <elf> dis <start> <end>` disassembles a range annotated with both —
+  how the 2026-10-28 facts in `docs/cellular-api-4.10.md` §2.1/§5 were read.

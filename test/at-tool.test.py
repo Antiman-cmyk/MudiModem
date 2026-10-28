@@ -190,6 +190,12 @@ class LateReplies(unittest.TestCase):
     def test_long_commands_are_owed_longer(self):
         self.assertEqual(mm.owed_s("at+qscan=3,1"), 600)
         self.assertEqual(mm.owed_s("AT+CSQ"), mm.OWED_DEFAULT_S)
+        # port-bridge drains at_mdm0 between our invocations, so an ordinary
+        # timeout must not lock the console for minutes; only the known
+        # minutes-long network commands keep a long window.
+        self.assertLessEqual(mm.OWED_DEFAULT_S, 30)
+        self.assertEqual(mm.owed_s("AT+COPS=?"), 180)
+        self.assertEqual(mm.owed_s("at+cgatt=1"), 180)
 
 
 class ATToolTest(unittest.TestCase):

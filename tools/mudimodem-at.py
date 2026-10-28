@@ -44,7 +44,7 @@ Late replies (a step that timed out):
     - the owed reply's final code arrives -> it is discarded, the marker
       cleared, the command sent; step 1's response says so in a note line;
     - nothing final, and the owed command may still be running (younger than
-      its owed_s: 600 s for AT+QSCAN, 180 s otherwise) -> NOT sent:
+      its owed_s: 600 s for AT+QSCAN, 180 s for COPS=?/CGATT, 15 s otherwise) -> NOT sent:
       MM-AT:busy + the reason, so the late reply can never be misread;
     - nothing final, owed_s exceeded -> the reply is taken as lost, the
       command sent, step 1's response says so.
@@ -69,8 +69,18 @@ URC_PREFIXES = ("RDY", "+CPIN:", "+QUSIM:", "+QUSIM", "+CPINDS:", "+QIND:",
 # how long the line must then stay quiet, and how long a reply can be owed.
 SETTLE_MAX_S = 2.0
 SETTLE_QUIET_S = 0.3
-OWED_DEFAULT_S = 180            # 3GPP's slowest network commands (COPS, CGATT)
-OWED_LONG = (("AT+QSCAN", 600),)   # GL's own scan timeout
+# Only commands the modem is known to work on for minutes keep the channel
+# "owed" for long. Everything else gets a short grace: GL's port-bridge
+# (port-bridge at_mdm0 at_usb0 0) runs a modem->USB thread that polls and
+# reads at_mdm0 continuously, host attached or not (read in the 4.10 image:
+# usr/bin/port-bridge, modem_to_usb_bridge_* — poll()/read() with only brief
+# mutex holds), so a reply landing after we gave up is normally consumed
+# there, not kept for our next invocation. A long blanket wait would just
+# lock the console out for minutes after an ordinary timeout.
+OWED_DEFAULT_S = 15
+OWED_LONG = (("AT+QSCAN", 600),     # GL's own scan timeout
+             ("AT+COPS=?", 180),    # 3GPP operator scan
+             ("AT+CGATT", 180))     # (de)attach can take the network's time
 NOTE = "[mudimodem-at] "
 
 

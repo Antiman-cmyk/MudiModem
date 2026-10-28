@@ -426,8 +426,9 @@ of the same carrier sub_id 1 matched for slot 2 (every AT read/write hit SIM1), 
 land on the unstable 0, and a roaming SIM (QSPN = visited PLMN ≠ IMSI home PLMN) never confirmed, so
 `set_cell_lock` refused. `resolve_active` now tries **the slot's own sub_id first, then the other,
 never 0**, confirms by **IMSI (`AT+CIMI`) first** (unique per SIM, roaming-proof), PLMN only as the
-fallback, and keys its cache on the SIM's iccid. 🔴 `AT+CIMI` per `sub_id` through `modem.CPU.AT`
-is not yet run on a live box — if it doesn't answer, the PLMN path (slot-first) still applies.
+fallback, and keys its cache on the SIM's iccid. 🟢 **Settled from the 4.10 image (contract doc
+§2.1): GL itself uses `sub_id = slot` for the built-in modem, reads each slot's IMSI with
+`AT+CIMI` at that sub_id, and never sends `sub_id:0` (`execute_at_command` omits it).**
 Writes (`set_bands` / `set_cell_lock` / `clear_cell_lock`) also take the `slot` the page read its
 picture for and refuse when the active SIM has changed; the page re-reads on a slot change.
 `panic` clears modem locks on sub_ids 1 **and** 2.
@@ -897,10 +898,15 @@ MudiModem/
   script fd, so it also works under dash. Pages: NSA anchor shown as B, PAUSED freezes, pins are
   absolute, failed preloads retry, SIM switches break lines, the speed-test poll is silent and
   dies with the tab, the battery-limit card refreshes, the console keeps its transcript across
-  tabs. 🔴 Live-box checks owed: `AT+CIMI` per sub_id; whether `/dev/at_mdm0` holds a late reply
-  between invocations (else the console reports busy for up to 180 s / 600 s after a timeout);
-  busybox `sleep` fractions (glbattlimit falls back to 1 s steps). Known, not fixed: after a
-  backward clock step the eMMC flush cursor (a sample `t`) waits until the clock passes it again.
+  tabs. **Verified against the 4.10 image the same day** (`firmware/rootfs`, the router's own
+  busybox / Lua / jsonfilter / python3-light 3.11.7 under qemu): every Lua, Python and shell
+  suite passes on them; sub_id = slot + `AT+CIMI` per sub_id is GL's own code path; busybox
+  `sleep` takes fractions, `pgrep -f` is regex, **`setsid` does not exist** (harmless — procd
+  and nginx signal by pid); port-bridge reads `at_mdm0` continuously, so the AT tool keeps
+  only QSCAN / COPS=? / CGATT "owed" (600 / 180 / 180 s) and others 15 s; the old glbattlimit
+  orphan-watcher bug reproduces on the router's ash and the fix removes it. Details: contract
+  doc §2.1/§5, `reference/4.10/re-notes.md`. Known, not fixed: after a backward clock step the
+  eMMC flush cursor (a sample `t`) waits until the clock passes it again.
 - 🔭 Later: an ipk. (`boot-check` now has its boot hook — `/etc/init.d/mudimodem-revert`,
   START=96, installed + enabled by install.sh/deploy.sh; `/etc/sysupgrade.conf` itself is already
   handled by `deploy.sh` — see the corrected bullet below.)
