@@ -69,3 +69,25 @@ object/method/key strings a stretch of code uses).
 - With `qemu-user-static` installed, the image's own `lua`, `cjson.so` and `jsonfilter` run on the
   dev box: `qemu-aarch64-static -L <rootfs> <rootfs>/usr/bin/lua …` (qemu redirects absolute paths
   that exist under the rootfs). `tools/test-local.sh` uses this for the router-Lua test pass.
+
+## Additions 2026-10-28 (firmware-upgrade persistence)
+- Every E5800 upgrade path ends in `/usr/bin/abfota_update start-fota` (copy:
+  `reference/4.10/abfota_update`): GL's `upgrade` RPC (`model == "e5800"` branch),
+  `one_click_upgrade`, and `/sbin/sysupgrade` via `lib/upgrade/platform.sh`. `GetAbNootaFileList`:
+  with `-k` the keep list is `cat /lib/upgrade/keep.d/*` minus `^#|^$`; without it, the OTA's
+  `quectel_ab_noota_filelist.txt`, which is comments only. `BackupUserConfigurationsBeforeUpdate`
+  copies `/data/* /etc/* /var/*` always and `/bin /lib /sbin /usr` when the cmdline carries
+  `ql_overlay_rootfs=1` (the box has a writable `/usr`, so it does); every other line — `/www` — is
+  skipped. Lines are matched by `case` and copied with a quoted `cp -a`: no globs, no leading blanks.
+  `lib/preinit/80_mount_root` then wipes the overlay and restores `/overlay/cfg_bak/*` onto `/`
+  (opkg packages are gone). `/etc/sysupgrade.conf` appears nowhere on this path.
+- `-k` is `keep_package` (not `keep_config`): `re-tools/luaq.py` on the `upgrade` RPC shows
+  `string.format("…abfota_update start-fota %s", keep_package and "-k" or "")`. GL's upgrade page
+  sends `keep_package = keep_config` from its single Keep Settings switch.
+- `ui.get_menu_list` reads only `/usr/share/oui/menu.d/*.json` (its constants: `dir`, `%.json$`,
+  `readfile`, `decode`) — no check that a view's chunk exists in `/www/views`.
+- The image's `nginx` runs under qemu with a throw-away config (`-p <dir> -c <conf>`, `user root;`
+  so the worker can read the scratch tree); that is how the gl-conf.d alias was checked.
+- The image ships no Python: no `/usr/bin/python3`, no `python3*` in `usr/lib/opkg/info`.
+  `python3-light` (3.11.7-1, GL's `glinet_gli_packages` feed) carries every module our tools
+  import (`fcntl gzip json select signal subprocess tempfile`).

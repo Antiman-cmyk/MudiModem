@@ -1,0 +1,48 @@
+# MudiModem — what a GL firmware upgrade carries over (installed as
+# /lib/upgrade/keep.d/mudimodem). Every E5800 upgrade path ends in
+# `abfota_update start-fota`, which with "Keep Settings" (-k) backs up exactly
+# the paths listed in /lib/upgrade/keep.d/* and wipes the rest of the overlay.
+# It never reads /etc/sysupgrade.conf, and it copies only /etc /usr /lib /bin
+# /sbin /data /var entries — /www is silently dropped, which is why our web
+# payload lives under /usr/share/mudimodem/www. Format (abfota's parser): one
+# path per line, no leading whitespace, no globs; a directory keeps its tree.
+
+# This file, so the next upgrade still knows the list.
+/lib/upgrade/keep.d/mudimodem
+
+# Web payload (view chunks + AT library) and the nginx alias that serves it.
+/usr/share/mudimodem/
+/etc/nginx/gl-conf.d/mudimodem.conf
+
+# Menu, validator, /ws seed, RPC backend.
+/usr/share/oui/menu.d/mudimodem.json
+/usr/share/oui/menu.d/mudimodem-tracking.json
+/usr/share/oui/menu.d/mudimodem-speedtest.json
+/usr/share/gl-validator.d/mudimodem.lua
+/usr/share/gl-ngx/websocket/mudimodem.lua
+/usr/lib/oui-httpd/rpc/mudimodem
+
+# Helpers, daemons, tools.
+/usr/lib/mudimodem/
+/usr/sbin/mudimodem-revert
+/usr/sbin/mudimodem-selfupdate
+/usr/sbin/mudimodem-collectd
+/usr/sbin/mudimodem-speedtestd
+/usr/bin/glbattlimit
+/etc/hotplug.d/i2c/20-glbattlimit
+
+# Services, plus their procd enable links (S<START>/K<STOP>, from each script).
+/etc/init.d/mudimodem-collectd
+/etc/rc.d/S95mudimodem-collectd
+/etc/rc.d/K10mudimodem-collectd
+/etc/init.d/mudimodem-speedtestd
+/etc/rc.d/S96mudimodem-speedtestd
+/etc/rc.d/K10mudimodem-speedtestd
+/etc/init.d/mudimodem-revert
+/etc/rc.d/S96mudimodem-revert
+/etc/init.d/glbattlimit
+/etc/rc.d/S99glbattlimit
+
+# State + settings: version/base, a pending confirm-or-revert (boot-check
+# restores it), charge limit, history policy + eMMC history, speed tests.
+/etc/mudimodem/

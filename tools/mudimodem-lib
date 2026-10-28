@@ -10,14 +10,14 @@ Modes:
 CPython stdlib only. curl handles TLS (proven on the box; system CA bundle).
 Env overrides (tests/forks):
   MUDIMODEM_LIB_URL          base raw dir URL (default = pinned official repo)
-  MUDIMODEM_CACHE            cache .gz path (default /www/mudimodem/at-library.json.gz)
+  MUDIMODEM_CACHE            cache .gz path (default /usr/share/mudimodem/www/mudimodem/at-library.json.gz)
   MUDIMODEM_CURL             curl binary (default 'curl')
   MUDIMODEM_SKIP_MODEL_GUARD '1' to bypass the E5800 write guard (tests only)
 """
 import gzip, json, os, subprocess, sys, tempfile
 
 DEFAULT_URL = "https://raw.githubusercontent.com/kevinherzig/mudi7-at-library/main/dist"
-DEFAULT_CACHE = "/www/mudimodem/at-library.json.gz"
+DEFAULT_CACHE = "/usr/share/mudimodem/www/mudimodem/at-library.json.gz"   # served at /mudimodem/ (nginx alias)
 MAX_BYTES = 1 << 20   # 1 MiB sanity cap
 
 

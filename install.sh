@@ -47,18 +47,25 @@ grab() { tmp=$(mktemp); fetch "$1" > "$tmp" || { echo "fetch failed: $1" >&2; rm
 gz_install()  { grab "$1"; gzip -9 -c "$tmp" > "$2"; rm -f "$tmp"; echo "  $2"; }         # $1 src, $2 .gz target
 cp_install()  { grab "$1"; cat "$tmp" > "$2"; chmod "$3" "$2"; rm -f "$tmp"; echo "  $2"; } # $1 src, $2 target, $3 mode
 
-mkdir -p /www/views /www/mudimodem /usr/lib/mudimodem /usr/share/oui/menu.d \
-         /usr/share/gl-validator.d /usr/lib/oui-httpd/rpc /usr/sbin /usr/bin \
-         /etc/init.d /etc/mudimodem /etc/hotplug.d/i2c /usr/share/gl-ngx/websocket
+mkdir -p /usr/share/mudimodem/www/views /usr/share/mudimodem/www/mudimodem \
+         /usr/lib/mudimodem /usr/share/oui/menu.d /usr/share/gl-validator.d \
+         /usr/lib/oui-httpd/rpc /usr/sbin /usr/bin /etc/init.d /etc/mudimodem \
+         /etc/hotplug.d/i2c /usr/share/gl-ngx/websocket /etc/nginx/gl-conf.d \
+         /lib/upgrade/keep.d
 
+# The web payload lives under /usr/share/mudimodem/www, NOT /www: a firmware
+# upgrade never restores /www. Our gl-conf.d snippet maps the SPA's URLs
+# (/views/gl-sdk4-ui-mudimodem*, /mudimodem/) onto it; nginx picks it up at the
+# restart below.
 echo "installing view chunks + menu + library:"
-gz_install src/views/mudimodem.js          /www/views/gl-sdk4-ui-mudimodem.common.js.gz
-gz_install src/views/mudimodem-tracking.js /www/views/gl-sdk4-ui-mudimodem-tracking.common.js.gz
-gz_install src/views/mudimodem-console.js  /www/views/gl-sdk4-ui-mudimodem-console.common.js.gz
-gz_install src/views/mudimodem-speedtest.js /www/views/gl-sdk4-ui-mudimodem-speedtest.common.js.gz
+gz_install src/views/mudimodem.js           /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem.common.js.gz
+gz_install src/views/mudimodem-tracking.js  /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-tracking.common.js.gz
+gz_install src/views/mudimodem-console.js   /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-console.common.js.gz
+gz_install src/views/mudimodem-speedtest.js /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-speedtest.common.js.gz
 # Battery tab is an in-page lazy chunk (no menu JSON) — same pattern as Tracking.
-gz_install src/views/mudimodem-battery.js  /www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz
-gz_install src/at-library.snapshot.json    /www/mudimodem/at-library.json.gz
+gz_install src/views/mudimodem-battery.js   /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz
+gz_install src/at-library.snapshot.json     /usr/share/mudimodem/www/mudimodem/at-library.json.gz
+cp_install src/nginx/mudimodem.conf         /etc/nginx/gl-conf.d/mudimodem.conf           0644
 cp_install src/menu/mudimodem.json          /usr/share/oui/menu.d/mudimodem.json          0644
 cp_install src/menu/mudimodem-tracking.json /usr/share/oui/menu.d/mudimodem-tracking.json 0644
 cp_install src/menu/mudimodem-speedtest.json /usr/share/oui/menu.d/mudimodem-speedtest.json 0644
@@ -74,11 +81,18 @@ echo "  /etc/mudimodem/version.json (${VER:-unknown} from $BASE)"
 echo "installing shared library + helpers:"
 # cellular_compat.py: the one place Python knows GL 4.10's cellular shapes
 # (collectd, speedtest). mudimodem-detach: detached-child wrapper.
+# mudimodem-deps: the python3 runtime (install now; re-heal after an upgrade).
 # websocket/mudimodem.lua: GL's /ws seeds the mudimodem.collect subscription
 # from it (dofile'd per subscribe — no nginx restart needed to update).
 cp_install src/lib/cellular_compat.py /usr/lib/mudimodem/cellular_compat.py 0644
 cp_install src/lib/mudimodem-detach   /usr/lib/mudimodem/mudimodem-detach   0755
+cp_install src/lib/mudimodem-deps     /usr/lib/mudimodem/mudimodem-deps     0755
 cp_install src/ws/mudimodem.lua       /usr/share/gl-ngx/websocket/mudimodem.lua 0644
+
+# python3 for the collector, the speed test and the AT tool — BEFORE any of
+# those services starts (their init scripts would otherwise spawn a heal that
+# races this opkg run). Offline-tolerant: a later boot heals it.
+/usr/lib/mudimodem/mudimodem-deps install || true
 
 echo "installing AT channel + library tool:"
 cp_install tools/mudimodem-at.py /usr/lib/mudimodem/mudimodem-at.py 0644
@@ -169,50 +183,10 @@ fi
 # Do NOT start a limit on install (default disabled; start would no-op anyway).
 echo "  battery charge limit stack installed"
 
-# Python for the collector, the speed test and the AT tool. python3-light carries
-# everything they import (json/os/subprocess/select/fcntl/socket). Offline-tolerant.
-if ! opkg list-installed 2>/dev/null | grep -q "^python3-light "; then
-  opkg update 2>/dev/null || true
-  opkg install python3-light || true
-fi
-
-# Survive a firmware upgrade (our files live outside /etc/config). Idempotent.
-echo "registering files in /etc/sysupgrade.conf:"
-f=/etc/sysupgrade.conf; touch "$f"
-for p in \
-  /www/views/gl-sdk4-ui-mudimodem.common.js.gz \
-  /www/views/gl-sdk4-ui-mudimodem-tracking.common.js.gz \
-  /www/views/gl-sdk4-ui-mudimodem-console.common.js.gz \
-  /www/views/gl-sdk4-ui-mudimodem-speedtest.common.js.gz \
-  /www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz \
-  /www/mudimodem/at-library.json.gz \
-  /usr/share/oui/menu.d/mudimodem.json \
-  /usr/share/oui/menu.d/mudimodem-tracking.json \
-  /usr/share/oui/menu.d/mudimodem-speedtest.json \
-  /usr/lib/mudimodem/cellular_compat.py \
-  /usr/lib/mudimodem/mudimodem-detach \
-  /usr/share/gl-ngx/websocket/mudimodem.lua \
-  /usr/lib/mudimodem/mudimodem-at.py \
-  /usr/lib/mudimodem/mudimodem-lib \
-  /usr/lib/mudimodem/mudimodem-speedtest.py \
-  /usr/sbin/mudimodem-speedtestd \
-  /etc/init.d/mudimodem-speedtestd \
-  /usr/sbin/mudimodem-revert \
-  /etc/init.d/mudimodem-revert \
-  /usr/sbin/mudimodem-selfupdate \
-  /usr/share/gl-validator.d/mudimodem.lua \
-  /usr/lib/oui-httpd/rpc/mudimodem \
-  /usr/sbin/mudimodem-collectd \
-  /etc/init.d/mudimodem-collectd \
-  /etc/mudimodem/version.json \
-  /usr/bin/glbattlimit \
-  /etc/hotplug.d/i2c/20-glbattlimit \
-  /etc/init.d/glbattlimit \
-  /etc/mudimodem/battlimit.json \
-  /etc/mudimodem/history.json \
-  /etc/mudimodem/history \
-; do grep -qxF "$p" "$f" || echo "$p" >> "$f"; done
-echo "  done"
+# Survive a firmware upgrade. Every E5800 upgrade runs abfota_update, which
+# keeps exactly what /lib/upgrade/keep.d lists (never /etc/sysupgrade.conf).
+echo "registering files for firmware upgrades:"
+cp_install src/upgrade/keep.d/mudimodem /lib/upgrade/keep.d/mudimodem 0644
 
 echo ""
 echo "MudiModem installed. Reload the GL admin in your browser — a MODEM item"
