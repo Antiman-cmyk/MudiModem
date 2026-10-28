@@ -17,7 +17,14 @@
 #
 # Live storage is tmpfs (RAM). Optional eMMC backup (Config → keep history
 # across reboots) periodically APPENDs new lines to /etc/mudimodem/history/
-# and seeds tmpfs from that on boot — off by default.
+# (two rotating segments per stream, see rotate_segment) and seeds tmpfs from
+# that on boot — off by default.
+#
+# Every interval/gate here (tick sleep, battery cadence, eMMC flush, push
+# probe, carrier cache, log rate limits) runs on time.monotonic(): a wall
+# clock stepped BACKWARD (NTP correcting a fast clock, a manual set) would
+# otherwise stall sampling and pushes for the size of the step. Sample
+# timestamps (`t`) stay wall-clock epoch ms — that is what the charts plot.
 #
 # Stdlib only; shares cellular_compat.py (/usr/lib/mudimodem). Managed by
 # procd (/etc/init.d/mudimodem-collectd), respawned on crash.
@@ -72,6 +79,9 @@ BATT_LIMIT_LIMF = os.environ.get("MUDIMODEM_BATTLIMIT_LIMF", "/tmp/glbattlimit.l
 # the new lines to /etc/mudimodem/history/ (overlay/eMMC). On startup we seed
 # empty tmpfs from that backup so charts survive reboot. Off by default —
 # see /etc/mudimodem/history.json { "enabled": false }.
+# Each stream is TWO segments, <stream>.prev.jsonl + <stream>.jsonl (the
+# current one, appended to) — see rotate_segment for why that is the flash-
+# friendly shape.
 HISTORY_CFG = os.environ.get("MUDIMODEM_HISTORY_CFG",
                              "/etc/mudimodem/history.json")
 HISTORY_PERSIST = os.environ.get("MUDIMODEM_HISTORY_PERSIST",
@@ -117,6 +127,23 @@ def build_sample(modem, cell_info, networks_info=None, t=None, carrier=None):
     return s
 
 
+class Gate:
+    """Fires at most once per `interval` seconds of MONOTONIC time (and on the
+    first look). Used for every cadence in the loop, so a wall-clock step can
+    neither stall nor burst them."""
+
+    def __init__(self, interval):
+        self.interval = interval
+        self.last = None
+
+    def due(self, now=None):
+        now = time.monotonic() if now is None else now
+        if self.last is not None and now - self.last < self.interval:
+            return False
+        self.last = now
+        return True
+
+
 class CarrierCache:
     """`cellular.network info` is the identity/carrier source (the same call
     GL's ws merge layer uses). It is re-read only every CARRIER_INTERVAL or
@@ -128,29 +155,66 @@ class CarrierCache:
         self.info = None
 
     def get(self, slot):
-        if self.info is None or slot != self.slot or time.time() - self.at >= CARRIER_INTERVAL:
+        now = time.monotonic()
+        if self.info is None or slot != self.slot or now - self.at >= CARRIER_INTERVAL:
             self.info = ubus_call("cellular.network", "info") or {}
-            self.at = time.time()
+            self.at = now
             self.slot = slot
         return self.info
 
 
 _carrier = CarrierCache()
 
+# ---- a FAILED cell_info read is not "no service" ---------------------------
+# ubus_call returns None on rc != 0 / the 8 s timeout / bad JSON, and GL's
+# error replies carry no `network_type`. Fed to build_sample, either one
+# normalized exactly like a no-service cell (registered:false, null metrics):
+# a fake outage in the history, on the strip and in "SIM N is not registered".
+# A genuine no-service reply always HAS network_type (0) — that one still
+# yields the honest no-service sample (cc.cell_info_failed tells them apart).
+# A failed read skips the tick: no line, latest.json untouched, no push.
+_cell_fail = {"n": 0, "last_log": None}
+CELL_FAIL_LOG_EVERY_S = 300
+
+
+def _cell_failure(cell):
+    """Count one failed read; say so on stderr (procd -> logd) at once, then at
+    most every CELL_FAIL_LOG_EVERY_S — a wedged modem stack must be visible in
+    logread without a line every 10 s."""
+    _cell_fail["n"] += 1
+    now = time.monotonic()
+    last = _cell_fail["last_log"]
+    if last is None or now - last >= CELL_FAIL_LOG_EVERY_S:
+        _cell_fail["last_log"] = now
+        detail = "no reply (ubus failed or timed out)" if cell is None else \
+            "error reply %s" % json.dumps(cell)[:200]
+        sys.stderr.write("collectd: cell_info read failed, tick skipped (%d so far): %s\n"
+                         % (_cell_fail["n"], detail))
+        sys.stderr.flush()
+
 
 def collect_sample():
     """The 4.10 read path: modem status (active slot, GL's no-arg modems[] form),
     then ONE cell_info {bus,slot} (the AT-backed call — exactly once per tick),
-    carrier from the slow identity cache."""
+    carrier from the slow identity cache. None = skip this tick: no active
+    slot, or the cell_info read itself failed (cc.cell_info_failed)."""
     modem = ubus_call("cellular.modem", "status")
     slot = cc.active_slot(modem, BUS)
     if slot is None:
         return None
     cell = ubus_call("cellular.network", "cell_info", {"bus": BUS, "slot": slot})
+    if cc.cell_info_failed(cell):
+        _cell_failure(cell)
+        return None
+    if _cell_fail["n"]:
+        sys.stderr.write("collectd: cell_info recovered after %d failed read(s)\n" % _cell_fail["n"])
+        sys.stderr.flush()
+        _cell_fail["n"] = 0
+        _cell_fail["last_log"] = None
     return build_sample(modem, cell, _carrier.get(slot))
 
 
-_ws_fail = {"n": 0, "last_log": 0.0}
+_ws_fail = {"n": 0, "last_log": None}
 WS_FAIL_LOG_EVERY_S = 60
 
 # ---- browser-presence gate for the push bus ---------------------------------
@@ -167,14 +231,15 @@ WS_FAIL_LOG_EVERY_S = 60
 # silence.
 WS_PROBE_IDLE_S     = float(os.environ.get("MUDIMODEM_WS_PROBE_IDLE", "30"))
 WS_PROBE_ATTACHED_S = float(os.environ.get("MUDIMODEM_WS_PROBE_ATTACHED", "60"))
-_ws_gate = {"attached": True, "at": 0.0}
+_ws_gate = {"attached": True, "at": None}
 
 
 def ws_attached(now=None):
-    """True when a browser is (or may be) subscribed; re-probed on the cadence above."""
-    now = time.time() if now is None else now
+    """True when a browser is (or may be) subscribed; re-probed on the cadence
+    above (monotonic seconds; `now` is for tests)."""
+    now = time.monotonic() if now is None else now
     every = WS_PROBE_ATTACHED_S if _ws_gate["attached"] else WS_PROBE_IDLE_S
-    if now - _ws_gate["at"] < every:
+    if _ws_gate["at"] is not None and now - _ws_gate["at"] < every:
         return _ws_gate["attached"]
     _ws_gate["at"] = now
     attached = True
@@ -194,8 +259,9 @@ def _ws_failure(detail):
     the first failure immediately, then at most once a minute — a dead
     gl-session must be visible in logread without flooding it every 10 s."""
     _ws_fail["n"] += 1
-    now = time.time()
-    if _ws_fail["n"] == 1 or now - _ws_fail["last_log"] >= WS_FAIL_LOG_EVERY_S:
+    now = time.monotonic()
+    if _ws_fail["n"] == 1 or _ws_fail["last_log"] is None \
+            or now - _ws_fail["last_log"] >= WS_FAIL_LOG_EVERY_S:
         _ws_fail["last_log"] = now
         sys.stderr.write("collectd: gl-session notify failed (%d so far): %s\n"
                          % (_ws_fail["n"], detail))
@@ -324,7 +390,37 @@ def read_battery(root=None, t=None, pidf=None, limf=None):
     }
 
 
-def trim(path, max_age_ms, max_lines, ref_ms=None):
+TRIM_GRACE_S = 0.2   # shared trim: how long the OLD inode is watched after the rename
+
+
+def _line_t(raw):
+    """The numeric `t` of one jsonl line (str or bytes), or None if the line
+    is malformed or carries no usable t."""
+    try:
+        t = json.loads(raw).get("t")
+    except (ValueError, AttributeError):
+        return None
+    return t if isinstance(t, (int, float)) and not isinstance(t, bool) else None
+
+
+def _carry(src, dst, pos):
+    """Copy every WHOLE line appended to `src` after byte `pos` into `dst`;
+    returns the new position. Loops until the size stops moving. A trailing
+    fragment (an append still being written) is left for the next look."""
+    while True:
+        size = os.fstat(src.fileno()).st_size
+        if size <= pos:
+            return pos
+        src.seek(pos)
+        chunk = src.read(size - pos)
+        cut = chunk.rfind(b"\n") + 1
+        if not cut:
+            return pos
+        dst.write(chunk[:cut])
+        pos += cut
+
+
+def trim(path, max_age_ms, max_lines, ref_ms=None, shared=False):
     """Drop lines older than max_age and cap the count, atomically. No-op if the
     file is absent — and no rewrite at all when nothing needs dropping.
 
@@ -335,39 +431,59 @@ def trim(path, max_age_ms, max_lines, ref_ms=None):
     was the old cost; now it is O(lines dropped), ~60 every 10 min. Malformed
     lines can only be a torn TAIL (our own appender writes one atomic line at
     a time), so the last line is checked and scrubbed; readers skip junk
-    anyway (read_window)."""
+    anyway (read_window).
+
+    `shared=True` is for a file OTHER processes append to while we trim —
+    events.jsonl: the Lua backend's io.open(..,"a") and the watchdog's
+    `echo >>`, one whole line per O_APPEND write, no lock we could take. A
+    plain read -> rewrite -> rename loses every line appended between the
+    read and the rename, so here: bytes after the last newline are an append
+    still in flight (never scrubbed, never kept from the first read); whatever
+    was appended while the kept lines were written is copied into the new
+    file before the rename (_carry, until the size is stable); and a writer
+    that opened the OLD inode just before the rename gets its line carried
+    over for TRIM_GRACE_S after it (appended O_APPEND, so it lands after
+    anything newer writers already put in the new file)."""
     try:
-        with open(path) as f:
-            lines = f.readlines()
+        src = open(path, "rb")
     except FileNotFoundError:
         return
-    if not lines:
-        return
-    cutoff = (now_ms() if ref_ms is None else ref_ms) - max_age_ms
-
-    def stamp(ln):
-        try:
-            return json.loads(ln).get("t", 0)
-        except (ValueError, AttributeError):
-            return None                              # malformed: goes
-
-    drop = 0
-    for ln in lines:
-        t = stamp(ln.strip()) if ln.strip() else None
-        if t is not None and t >= cutoff:
-            break
-        drop += 1
-    kept = lines[drop:]
-    if kept and stamp(kept[-1].strip()) is None:      # torn tail line
-        kept = kept[:-1]
-    if len(kept) > max_lines:
-        kept = kept[-max_lines:]
-    if len(kept) == len(lines):
-        return                                       # nothing to drop: leave the file alone
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        f.write("".join(l if l.endswith("\n") else l + "\n" for l in kept))
-    os.replace(tmp, path)
+    with src:
+        data = src.read()
+        if shared:
+            data = data[:data.rfind(b"\n") + 1]
+        pos = len(data)
+        lines = data.splitlines(True)
+        if not lines:
+            return
+        cutoff = (now_ms() if ref_ms is None else ref_ms) - max_age_ms
+        drop = 0
+        for ln in lines:
+            t = _line_t(ln) if ln.strip() else None
+            if t is not None and t >= cutoff:
+                break
+            drop += 1
+        kept = lines[drop:]
+        if kept and _line_t(kept[-1]) is None:          # torn tail line
+            kept = kept[:-1]
+        if len(kept) > max_lines:
+            kept = kept[-max_lines:]
+        if len(kept) == len(lines):
+            return                                       # nothing to drop: leave the file alone
+        tmp = path + ".tmp"
+        with open(tmp, "wb") as dst:
+            dst.write(b"".join(l if l.endswith(b"\n") else l + b"\n" for l in kept))
+            if shared:
+                pos = _carry(src, dst, pos)
+        os.replace(tmp, path)
+        if shared:
+            deadline = time.monotonic() + TRIM_GRACE_S
+            with open(path, "ab", buffering=0) as dst:   # unbuffered: one O_APPEND write per carry
+                while True:
+                    pos = _carry(src, dst, pos)
+                    if time.monotonic() >= deadline:
+                        break
+                    time.sleep(0.05)
 
 
 # ---- eMMC history backup helpers (pure; unit-tested) ----------------------
@@ -386,6 +502,14 @@ def read_history_config(path=None):
     return out
 
 
+def persist_segments(persist_dir, stream):
+    """[previous, current] backup segments of one stream ("samples" /
+    "battery"), oldest first. The current segment keeps the pre-rotation name,
+    so a backup written by an older collector is simply read as `current`."""
+    return [os.path.join(persist_dir, stream + ".prev.jsonl"),
+            os.path.join(persist_dir, stream + ".jsonl")]
+
+
 def max_t_in_file(path):
     """Largest sample `t` in a jsonl file, or 0 if absent/empty."""
     max_t = 0
@@ -395,48 +519,138 @@ def max_t_in_file(path):
                 ln = ln.strip()
                 if not ln:
                     continue
-                try:
-                    t = json.loads(ln).get("t", 0)
-                except ValueError:
-                    continue
-                if isinstance(t, (int, float)) and t > max_t:
+                t = _line_t(ln)
+                if t is not None and t > max_t:
                     max_t = int(t)
     except FileNotFoundError:
         pass
     return max_t
 
 
-def seed_tmp_from_persist(tmp_path, persist_path):
-    """If tmpfs file is empty/missing and persist has data, copy persist → tmp.
-    Returns True if a seed happened. Does not overwrite non-empty tmpfs (this
-    boot may already have samples; a full merge is unnecessary and racy)."""
+def first_t_in_file(path, max_lines=50):
+    """`t` of the oldest (first parseable) line, or None if absent/empty."""
+    try:
+        with open(path) as f:
+            for n, ln in enumerate(f):
+                if n >= max_lines:
+                    break
+                t = _line_t(ln.strip()) if ln.strip() else None
+                if t is not None:
+                    return t
+    except FileNotFoundError:
+        pass
+    return None
+
+
+def last_t_in_file(path, tail_bytes=16384):
+    """`t` of the newest (last parseable) line — read from the tail only."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - tail_bytes))
+            chunk = f.read()
+    except FileNotFoundError:
+        return None
+    for ln in reversed(chunk.splitlines()):
+        t = _line_t(ln) if ln.strip() else None
+        if t is not None:
+            return t
+    return None
+
+
+def rotate_segment(prev, cur, span_ms, ref_ms=None):
+    """Two-segment rotation of one backup stream — the reason the backup is
+    append-only in steady state.
+
+    The old scheme appended and then trim()med the single backup file every
+    flush: once it held 24 h, each flush dropped ~60 head lines by REWRITING
+    the whole multi-MB file on flash, ~144 times a day. Now the current
+    segment is only ever appended to; once its OLDEST line is span_ms old it
+    is RENAMED over the previous segment (a metadata operation: no data is
+    copied) and the next flush starts a fresh current segment. With span =
+    the retention window, prev + current always cover at least the whole
+    window and at most two (restore filters to the window), and the only
+    whole-file operation left is one rename per window per stream.
+
+    When even the current segment's NEWEST line is outside the window (the
+    backup was off, or the collector stopped, for over a window) both
+    segments are deleted instead. Returns "rotated", "expired" or None."""
+    head = first_t_in_file(cur)
+    cutoff = (now_ms() if ref_ms is None else ref_ms) - span_ms
+    if head is None or head > cutoff:
+        return None
+    last = last_t_in_file(cur)
+    if last is None or last > cutoff:
+        os.replace(cur, prev)
+        return "rotated"
+    for p in (prev, cur):
+        try:
+            os.remove(p)
+        except FileNotFoundError:
+            pass
+    return "expired"
+
+
+def seed_tmp_from_persist(tmp_path, segments, max_age_ms=None, ref_ms=None):
+    """Boot restore: if the tmpfs file is empty/missing, rebuild it from the
+    backup segments (a path or a list, oldest first), keeping only lines
+    inside max_age_ms of now (None = keep everything). Returns True if a seed
+    happened. Does not overwrite non-empty tmpfs (this boot may already have
+    samples; a full merge is unnecessary and racy).
+
+    Segments are append-ordered, so only each one's out-of-window HEAD is
+    parsed; the rest is copied line by line (one line in memory, not the
+    whole backup)."""
+    if isinstance(segments, str):
+        segments = [segments]
     try:
         if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
             return False
     except OSError:
         pass
+    cutoff = None if max_age_ms is None else \
+        (now_ms() if ref_ms is None else ref_ms) - max_age_ms
+    tmp = tmp_path + ".seed"
+    wrote = False
     try:
-        if not os.path.exists(persist_path) or os.path.getsize(persist_path) == 0:
-            return False
-    except OSError:
-        return False
-    try:
-        with open(persist_path) as src:
-            body = src.read()
-        tmp = tmp_path + ".seed"
         os.makedirs(os.path.dirname(tmp_path) or ".", exist_ok=True)
         with open(tmp, "w") as dst:
-            dst.write(body)
+            for seg in segments:
+                try:
+                    src = open(seg)
+                except OSError:
+                    continue
+                with src:
+                    young = cutoff is None
+                    for ln in src:
+                        raw = ln.strip()
+                        if not raw:
+                            continue
+                        if not young:
+                            t = _line_t(raw)
+                            if t is None or t < cutoff:
+                                continue
+                            young = True
+                        dst.write(raw + "\n")
+                        wrote = True
+        if not wrote:
+            os.remove(tmp)
+            return False
         os.replace(tmp, tmp_path)
         return True
     except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
         return False
 
 
 def flush_new_lines(tmp_path, persist_path, since_t):
     """Append jsonl lines from tmp_path with t > since_t onto persist_path.
     Returns the new since_t (max t flushed, or unchanged if nothing new).
-    APPEND-ONLY — never rewrites the whole persist file here (trim does that)."""
+    APPEND-ONLY — never rewrites the persist file (rotate_segment renames it)."""
     new_since = since_t
     try:
         with open(tmp_path) as f:
@@ -448,12 +662,8 @@ def flush_new_lines(tmp_path, persist_path, since_t):
         raw = ln.strip()
         if not raw:
             continue
-        try:
-            obj = json.loads(raw)
-        except ValueError:
-            continue
-        t = obj.get("t", 0)
-        if not isinstance(t, (int, float)):
+        t = _line_t(raw)
+        if t is None:
             continue
         t = int(t)
         if t > since_t:
@@ -463,30 +673,48 @@ def flush_new_lines(tmp_path, persist_path, since_t):
     if not out:
         return since_t
     os.makedirs(os.path.dirname(persist_path) or ".", exist_ok=True)
-    with open(persist_path, "a") as f:
-        f.write("\n".join(out) + "\n")
+    with open(persist_path, "a+b") as f:
+        # A crash mid-append can leave a torn last line with no newline: start
+        # on a fresh line so it can't swallow the first line of this batch.
+        f.seek(0, 2)
+        lead = b""
+        if f.tell() > 0:
+            f.seek(-1, 2)
+            if f.read(1) != b"\n":
+                lead = b"\n"
+        f.write(lead + ("\n".join(out) + "\n").encode())
     return new_since
 
 
-def maybe_flush_persist(samples_tmp, battery_tmp, persist_dir, cursors):
-    """If config enabled, append new tmpfs lines to eMMC and trim backups.
-    `cursors` is a mutable dict {samples, battery} of last-flushed t.
-    Returns updated enabled flag (so the caller can log transitions)."""
+PERSIST_STREAMS = (("samples", SAMPLE_MAX_AGE), ("battery", BATT_MAX_AGE))
+
+
+def maybe_flush_persist(samples_tmp, battery_tmp, persist_dir, cursors, ref_ms=None):
+    """If config enabled, rotate each backup stream when due, then append the
+    new tmpfs lines to its current segment. `cursors` is a mutable dict
+    {samples, battery} of last-flushed t. Returns the enabled flag (so the
+    caller can log transitions)."""
     cfg = read_history_config()
     if not cfg["enabled"]:
         return False
     os.makedirs(persist_dir, exist_ok=True)
-    p_samples = os.path.join(persist_dir, "samples.jsonl")
-    p_battery = os.path.join(persist_dir, "battery.jsonl")
-    cursors["samples"] = flush_new_lines(
-        samples_tmp, p_samples, cursors.get("samples", 0))
-    cursors["battery"] = flush_new_lines(
-        battery_tmp, p_battery, cursors.get("battery", 0))
-    # Trim backups to the same 24 h window as live history.
-    trim(p_samples, SAMPLE_MAX_AGE, SAMPLE_MAX_LINE)
-    trim(p_battery, BATT_MAX_AGE, BATT_MAX_LINE)
-    # After trim the max t is unchanged; cursor stays valid.
+    for (stream, window), tmp_path in zip(PERSIST_STREAMS, (samples_tmp, battery_tmp)):
+        prev, cur = persist_segments(persist_dir, stream)
+        rotate_segment(prev, cur, window, ref_ms)
+        cursors[stream] = flush_new_lines(tmp_path, cur, cursors.get(stream, 0))
     return True
+
+
+def restore_from_persist(tmp_paths, persist_dir, ref_ms=None):
+    """Boot path: seed each empty tmpfs stream from its backup segments
+    (filtered to the retention window) and return the flush cursors — the
+    newest t already on disk, so the first flush only appends what is new."""
+    cursors = {}
+    for (stream, window), tmp_path in zip(PERSIST_STREAMS, tmp_paths):
+        prev, cur = persist_segments(persist_dir, stream)
+        seed_tmp_from_persist(tmp_path, [prev, cur], window, ref_ms)
+        cursors[stream] = max_t_in_file(cur) or max_t_in_file(prev)
+    return cursors
 
 
 def main():
@@ -504,10 +732,7 @@ def main():
     # so the first flush only appends post-seed samples.
     cursors = {"samples": 0, "battery": 0}
     if read_history_config().get("enabled"):
-        seed_tmp_from_persist(samples_path, os.path.join(persist_dir, "samples.jsonl"))
-        seed_tmp_from_persist(battery_path, os.path.join(persist_dir, "battery.jsonl"))
-        cursors["samples"] = max_t_in_file(os.path.join(persist_dir, "samples.jsonl"))
-        cursors["battery"] = max_t_in_file(os.path.join(persist_dir, "battery.jsonl"))
+        cursors.update(restore_from_persist((samples_path, battery_path), persist_dir))
 
     state = {"go": True}
     def stop(*_a):
@@ -516,16 +741,15 @@ def main():
     signal.signal(signal.SIGINT, stop)
 
     i = 0
-    last_batt = 0.0
-    last_flush = 0.0
+    batt_gate = Gate(BATT_INTERVAL)
+    flush_gate = Gate(FLUSH_INTERVAL)
     while state["go"]:
         try:
             # Battery FIRST, and gated on ELAPSED TIME rather than a tick count.
             # A tick is not 10 s: ubus_call has an 8 s timeout and collect_sample
             # makes two of them, so a bad tick can run ~16 s and a tick count
             # would silently stretch the battery interval.
-            if time.time() - last_batt >= BATT_INTERVAL:
-                last_batt = time.time()
+            if batt_gate.due():
                 b = read_battery()
                 if b is not None:
                     with open(battery_path, "a") as f:
@@ -545,17 +769,17 @@ def main():
                 trim(samples_path, SAMPLE_MAX_AGE, SAMPLE_MAX_LINE)
                 trim(battery_path, BATT_MAX_AGE, BATT_MAX_LINE)
             if i % EVENT_TRIM_EVERY == 0:
-                trim(events_path, SAMPLE_MAX_AGE, 1000)
+                # the backend + the watchdog append to this one concurrently
+                trim(events_path, SAMPLE_MAX_AGE, 1000, shared=True)
             # Approach #2: batched eMMC flush (config re-read each attempt).
-            if time.time() - last_flush >= FLUSH_INTERVAL:
-                last_flush = time.time()
+            if flush_gate.due():
                 maybe_flush_persist(samples_path, battery_path, persist_dir, cursors)
         except Exception as e:                       # never die out of the loop
             sys.stderr.write("collectd: %s\n" % e)
             sys.stderr.flush()
         # interruptible sleep so SIGTERM stops us within ~0.1 s (procd-friendly)
-        end = time.time() + POLL_INTERVAL
-        while state["go"] and time.time() < end:
+        end = time.monotonic() + POLL_INTERVAL
+        while state["go"] and time.monotonic() < end:
             time.sleep(0.1)
 
     # Best-effort final flush so a clean stop (procd restart / reboot with UPS)

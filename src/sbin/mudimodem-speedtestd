@@ -11,7 +11,12 @@ what actually prevents overlap with a concurrent manual run.
 
 Schedule config: /etc/mudimodem/speedtest-schedule.json =
   {"enabled": bool, "interval_seconds": int, "last_run": <epoch ms>}
+
+A run that outlives its deadline is stopped as a whole process group (the
+tool AND the curl it is waiting on) and, if the status file still says that
+run is in progress, the status is made terminal here — nobody else would.
 """
+import importlib.util
 import json
 import os
 import signal
@@ -23,6 +28,17 @@ WAKE_INTERVAL = float(os.environ.get("MUDIMODEM_SPEEDTESTD_WAKE", "60"))
 SCHEDULE_PATH = os.environ.get("MUDIMODEM_ST_SCHEDULE", "/etc/mudimodem/speedtest-schedule.json")
 SPEEDTEST_BIN = os.environ.get("MUDIMODEM_SPEEDTEST_BIN", "/usr/lib/mudimodem/mudimodem-speedtest.py")
 PYTHON3 = os.environ.get("MUDIMODEM_PYTHON3", "/usr/bin/python3")
+# Same env var + default as the tool, so the two always name the same file.
+STATUS_PATH = os.environ.get("MUDIMODEM_ST_STATUS", "/tmp/mudimodem/speedtest-status.json")
+
+# The deadline for one scheduled run = the tool's OWN worst case
+# (worst_case_seconds: ubus lookups + every curl's deadline, ~207 s at the
+# defaults) + RUN_MARGIN_S. A fixed 120 s used to be shorter than that worst
+# case, so a slow-but-healthy run was SIGKILLed and left running:true behind.
+# The fallback only applies when the tool can't be loaded to ask.
+RUN_MARGIN_S = 30
+RUN_TIMEOUT_FALLBACK_S = 300
+KILL_GRACE_S = 5
 
 DEFAULT_SCHEDULE = {"enabled": False, "interval_seconds": 6 * 3600, "last_run": 0}
 
@@ -70,19 +86,84 @@ def now_ms():
     return int(time.time() * 1000)
 
 
-def attempt_run(python3, bin_path, timeout):
+def run_timeout_s(bin_path=None):
+    """Seconds a scheduled run may take before it is stopped, derived from the
+    tool's own timeouts so the two cannot drift apart again."""
+    path = SPEEDTEST_BIN if bin_path is None else bin_path
+    nobc = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True        # no __pycache__ beside the deployed tool
+    try:
+        spec = importlib.util.spec_from_file_location("mudimodem_speedtest_budget", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return float(mod.worst_case_seconds()) + RUN_MARGIN_S
+    except Exception:
+        return float(RUN_TIMEOUT_FALLBACK_S)
+    finally:
+        sys.dont_write_bytecode = nobc
+
+
+def stop_group(proc):
+    """Stop a run started in its own session: SIGTERM the whole group (the
+    tool unwinds, kills its curl, writes its own terminal status), then
+    SIGKILL whatever is left of the group and reap the tool."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(proc.pid, sig)
+        except OSError:
+            pass                                       # group already gone
+        try:
+            proc.wait(timeout=KILL_GRACE_S)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def settle_status(path, pid, message):
+    """The run is gone. If the status file still says a run is in progress AND
+    names that run's pid, nothing will ever finish it: make it terminal.
+    Anything else — already terminal, or another run's pid (a manual test
+    that started since) — is left alone. True if it wrote."""
+    try:
+        with open(path) as f:
+            st = json.load(f)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(st, dict) or not st.get("running") or st.get("pid") != pid:
+        return False
+    st.update(running=False, phase="error", message=message, error=message)
+    tmp = "%s.tmp.%d" % (path, os.getpid())
+    with open(tmp, "w") as f:
+        json.dump(st, f)
+    os.replace(tmp, path)
+    return True
+
+
+def attempt_run(python3, bin_path, timeout, status_path=None):
     """Run one scheduled speed test attempt and ALWAYS record it as attempted
     (via write_last_run), whether it succeeds, times out, or errors -- a timed
     -out/hung run must not make the daemon immediately retry on its very next
     60s wake, which could loop a stuck run forever and burn cellular data.
-    Catches only subprocess.run's own failure locally; anything else (e.g. a
-    broken SCHEDULE_PATH) is left to the caller's own safety net."""
+    The run gets its own session so a timeout can stop the whole group (a
+    kill of the tool alone would orphan its curl). Catches only the spawn's
+    own failure locally; anything else (e.g. a broken SCHEDULE_PATH) is left
+    to the caller's own safety net."""
+    status_path = STATUS_PATH if status_path is None else status_path
     try:
-        subprocess.run([python3, bin_path, "--trigger", "schedule", "--iface", "cellular"],
-                        timeout=timeout)
-    except subprocess.TimeoutExpired:
-        sys.stderr.write("speedtestd: run timed out\n")
+        proc = subprocess.Popen([python3, bin_path, "--trigger", "schedule", "--iface", "cellular"],
+                                start_new_session=True)
+    except OSError as e:
+        sys.stderr.write("speedtestd: cannot start the test: %s\n" % e)
         sys.stderr.flush()
+    else:
+        try:
+            proc.wait(timeout=timeout)
+            why = "speed test exited unexpectedly (rc %s)" % proc.returncode
+        except subprocess.TimeoutExpired:
+            sys.stderr.write("speedtestd: run timed out after %ds; stopping it\n" % timeout)
+            sys.stderr.flush()
+            stop_group(proc)
+            why = "scheduled speed test timed out after %ds" % timeout
+        settle_status(status_path, proc.pid, why)
     write_last_run(SCHEDULE_PATH, now_ms())
 
 
@@ -98,12 +179,13 @@ def main():
         try:
             cfg = read_schedule(SCHEDULE_PATH)
             if is_due(cfg, now_ms()):
-                attempt_run(PYTHON3, SPEEDTEST_BIN, 120)
+                attempt_run(PYTHON3, SPEEDTEST_BIN, run_timeout_s())
         except Exception as e:                        # never die out of the loop
             sys.stderr.write("speedtestd: %s\n" % e)
             sys.stderr.flush()
-        end = time.time() + WAKE_INTERVAL
-        while state["go"] and time.time() < end:
+        # monotonic: a wall clock stepped backwards must not stretch the wake
+        end = time.monotonic() + WAKE_INTERVAL
+        while state["go"] and time.monotonic() < end:
             time.sleep(0.5)
 
 
