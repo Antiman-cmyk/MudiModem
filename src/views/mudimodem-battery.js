@@ -53,6 +53,14 @@ module.exports = (function () {
   var FAIL_NOTE_AFTER = 3;
   var STALL_MS = 60000;            // no push for this long => one catch-up fetch
   var HOLE_MS = 50000;             // a push landing this long after the last sample => backfill the hole
+  // A failed WINDOW load (the preload on open, or a wider range) is retried
+  // with a bounded backoff: 2, 4, 8, 16, then every 30 s until it lands.
+  var RETRY_BASE_MS = 2000, RETRY_MAX_MS = 30000;
+  // get_battlimit runs `glbattlimit status` on the box. Besides the refresh a
+  // limiter-relevant change in the pushed samples triggers (plug/unplug, the
+  // watcher starting/stopping, its target moving), re-read it this often so
+  // "current ~X%" does not freeze while the tab stays open.
+  var BL_REFRESH_MS = 60000;
   // TOP is headroom for plug/unplug tick labels. Lane value/range headers live
   // in HTML above the SVG (jayck88 layout) so they are never clipped by the
   // outermost-svg overflow:hidden default or lost in preserveAspectRatio stretch.
@@ -124,9 +132,17 @@ module.exports = (function () {
         // repaint the short window (jayck88 requestSeq pattern).
         histRequestSeq: 0,
         pendingWindow: null, poll: null, tick: 0, live: true, pushSeenAt: 0,
-        width: 900, styleId: "mmb-css-v4", cursor: null, pinnedM: null,
+        // pinnedT: the pinned slice as an ABSOLUTE box-clock sample time (a
+        // minutes-relative pin slid to a newer sample on every push).
+        width: 900, styleId: "mmb-css-v4", cursor: null, pinnedT: null,
+        // preloaded: a WINDOW load has succeeded at least once (pushes alone
+        // only carry what happened after the tab opened). loadFails/retryMs
+        // drive the backoff and the note; missingSince is the start of a tail
+        // (hole backfill) that failed or was dropped — the next push re-asks.
+        preloaded: false, loadFails: 0, retryMs: 0, missingSince: null,
         // charge-limit form state (moved here from the Config tab)
-        bl: null, blBusy: false, blErr: "", blDraft: 80
+        bl: null, blBusy: false, blErr: "", blDraft: 80,
+        blFetchedAt: 0          // browser clock of the last get_battlimit (the slow refresh cadence)
       };
     },
 
@@ -150,17 +166,24 @@ module.exports = (function () {
       this.measure();
       this._onResize = function () { self.measure(); };
       window.addEventListener("resize", this._onResize);
+      // Torn-down flag: retries are only scheduled while this is true, and a
+      // late reply after beforeDestroy changes nothing.
+      this._alive = true;
       this.fetchBattLimit();
       this.fetchHistory();
       // No polling: samples arrive as pushes every 20 s. The timer is only a
-      // stall guard (collector restart / websocket reconnect).
+      // stall guard (collector restart / websocket reconnect), plus the slow
+      // silent re-read of the charge-limit card.
       this.pushSeenAt = Date.now();
       this.poll = setInterval(function () {
         if (self.live && Date.now() - self.pushSeenAt > STALL_MS) self.fetchHistory({ since: self.lastT, merge: true });
+        if (Date.now() - self.blFetchedAt >= BL_REFRESH_MS) self.refreshBattLimit();
       }, 30000);
     },
     updated: function () { this.measure(); },
     beforeDestroy: function () {
+      this._alive = false;
+      if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; }
       if (this.poll) clearInterval(this.poll);
       if (typeof window !== "undefined" && this._onResize)
         window.removeEventListener("resize", this._onResize);
@@ -195,21 +218,26 @@ module.exports = (function () {
       // browser-computed absolute cutoff: the two clocks disagree on a travel
       // router, and an absolute cutoff mis-sizes the window by exactly the skew.
       // The poll's `since` is exempt — it is a timestamp the BOX stamped.
+      //
+      // Every reply MERGES into what is held (dedupe by t, sort) — including a
+      // window load: pushes may have landed while it was in flight, or while it
+      // was failing and being retried, and replacing would drop them.
       fetchHistory: function (opts) {
         opts = opts || {};
         var self = this;
         if (typeof window === "undefined" || !window.$axios) { self.loading = false; return; }
         var merge = !!opts.merge;
+        // lastT is 0 until the first sample lands; since=0 would make the box
+        // decode the whole retained 24 h on every 10 s tick.
+        var incremental = (opts.since != null && opts.since > 0);
         // Tail polls may coalesce, but a user-requested range reset must start
         // immediately. Otherwise clicking 24 h while the initial 15 m request is
         // in flight silently drops the 24 h backfill (jayck88 pattern). The
         // in-flight reply is ignored via histRequestSeq when the new one lands.
-        if (self.fetching && merge) return;
+        // A coalesced TAIL is remembered, so the next push asks for it again.
+        if (self.fetching && merge) { if (incremental) self.noteMissing(opts.since); return; }
         self.fetching = true;
         var requestSeq = ++self.histRequestSeq;
-        // lastT is 0 until the first sample lands; since=0 would make the box
-        // decode the whole retained 24 h on every 10 s tick.
-        var incremental = (opts.since != null && opts.since > 0);
         var winMs = (opts.window || self.winW) * 60000;
         var params = incremental ? { since: Math.floor(opts.since) } : { window_ms: winMs };
         // Returned so callers can sequence on it (the tests do); mounted() and
@@ -219,6 +247,7 @@ module.exports = (function () {
             // A newer fetch already owns the in-flight flag and state.
             if (requestSeq !== self.histRequestSeq) return;
             self.fetching = false;
+            if (self._alive === false) return;   // torn down while in flight
             // rpcSilent resolves null for EVERY failure mode — transport down,
             // session expired, JSON-RPC error payload. A successful call always
             // yields an object, so null here is unambiguously a failed poll.
@@ -232,6 +261,15 @@ module.exports = (function () {
                 self.err = "Can't reach the router — battery history stopped updating"
                   + (stale ? " " + (stale >= 120 ? Math.round(stale / 60) + " min" : stale + " s") + " ago." : ".");
               }
+              if (incremental) {
+                self.noteMissing(opts.since);    // the next push asks again
+              } else {
+                // A WINDOW load failed. Unretried, the first push then set the
+                // cursor and the tab showed only post-open samples forever.
+                self.loadFails++;
+                self.retryMs = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * Math.pow(2, self.loadFails - 1));
+                self.scheduleRetry();
+              }
               self.loading = false;
               self.tick++;                       // re-render so the note appears
               self.drainPending();
@@ -240,13 +278,19 @@ module.exports = (function () {
             self.okCount++; self.failStreak = 0; self.lastGoodAt = Date.now();
             var ns = res.samples || [];
             var merged = ns;
-            if (merge && self.samples && self.samples.length) {
+            if (self.samples && self.samples.length) {
               // Skip what is already held and keep time order — a hole backfill
-              // is OLDER than the pushed sample that revealed it.
+              // (or a late window load) is OLDER than the pushed samples.
               var haveT = {};
               for (var i = 0; i < self.samples.length; i++) haveT[self.samples[i].t] = 1;
               merged = self.samples.concat(ns.filter(function (x) { return x && x.t && !haveT[x.t]; }))
                 .sort(function (a, b) { return a.t - b.t; });
+            }
+            if (incremental) {
+              if (self.missingSince != null && opts.since <= self.missingSince) self.missingSince = null;
+            } else {
+              self.preloaded = true; self.loadFails = 0; self.retryMs = 0;
+              if (self._retryTimer) { clearTimeout(self._retryTimer); self._retryTimer = null; }
             }
             self.serverNow = res.now || Date.now();
             self.serverNowAt = Date.now();
@@ -269,6 +313,19 @@ module.exports = (function () {
           // NO .catch: rpcSilent never rejects (see above). One used to live
           // here and was unreachable — the failure branch is inside .then.
       },
+      noteMissing: function (since) {
+        this.missingSince = (this.missingSince == null) ? since : Math.min(this.missingSince, since);
+      },
+      // One pending retry at a time, only while mounted. It asks for the range
+      // shown NOW (the user may have changed it since the failure).
+      scheduleRetry: function () {
+        var self = this;
+        if (!this._alive || this._retryTimer) return;
+        this._retryTimer = setTimeout(function () {
+          self._retryTimer = null;
+          if (self._alive) self.fetchHistory({ window: self.winW });
+        }, this.retryMs || RETRY_BASE_MS);
+      },
       drainPending: function () {
         if (this.pendingWindow == null) return;
         var w = this.pendingWindow; this.pendingWindow = null;
@@ -280,6 +337,7 @@ module.exports = (function () {
       onPush: function (s) {
         if (!s || !s.t || s.t <= this.lastT) return;
         var prevT = this.lastT;
+        var prev = this.samples.length ? this.samples[this.samples.length - 1] : null;
         this.pushSeenAt = Date.now(); this.lastGoodAt = Date.now();
         var merged = this.samples.concat([s]);
         var cut = s.t - 24 * 3600 * 1000;
@@ -292,10 +350,23 @@ module.exports = (function () {
         // Pushes were withheld (the collector's has_websocket gate after a page
         // opens) or lost (ws reconnect): the samples exist in the log — fetch
         // the hole once. The stall guard cannot see it; this push reset it.
-        if (prevT > 0 && s.t - prevT > HOLE_MS) this.fetchHistory({ since: prevT, merge: true });
+        // A tail that failed (or was coalesced away) earlier is asked again.
+        var from = (prevT > 0 && s.t - prevT > HOLE_MS) ? prevT : null;
+        if (this.missingSince != null) from = (from == null) ? this.missingSince : Math.min(from, this.missingSince);
+        if (from != null) this.fetchHistory({ since: from, merge: true });
+        // The limit card is a get_battlimit SNAPSHOT: when the samples show the
+        // charger or the limiter changed, it is stale ("Armed · will apply when
+        // the charger connects" after plugging in) — re-read it now.
+        if (prev && this.limiterStateChanged(prev, s)) this.refreshBattLimit();
+      },
+      // Did anything the limit card describes change between two samples?
+      // Charger online, the watcher alive (`lim`), its gauge target.
+      limiterStateChanged: function (a, b) {
+        var n = function (v) { return v == null ? null : Number(v); };
+        return (!!a.online) !== (!!b.online) || n(a.lim) !== n(b.lim) || n(a.lim_gauge) !== n(b.lim_gauge);
       },
       setRange: function (w) {
-        this.winW = w; this.pinnedM = null; this.cursor = null;
+        this.winW = w; this.pinnedT = null; this.cursor = null;
         // Backfill only when the new window reaches earlier than we hold.
         var cutoff = this.nowMs() - w * 60000;
         if (this.loadedFrom == null || cutoff < this.loadedFrom - 1000)
@@ -303,24 +374,51 @@ module.exports = (function () {
       },
 
       // ---- charge limit (user-initiated => $rpcRequest is correct here) ----
+      // Clamp a stored target into the slider's range so the thumb cannot
+      // misrepresent a stored value below the floor. Deliberately does NOT
+      // write the clamped value back: silently rewriting a user's setting
+      // because the UI changed shape is worse than a clamped thumb. The next
+      // deliberate interaction saves a valid value.
+      clampDraft: function (v) { return Math.max(LIMIT_MIN, Math.min(LIMIT_MAX, v)); },
       fetchBattLimit: function () {
         var self = this;
         if (typeof window === "undefined" || !window.$rpcRequest) return Promise.resolve();
+        this.blFetchedAt = Date.now();
         return window.$rpcRequest("call", ["sid", "mudimodem", "get_battlimit", {}], { timeout: 8000 })
           .then(function (r) {
             self.bl = r || null;
-            // Clamp the DRAFT into the slider's range so the thumb cannot
-            // misrepresent a stored value below the floor. Deliberately does
-            // NOT write the clamped value back: silently rewriting a user's
-            // setting because the UI changed shape is worse than a clamped
-            // thumb. The next deliberate interaction saves a valid value.
-            if (r && typeof r.limit_gui === "number")
-              self.blDraft = Math.max(LIMIT_MIN, Math.min(LIMIT_MAX, r.limit_gui));
-            self.blErr = (r && r.error) || "";
+            if (r && typeof r.limit_gui === "number") self.blDraft = self.clampDraft(r.limit_gui);
+            self.blErr = (r && r.error) || ""; self._blErrBg = false;
           })
           .catch(function (e) {
-            self.blErr = (e && (e.message || e.type)) || "request failed";
+            self.blErr = (e && (e.message || e.type)) || "request failed"; self._blErrBg = false;
           });
+      },
+      // Background re-read of the same snapshot (a push showed the charger or
+      // the limiter changed, or BL_REFRESH_MS passed). SILENT transport — a
+      // background call must never raise GL's banner — and fail-soft: a failed
+      // re-read keeps the snapshot we have instead of blanking the card.
+      refreshBattLimit: function () {
+        var self = this;
+        if (this.blBusy || this._blRefreshing) return Promise.resolve();   // an apply's reply is fresher
+        this._blRefreshing = true; this.blFetchedAt = Date.now();
+        return this.rpcSilent("get_battlimit", {}).then(function (r) {
+          self._blRefreshing = false;
+          if (self._alive === false || self.blBusy) return;
+          if (!r || !(typeof r.available === "boolean" || typeof r.limit_gui === "number")) return;
+          var prev = self.bl;
+          self.bl = r;
+          // Follow a stored target that changed elsewhere, but never yank the
+          // thumb out from under a drag that has not been released yet.
+          if (typeof r.limit_gui === "number"
+              && (!prev || typeof prev.limit_gui !== "number" || self.blDraft === self.clampDraft(prev.limit_gui)))
+            self.blDraft = self.clampDraft(r.limit_gui);
+          // The snapshot's own error (tool missing / status failed) is current
+          // state; an apply's error is the user's last action and stays until
+          // their next one.
+          if (r.error) { self.blErr = r.error; self._blErrBg = true; }
+          else if (self._blErrBg) { self.blErr = ""; self._blErrBg = false; }
+        });
       },
       applyBattLimit: function (patch) {
         var self = this;
@@ -347,11 +445,11 @@ module.exports = (function () {
             + "50 % IC Reported Charge (about 50 % GL UI Reported Charge)";
           return;
         }
-        this.blBusy = true; this.blErr = "";
+        this.blBusy = true; this.blErr = ""; this._blErrBg = false;
         return window.$rpcRequest("call", ["sid", "mudimodem", "set_battlimit",
           { enabled: enabled, limit_gui: limit_gui }], { timeout: 15000 })
           .then(function (r) {
-            self.blBusy = false;
+            self.blBusy = false; self.blFetchedAt = Date.now();
             // An error payload without available/limit_gui must not wipe UI state.
             if (r && (typeof r.available === "boolean" || typeof r.limit_gui === "number")) {
               self.bl = r;
@@ -754,7 +852,13 @@ module.exports = (function () {
             runs.push({ v: v, m0: ss[i].m, m1: ss[i].m });
           }
         }
-        if (runs.length) runs[runs.length - 1].m1 = 0;
+        // The same rule at the tail: the last run reaches "now" only while
+        // samples are still arriving. Once nothing has landed for GAP_MS it
+        // ends at the last sample, not across time we have no data for.
+        if (runs.length) {
+          var lastS = ss[ss.length - 1];
+          runs[runs.length - 1].m1 = (this.nowMs() - lastS.t > GAP_MS) ? lastS.m : 0;
+        }
         return runs;
       },
       stateRuns: function () { return this.stateRunsFrom(this.winSamples()); },
@@ -806,17 +910,29 @@ module.exports = (function () {
         return Math.max(-span, Math.min(0, m));
       },
       onMove: function (e) {
-        if (this.pinnedM != null) return;
+        if (this.pinnedT != null) return;
         var bounds = this._lastBounds;
         var m = this.mFromEvent(e, bounds); if (m == null) return;
         this.cursor = this.clampM(m, bounds);
       },
-      onLeave: function () { if (this.pinnedM == null) this.cursor = null; },
+      onLeave: function () { if (this.pinnedT == null) this.cursor = null; },
       onClick: function (e) {
-        if (this.pinnedM != null) { this.pinnedM = null; return; }
+        if (this.pinnedT != null) { this.pinnedT = null; this.cursor = null; return; }
         var bounds = this._lastBounds;
         var m = this.mFromEvent(e, bounds); if (m == null) return;
-        this.pinnedM = this.cursor = this.clampM(m, bounds);
+        m = this.clampM(m, bounds);
+        // Pin the SAMPLE under the pointer by its box time — a minute offset
+        // from now slid to a newer sample with every 20 s push.
+        var s = this.nearestSampleIn(this._lastSs || this.winSamples(), m);
+        this.pinnedT = s ? s.t : this.nowMs() + m * 60000;
+        this.cursor = this.mOf(this.pinnedT);
+      },
+      // The pinned sample in window `ss` (exact box time), or null once it
+      // has scrolled out of the window.
+      pinnedSampleIn: function (ss) {
+        if (this.pinnedT == null || !ss) return null;
+        for (var i = ss.length - 1; i >= 0; i--) if (ss[i].t === this.pinnedT) return ss[i];
+        return null;
       },
 
       injectStyle: function () {
@@ -977,8 +1093,16 @@ module.exports = (function () {
         var spanM = this.spanMin(bounds);
         var partial = spanM < this.winW - 1;
         var cols = Math.max(40, Math.round((W - PADL - PADR) / 2));
-        var focusM = this.cursor;
-        var near = (focusM != null) ? this.nearestSampleIn(ss, focusM) : null;
+        // A pin follows its own sample (absolute t) and disappears with it; a
+        // hover is a position on the axis.
+        var near, focusM;
+        if (this.pinnedT != null) {
+          near = this.pinnedSampleIn(ss);
+          focusM = near ? near.m : null;
+        } else {
+          focusM = this.cursor;
+          near = (focusM != null) ? this.nearestSampleIn(ss, focusM) : null;
+        }
         var focus = near || (ss.length ? ss[ss.length - 1] : null);
         var rows = [];
 
@@ -1136,7 +1260,15 @@ module.exports = (function () {
                 attrs: { type: "checkbox", disabled: !!self.blBusy },
                 domProps: { checked: !!bl.enabled },
                 on: { change: function (e) {
-                  self.applyBattLimit({ enabled: !!(e.target && e.target.checked) });
+                  var el = e && e.target;
+                  var p = self.applyBattLimit({ enabled: !!(el && el.checked) });
+                  // Vue patches `checked` only when the BOUND value changes. A
+                  // failed or refused write leaves bl.enabled where it was, so
+                  // the box would stay ticked while the limit is off. Once the
+                  // write settles, put the control back to the real state.
+                  Promise.resolve(p).then(function () {
+                    if (el) el.checked = !!(self.bl && self.bl.enabled);
+                  });
                 } }
               }),
               " Limit charging"
@@ -1238,20 +1370,30 @@ module.exports = (function () {
           }))
         ])
       ];
+      // The failed window load's retry cadence, as the code actually runs it
+      // (the bounded backoff in fetchHistory/scheduleRetry).
+      var every = Math.round((this.retryMs || RETRY_BASE_MS) / 1000);
+      var failing = this.loadFails > 0;
       if (this.loading) {
         chartKids.push(h("div", { staticClass: "mmb-note" }, "Loading battery history…"));
       } else if (!ss.length) {
         // Two different nothings, and saying the wrong one is a lie: "sampling
         // starts within 20 s" is only true if we actually reached the box and
-        // it had no data. If every request so far has failed we know nothing
+        // it had no data. If the history load is failing we know nothing
         // about the collector — say THAT instead.
         chartKids.push(h("div", { staticClass: "mmb-note" },
-          (!this.okCount && this.failStreak)
-            ? "Couldn't reach the router — retrying every 10 s."
+          (failing && !this.preloaded)
+            ? "Couldn't reach the router — retrying every " + every + " s."
             : "No battery history yet — sampling starts within 20 s."));
         if (this.err) chartKids.push(h("div", { staticClass: "mmb-err" }, this.err));
       } else {
         chartKids.push(this.renderLanes(h, ss));
+        // Pushes are drawing, but the window before them never loaded.
+        if (failing)
+          chartKids.push(h("div", { staticClass: "mmb-note" }, (this.preloaded
+            ? "Couldn't load the wider range yet"
+            : "Earlier battery history didn't load — showing samples since the tab opened")
+            + "; retrying every " + every + " s."));
         if (this.err) chartKids.push(h("div", { staticClass: "mmb-err" }, this.err));
       }
       kids.push(h("div", { staticClass: "mmb-card" }, chartKids));

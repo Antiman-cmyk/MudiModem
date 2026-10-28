@@ -295,9 +295,10 @@ test('clicking pins the cursor; clicking again releases it', () => {
   const vm = makeVm(c, { samples: seedSamples(), events: [], winW: 60, width: 900 });
   vm.$refs = { lanes: { getBoundingClientRect: () => ({ left: 0, width: 900 }) } };
   vm.onClick({ clientX: 800 });
-  assert.ok(vm.pinnedM != null, 'pinned after first click');
+  assert.ok(vm.pinnedT != null, 'pinned after first click');
+  assert.ok(vm.samples.some((x) => x.t === vm.pinnedT), 'the pin is a SAMPLE time, not a minute offset');
   vm.onClick({ clientX: 400 });
-  assert.strictEqual(vm.pinnedM, null, 'released after second click');
+  assert.strictEqual(vm.pinnedT, null, 'released after second click');
 });
 
 // Faithfully model how a browser paints a viewBox-space x for the <svg>'s actual
@@ -338,7 +339,8 @@ test('parseHash reads #w= and #m= into range + pin', () => {
   const vm = makeVm(c);
   vm.parseHash();
   assert.strictEqual(vm.winW, 360, 'range set from hash');
-  assert.ok(Math.abs(vm.pinnedM + 42) < 0.01, 'pin set from hash');
+  assert.ok(Math.abs(vm.cursorM() + 42) < 0.01, 'pin set from hash');
+  assert.strictEqual(vm.hashPinM, -42, 're-anchored on the box clock once the preload lands');
   delete global.window;
 });
 
@@ -747,4 +749,222 @@ test('lanes break across a time hole (> 45 s with no sample), like the strip, in
   const rsrpPath = paths[0].data.attrs.d;
   const moves = (rsrpPath.match(/M/g) || []).length;
   assert.strictEqual(moves, 2, 'the RSRP lane is two segments: it breaks across the hole rather than bridging it');
+});
+
+
+// ---- 2.x review fixes (2026-10-28) ----
+
+// #1: an EN-DC cell's LTE anchor carries `mode: NR5G-NSA` but its band is an
+// LTE band. The n/B prefix follows the CARRIER (pcc_rat), like the parent's
+// servingRat(); older samples fall back to signals[0].rat, then mode.
+test('band labels follow the carrier RAT: an NSA LTE anchor on B2 is "B2", never "n2"', () => {
+  const vm = makeVm(loadChunk());
+  assert.strictEqual(vm.bandLabel(s({ mode: 'NR5G-NSA', pcc_rat: 'LTE', band: 2 })), 'B2');
+  assert.strictEqual(vm.bandLabel(s({ mode: 'NR5G-NSA', band: 2, signals: [{ rat: 'LTE', band: 2 }] })), 'B2',
+    'no pcc_rat: signals[0].rat decides');
+  assert.strictEqual(vm.bandLabel(s({ mode: 'NR5G-SA', pcc_rat: 'NR5G-SA', band: 71 })), 'n71');
+  assert.strictEqual(vm.bandLabel(s({ mode: 'NR5G-SA', band: 71 })), 'n71', 'oldest samples: mode');
+  const ev = vm.deriveNetEvents([
+    s({ t: 1000, id: 'A', mode: 'NR5G-NSA', pcc_rat: 'LTE', band: 66 }),
+    s({ t: 11000, id: 'B', mode: 'NR5G-NSA', pcc_rat: 'LTE', band: 2 })], []);
+  assert.strictEqual(ev.length, 1);
+  assert.match(ev[0].detail, / B2$/, 'Handover detail names the anchor as an LTE band');
+  assert.doesNotMatch(ev[0].detail, /n2/);
+});
+
+// #4: collection is every 10 s and every band apply / cell lock REDIALS, so
+// the first registered sample after the change lands well past 8 s.
+test('a user change registered 25 s later (redial + 10 s ticks) is not logged as a Handover', () => {
+  const vm = makeVm(loadChunk());
+  const known = [{ t: 100000, kind: 'user', label: 'Bands applied', detail: '' }];
+  const ev = vm.deriveNetEvents([
+    s({ t: 95000, id: 'A1', band: 71 }),
+    s({ t: 103000, id: null, band: null }),            // redialing: no service
+    s({ t: 113000, id: null, band: null }),
+    s({ t: 125000, id: 'B2', band: 41 })               // registered on the new band
+  ], known);
+  assert.deepStrictEqual(ev, [], 'the user\'s own change is not the network\'s');
+  const dog = [{ t: 100000, kind: 'dog', label: 'Auto-revert', detail: '' }];
+  assert.deepStrictEqual(vm.deriveNetEvents([s({ t: 95000 }), s({ t: 133000, id: 'B2' })], dog), [],
+    'a watchdog revert redials too');
+});
+
+test('a genuine handover well after a user change is still reported', () => {
+  const vm = makeVm(loadChunk());
+  const known = [{ t: 100000, kind: 'user', label: 'Bands applied', detail: '' }];
+  const ev = vm.deriveNetEvents([
+    s({ t: 95000, id: 'A1' }), s({ t: 125000, id: 'B2' }),      // ours
+    s({ t: 135000, id: 'B2' }), s({ t: 190000, id: 'C3' })      // 90 s later: the network's
+  ], known);
+  assert.strictEqual(ev.length, 1);
+  assert.strictEqual(ev[0].t, 190000);
+  assert.match(ev[0].detail, /B2 → C3/);
+  // A "Kept" confirmation touches nothing on the modem: a change 20 s after it
+  // is the network's, not ours.
+  const kept = vm.deriveNetEvents([s({ t: 95000, id: 'A1' }), s({ t: 120000, id: 'B2' })],
+    [{ t: 100000, kind: 'user', label: 'Kept', detail: '' }]);
+  assert.strictEqual(kept.length, 1, 'Kept gets no redial window');
+});
+
+// #2: PAUSED used to only disable the stall guard; every 10 s push re-rendered
+// and slid the view (and a pinned slice) to newer data.
+test('PAUSED freezes the view; pushes are still collected and appear on resume', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const vm = makeVm(c, { samples: [], winW: 15, serverNow: now, serverNowAt: Date.now(), loading: false });
+  for (let i = 5; i >= 1; i--) vm.onPush(s({ t: now - i * 10000, rsrp: -100 - i }));
+  vm.togglePause();
+  assert.strictEqual(vm.live, false);
+  const frozenLast = vm.winSamples().slice(-1)[0].t;
+  vm.onPush(s({ t: now + 10000, rsrp: -80 }));
+  vm.onPush(s({ t: now + 20000, rsrp: -79 }));
+  assert.strictEqual(vm.samples.length, 7, 'pushes are collected while paused');
+  assert.strictEqual(vm.winSamples().slice(-1)[0].t, frozenLast, 'the view does not move');
+  assert.strictEqual(vm.heldCount(), 2);
+  assert.match(textOf(c.render.call(vm, h)), /2 new samples held/, 'says what it is holding');
+  assert.match(textOf(c.render.call(vm, h)), /PAUSED/);
+  vm.togglePause();
+  assert.strictEqual(vm.winSamples().slice(-1)[0].t, now + 20000, 'resume shows everything collected');
+});
+
+test('a pinned slice stays on its sample while pushes keep arriving (live or paused)', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const vm = makeVm(c, { samples: [], winW: 15, serverNow: now, serverNowAt: Date.now(), width: 900, loading: false });
+  for (let i = 30; i >= 0; i--) vm.onPush(s({ t: now - i * 10000, rsrp: -120 + i }));
+  vm.$refs = { lanes: { getBoundingClientRect: () => ({ left: 0, width: 900 }) } };
+  vm.onClick({ clientX: 820 });                       // pin near the right edge
+  const pinned = vm.focusSample();
+  assert.ok(pinned, 'pinned a sample');
+  // Six more pushes (one minute). Under the old minutes-relative pin the
+  // readout slid one sample newer on every push.
+  for (let i = 1; i <= 6; i++) vm.onPush(s({ t: now + i * 10000, rsrp: -50 }));
+  assert.strictEqual(vm.focusSample().t, pinned.t, 'live: same sample after a minute of pushes');
+  assert.match(textOf(vm.sliceReadout(h)), new RegExp(String(pinned.rsrp)), 'readout still shows its reading');
+  vm.togglePause();
+  vm.onPush(s({ t: now + 70000, rsrp: -40 }));
+  assert.strictEqual(vm.focusSample().t, pinned.t, 'paused: same sample');
+});
+
+// #3: rpcSilent resolves null and never rejects, so the old .catch was dead,
+// err was never set, and a failed preload left only post-open samples forever.
+function captureTimers() {
+  const realSet = global.setTimeout, realClear = global.clearTimeout, pending = [];
+  global.setTimeout = (fn, ms) => { const t = { fn, ms }; pending.push(t); return t; };
+  global.clearTimeout = (t) => { const i = pending.indexOf(t); if (i >= 0) pending.splice(i, 1); };
+  return { pending, restore() { global.setTimeout = realSet; global.clearTimeout = realClear; } };
+}
+const flush = () => new Promise((r) => setImmediate(r));
+
+test('a failed preload is reported, retried with backoff, and merged with the pushes that landed meanwhile', async () => {
+  const c = loadChunk();
+  const replies = [null, null];               // two failed preloads (result absent => rpcSilent null)
+  const calls = [];
+  global.window = { $getCookie: () => 'tok', $axios: { post(url, body) {
+    calls.push(body.params[3]);
+    const r = replies.shift();
+    return Promise.resolve({ data: r === undefined ? {} : { result: r } });
+  } } };
+  const timers = captureTimers();
+  try {
+    const vm = makeVm(c, { samples: [], winW: 15, width: 900 });
+    vm._alive = true;                          // mounted
+    vm.fetchHistory();
+    await flush();
+    assert.strictEqual(vm.preloaded, false);
+    assert.strictEqual(timers.pending.length, 1, 'a retry is scheduled');
+    assert.strictEqual(timers.pending[0].ms, 2000, 'first backoff step');
+    assert.match(textOf(c.render.call(vm, h)), /Couldn't load history.*retrying every 2 s/,
+      'the failure is on the page, with the real cadence');
+    // pushes arrive while the preload is failing: the first one used to set
+    // the cursor and end any chance of the window loading
+    const now = Date.now();
+    vm.onPush(s({ t: now - 10000 })); vm.onPush(s({ t: now }));
+    assert.strictEqual(calls.length, 1, 'a regular push does not fetch');
+    timers.pending.shift().fn();               // retry #1 -> fails again
+    await flush();
+    assert.strictEqual(calls[1].window_ms, 15 * 60000, 'the retry asks for the window, not the tail');
+    assert.strictEqual(timers.pending[0].ms, 4000, 'backoff doubles');
+    assert.match(textOf(c.render.call(vm, h)), /Earlier history didn't load.*retrying every 4 s/,
+      'with live samples drawn, the missing history is still called out');
+    // retry #2 succeeds: older history + the two pushed samples again
+    replies.push({ samples: [s({ t: now - 300000 }), s({ t: now - 200000 }), s({ t: now - 10000 }), s({ t: now })],
+      events: [], now });
+    timers.pending.shift().fn();
+    await flush();
+    assert.strictEqual(vm.preloaded, true);
+    assert.deepStrictEqual(vm.samples.map((x) => x.t), [now - 300000, now - 200000, now - 10000, now],
+      'merged with the pushes: deduped, ascending');
+    assert.strictEqual(timers.pending.length, 0, 'no further retries');
+    assert.doesNotMatch(textOf(c.render.call(vm, h)), /retrying/);
+  } finally { timers.restore(); delete global.window; }
+});
+
+test('the backoff is bounded at 30 s and stops when the page is torn down', async () => {
+  const c = loadChunk();
+  global.window = { $getCookie: () => 'tok', $axios: { post() { return Promise.resolve({ data: {} }); } } };
+  const timers = captureTimers();
+  try {
+    const vm = makeVm(c, { samples: [], winW: 15 });
+    vm._alive = true;
+    vm.fetchHistory(); await flush();
+    const steps = [timers.pending[0].ms];
+    for (let i = 0; i < 6; i++) { timers.pending.shift().fn(); await flush(); steps.push(timers.pending[0].ms); }
+    assert.deepStrictEqual(steps, [2000, 4000, 8000, 16000, 30000, 30000, 30000]);
+    c.beforeDestroy.call(vm);
+    assert.strictEqual(timers.pending.length, 0, 'beforeDestroy clears the pending retry');
+  } finally { timers.restore(); delete global.window; }
+});
+
+test('a failed hole backfill is asked again on the next push', async () => {
+  const c = loadChunk();
+  const replies = [null];
+  const calls = [];
+  global.window = { $getCookie: () => 'tok', $axios: { post(url, body) {
+    calls.push(body.params[3]);
+    const r = replies.shift();
+    return Promise.resolve({ data: r == null ? {} : { result: r } });
+  } } };
+  try {
+    const vm = makeVm(c, { samples: [s({ t: 1000 })], lastT: 1000, preloaded: true });
+    vm.onPush(s({ t: 41000 }));                 // a hole: backfill since 1000 -> fails
+    await flush();
+    assert.deepStrictEqual(calls[0], { since: 1000 });
+    replies.push({ samples: [s({ t: 11000 }), s({ t: 21000 }), s({ t: 31000 })], events: [], now: 51000 });
+    vm.onPush(s({ t: 51000 }));                 // a regular push...
+    assert.deepStrictEqual(calls[1], { since: 1000 }, '...re-asks for the tail that failed');
+    await flush();
+    assert.deepStrictEqual(vm.samples.map((x) => x.t), [1000, 11000, 21000, 31000, 41000, 51000]);
+    assert.strictEqual(vm.missingSince, null);
+    vm.onPush(s({ t: 61000 }));
+    assert.strictEqual(calls.length, 2, 'and stops once it has it');
+  } finally { delete global.window; }
+});
+
+// #5: two SIMs are two radios — never one line, never one bar.
+test('the lanes break at a SIM change instead of joining SIM1 to SIM2', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const ss = [];
+  for (let i = 6; i >= 4; i--) ss.push(s({ t: now - i * 10000, slot: '1', rsrp: -100 }));
+  for (let i = 3; i >= 0; i--) ss.push(s({ t: now - i * 10000, slot: '2', id: 'Z9', carrier: 'AT&T', rsrp: -90 }));
+  const vm = makeVm(c, { samples: ss, serverNow: now, serverNowAt: Date.now(), winW: 15, loading: false });
+  const rsrp = walk(c.render.call(vm, h)).filter((n) => n.tag === 'path')[0].data.attrs.d;
+  assert.strictEqual((rsrp.match(/M/g) || []).length, 2, 'two segments, one per SIM: ' + rsrp);
+  const band = vm.busRuns('band');
+  assert.strictEqual(band.length, 2, 'same band on both SIMs is still two runs');
+});
+
+test('the last bus run ends at the last sample once data has stopped, like the lanes', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  // Live data: the last sample is 5 s old -> the run reaches now.
+  let vm = makeVm(c, { samples: [s({ t: now - 25000 }), s({ t: now - 15000 }), s({ t: now - 5000 })],
+    serverNow: now, serverNowAt: Date.now(), winW: 15 });
+  assert.strictEqual(vm.busRuns('band').slice(-1)[0].m1, 0, 'live: extends to now');
+  // Collector stopped 5 minutes ago: the bar must not run on to now.
+  vm = makeVm(c, { samples: [s({ t: now - 320000 }), s({ t: now - 310000 }), s({ t: now - 300000 })],
+    serverNow: now, serverNowAt: Date.now(), winW: 15 });
+  const last = vm.busRuns('band').slice(-1)[0];
+  assert.ok(Math.abs(last.m1 + 5) < 0.05, 'ends at the last sample (-5 min), got ' + last.m1);
 });

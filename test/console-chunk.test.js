@@ -544,8 +544,9 @@ test('checkLibraryStatus stores the status; render shows "Update available" + bu
   const vm = makeVm(c, {});
   const saved = global.window;
   try {
-    global.window = { $rpcRequest: () => Promise.resolve(
-      { checked: true, update_available: true, local_revision: 'old111', remote_revision: 'new222' }) };
+    // Silent transport: a direct $axios POST to /rpc, never $rpcRequest.
+    global.window = { $axios: { post: () => Promise.resolve({ data: { result:
+      { checked: true, update_available: true, local_revision: 'old111', remote_revision: 'new222' } } }) } };
     return vm.checkLibraryStatus().then(() => {
       assert.ok(vm.libStatus && vm.libStatus.update_available);
       const txt = textOf(c.render.call(vm, h));
@@ -585,10 +586,19 @@ test('refreshLibrary success re-fetches the library and re-checks', () => {
   // itself re-reading `window`) actually executes. Chain `.finally()` on the
   // promise instead so teardown happens after the whole chain settles.
   global.window = {
-    $axios: { get: () => { libFetches++; return Promise.resolve({ data: { entries: [] } }); } },
+    $axios: {
+      get: () => { libFetches++; return Promise.resolve({ data: { entries: [] } }); },
+      // library_status rides the silent transport
+      post: (_url, body) => {
+        if (body.params[2] === 'library_status') {
+          statusCalls++;
+          return Promise.resolve({ data: { result: { checked: true, update_available: false, local_revision: 'new222' } } });
+        }
+        return Promise.resolve({ data: {} });
+      }
+    },
     $rpcRequest: (_m, p) => {
       if (p[2] === 'refresh_library') return Promise.resolve({ ok: true, revision: 'new222', count: 7 });
-      if (p[2] === 'library_status') { statusCalls++; return Promise.resolve({ checked: true, update_available: false, local_revision: 'new222' }); }
       return Promise.resolve({});
     }
   };
@@ -604,10 +614,108 @@ test('checkLibraryStatus is fail-silent (rejection -> null, no throw)', () => {
   const vm = makeVm(c, {});
   const saved = global.window;
   try {
-    global.window = { $rpcRequest: () => Promise.reject({ type: 'timeout' }) };
+    global.window = { $axios: { post: () => Promise.reject({ type: 'timeout' }) } };
     return vm.checkLibraryStatus().then(() => {
       assert.strictEqual(vm.libStatus, null);
       assert.doesNotThrow(() => c.render.call(vm, h));
     });
+  } finally { global.window = saved; }
+});
+
+
+// ---- 2.x review fixes (2026-10-28) ----
+
+// The parent evals the chunk ONCE and caches the options object; each switch to
+// the AT console tab destroys the instance and makes a new one from it.
+function stubConsoleWindow(statusReply) {
+  const calls = { status: 0, rpcRequest: 0 };
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  global.window = {
+    $getCookie: () => 'tok',
+    $axios: {
+      get: () => Promise.resolve({ data: { entries: [] } }),
+      post: (_url, body) => {
+        if (body.params[2] === 'library_status') calls.status++;
+        return gate.then(() => ({ data: { result: statusReply } }));
+      }
+    },
+    $rpcRequest: () => { calls.rpcRequest++; return Promise.resolve({}); }
+  };
+  return { calls, release };
+}
+
+test('library_status runs ONCE per page, silently — not on every tab open through $rpcRequest', async () => {
+  const saved = global.window;
+  const st = stubConsoleWindow({ checked: true, update_available: true, local_revision: 'old', remote_revision: 'new' });
+  try {
+    const c = loadChunk();                      // one eval = one page load
+    const first = makeVm(c, {});
+    c.created.call(first);
+    const second = makeVm(c, {});               // tab switched away and back while it is in flight
+    c.created.call(second);
+    assert.strictEqual(st.calls.status, 1, 'the in-flight request is shared, not repeated');
+    st.release();
+    await new Promise((r) => setImmediate(r));
+    assert.ok(second.libStatus && second.libStatus.update_available, 'the re-created tab gets the answer');
+    const third = makeVm(c, {});                // a later tab open
+    c.created.call(third);
+    assert.strictEqual(st.calls.status, 1, 'still one GitHub check for the whole page');
+    assert.ok(third.libStatus && third.libStatus.update_available, 'shown straight away from the store');
+    assert.strictEqual(st.calls.rpcRequest, 0, 'never through $rpcRequest (GL banner on its 12 s timeout)');
+    assert.match(textOf(c.render.call(third, h)), /Update available/);
+  } finally { global.window = saved; }
+});
+
+test('ArrowDown with no recall in progress leaves the typed prompt alone', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  vm.history.push('AT', 'ATI');
+  vm.prompt = 'AT+QENG="servingcell"';
+  vm.promptKey({ key: 'ArrowDown', preventDefault() {} });
+  assert.strictEqual(vm.prompt, 'AT+QENG="servingcell"', 'not cleared');
+  // Up recalls; Down past the newest gives the draft back.
+  vm.promptKey({ key: 'ArrowUp', preventDefault() {} });
+  assert.strictEqual(vm.prompt, 'ATI');
+  vm.promptKey({ key: 'ArrowDown', preventDefault() {} });
+  assert.strictEqual(vm.prompt, 'AT+QENG="servingcell"', 'the draft comes back');
+  assert.strictEqual(vm.histIdx, null);
+});
+
+test('the transcript and command history survive the tab being destroyed and re-created', async () => {
+  const saved = global.window;
+  let answer;
+  global.window = { $rpcRequest: () => new Promise((r) => { answer = r; }) };
+  try {
+    const c = loadChunk();
+    const before = makeVm(c, {});
+    before.prompt = 'AT+QSPN'; before.selId = null;
+    const p = before.send();                    // in flight...
+    const after = makeVm(c, {});                // ...when the user switches tab and back
+    assert.ok(after.lines.some((l) => l.kind === 'cmd' && l.text === 'AT+QSPN'), 'transcript kept');
+    assert.deepStrictEqual(after.history.slice(), ['AT+QSPN'], 'history kept');
+    after.promptKey({ key: 'ArrowUp', preventDefault() {} });
+    assert.strictEqual(after.prompt, 'AT+QSPN', 'and recallable with ArrowUp');
+    answer({ ok: true, requested: 1, ran: 1, aborted: false,
+      steps: [{ cmd: 'AT+QSPN', status: 'ok', response: '+QSPN: "T-Mobile"\r\nOK\r\n' }] });
+    await p;
+    assert.ok(after.lines.some((l) => l.kind === 'resp' && /T-Mobile/.test(l.text)),
+      'a reply landing after the switch reaches the transcript on screen');
+    assert.notStrictEqual(loadChunk().data().lines, after.lines, 'a NEW page load starts clean');
+  } finally { global.window = saved; }
+});
+
+test('the page-lifetime transcript and history stay bounded', () => {
+  const saved = global.window;
+  global.window = { $rpcRequest: () => new Promise(() => {}) };
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, {});
+    for (let i = 0; i < 150; i++) { vm.prompt = 'AT+N' + i; vm.selId = null; vm.sending = false; vm.send(); }
+    for (let i = 0; i < 500; i++) vm.note('n' + i);
+    const again = makeVm(c, {});
+    assert.strictEqual(again.history.length, 100, 'history capped');
+    assert.strictEqual(again.history[99], 'AT+N149', 'keeps the newest');
+    assert.strictEqual(again.lines.length, vm.LINES_MAX, 'transcript capped at LINES_MAX');
   } finally { global.window = saved; }
 });
