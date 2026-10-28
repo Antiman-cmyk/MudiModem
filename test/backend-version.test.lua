@@ -89,5 +89,17 @@ writef(os.getenv("MUDIMODEM_VERSION_FILE"), '{"version":"2.0.0","base":"https://
 local fcase = M.app_version({})
 assert(fcase.source == "https://raw.githubusercontent.com/Antiman-cmyk/MudiModem/main", "F malformed base must fall back")
 
+-- Case G: only a NEWER release is an update — a dev/fork install ahead of main
+-- is not offered a downgrade, and numbers compare as numbers (2.0.10 > 2.0.9).
+writef(os.getenv("MUDIMODEM_VERSION_FILE"), '{"version":"2.0.1"}')
+writef(TMP .. "/remote.json", '{"version":"2.0.0"}')
+assert(M.app_version({}).update_available == false, "G an older remote is not an update")
+writef(os.getenv("MUDIMODEM_VERSION_FILE"), '{"version":"2.0.9"}')
+writef(TMP .. "/remote.json", '{"version":"2.0.10"}')
+assert(M.app_version({}).update_available == true, "G 2.0.10 is newer than 2.0.9")
+writef(os.getenv("MUDIMODEM_VERSION_FILE"), '{"version":"2.0"}')
+writef(TMP .. "/remote.json", '{"version":"2.0.0"}')
+assert(M.app_version({}).update_available == false, "G 2.0 == 2.0.0")
+
 print("backend-version OK")
 

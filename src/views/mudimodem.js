@@ -253,28 +253,7 @@ module.exports = {
     },
     rsrpQ() { return this.qFromLevel(this.serving.rsrp_level); },
     sinrQ() { return this.qFromLevel(this.serving.sinr_level); },
-    rsrqQ() { return this.qFromLevel(this.serving.rsrq_level); },
-    facts() {
-      var c = this.serving, out = [];
-      var push = function (k, v) { if (v !== undefined && v !== null && v !== "") out.push([k, v]); };
-      push("Mode", c.mode);
-      push("Band", this.bandLabel === "—" ? null : this.bandLabel);
-      push("Bandwidth", c.dl_bandwidth);
-      push("Cell ID", c.id);
-      push("TAC", c.tac);
-      push("PCI", c.pci);
-      push("Channel", this.chanLabel(this.servingRat, c.band, c.tx_channel));
-      push("CA", this.caLabel || null);
-      // `!= null` not `!== undefined`: the /ws seed keeps JSON nulls (cjson),
-      // and "null dB" is not a reading.
-      push("RSRP", c.rsrp != null ? c.rsrp + " dBm" : null);
-      push("RSRQ", c.rsrq != null ? c.rsrq + " dB" : null);
-      push("SINR", c.sinr != null ? c.sinr + " dB" : null);
-      if (c.rssi != null) push("RSSI", c.rssi + " dBm");
-      push("Carrier", this.servingCarrier);
-      push("SIM slot", this.activeSlot);
-      return out;
-    }
+    rsrqQ() { return this.qFromLevel(this.serving.rsrq_level); }
   },
 
   watch: {

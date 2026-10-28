@@ -1332,6 +1332,44 @@ local function write_json_file(path, obj)
   return true
 end
 
+-- A status that still says `running` while no test is: the tool was killed
+-- (scheduler timeout, OOM), crashed, or never started. Left alone it disables
+-- Run until the next scheduled test or a reboot. The tool stamps every running
+-- status with its pid + start time; trust it only while /proc shows that pid
+-- is still our tool (a cmdline check, so a recycled pid can't pass; /proc is
+-- readable whatever the worker's uid, unlike kill -0). Before the tool's own
+-- first write (our "starting" stub, no pid) allow a short grace.
+local PROC                  = os.getenv("MUDIMODEM_PROC") or "/proc"
+local SPEEDTEST_START_GRACE = 60    -- s for the spawned tool to write its pid
+local SPEEDTEST_MAX_RUN     = 900   -- s; a real run is ~3 min at worst
+
+local function speedtest_alive(pid)
+  pid = tonumber(nn(pid))
+  if not pid or pid < 2 or pid ~= math.floor(pid) then return false end
+  local f = io.open(PROC .. "/" .. string.format("%d", pid) .. "/cmdline", "r")
+  if not f then return false end
+  local cmd = f:read("*a") or ""
+  f:close()
+  return cmd:find("mudimodem-speedtest", 1, true) ~= nil
+end
+
+local function speedtest_status()
+  local st = read_json_file(SPEEDTEST_STATUS, nil)
+  if type(st) ~= "table" or st.running ~= true then return st end
+  local started = tonumber(nn(st.started))
+  local age = started and (os.time() - started) or nil
+  local dead
+  if nn(st.pid) ~= nil then dead = not speedtest_alive(st.pid)
+  else dead = (age == nil) or (age > SPEEDTEST_START_GRACE) end
+  if not dead and age and age > SPEEDTEST_MAX_RUN then dead = true end
+  if dead then
+    st = { running = false, phase = "error", iface = st.iface,
+           error = "the previous speed test stopped without finishing" }
+    write_json_file(SPEEDTEST_STATUS, st)
+  end
+  return st
+end
+
 function M.run_speedtest(args)
   local iface = (args and args.iface) or "cellular"
   if iface ~= "cellular" and iface ~= "wired" then
@@ -1342,18 +1380,18 @@ function M.run_speedtest(args)
     return { error = "iface_down", iface = iface }
   end
 
-  local st = read_json_file(SPEEDTEST_STATUS, nil)
+  local st = speedtest_status()
   if st and st.running then return { running = true } end
 
   os.execute("mkdir -p /etc/mudimodem /tmp/mudimodem 2>/dev/null")
-  write_json_file(SPEEDTEST_STATUS, { running = true, phase = "starting", iface = iface })
+  write_json_file(SPEEDTEST_STATUS, { running = true, phase = "starting", iface = iface, started = os.time() })
   local quoted_bin = "'" .. SPEEDTEST_BIN:gsub("'", "'\\''") .. "'"
   spawn_detached("python3 " .. quoted_bin .. " --trigger manual --iface " .. iface)
   return { started = true }
 end
 
 function M.get_speedtest_status(args)
-  return read_json_file(SPEEDTEST_STATUS, { running = false })
+  return speedtest_status() or { running = false }
 end
 
 function M.get_speedtest_history(args)
@@ -1438,6 +1476,28 @@ local function read_version_file()
   return "unknown", DEFAULT_BASE
 end
 
+-- Is `a` a newer release than `b`? Dotted numbers compare numerically
+-- ("2.0.10" > "2.0.9"); anything else (e.g. "unknown") falls back to "they
+-- differ", so a box that can't name its version is still offered one. A plain
+-- inequality offered a dev/fork install that is AHEAD of main a "downgrade" as
+-- an update.
+local function version_newer(a, b)
+  local function parts(v)
+    v = tostring(v or "")
+    if not v:match("^v?%d+[%.%d]*$") then return nil end
+    local t = {}
+    for n in v:gmatch("%d+") do t[#t + 1] = tonumber(n) end
+    return t
+  end
+  local pa, pb = parts(a), parts(b)
+  if not pa or not pb then return a ~= b end
+  for i = 1, math.max(#pa, #pb) do
+    local x, y = pa[i] or 0, pb[i] or 0
+    if x ~= y then return x > y end
+  end
+  return false
+end
+
 function M.app_version(args)
   local installed, base = read_version_file()
   local out = { installed = installed, latest = nil, source = base,
@@ -1456,7 +1516,7 @@ function M.app_version(args)
   end
   out.latest = tostring(obj.version)
   out.checked = true
-  out.update_available = (out.latest ~= out.installed)
+  out.update_available = version_newer(out.latest, out.installed)
   return out
 end
 
