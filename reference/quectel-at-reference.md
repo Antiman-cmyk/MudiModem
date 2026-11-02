@@ -246,10 +246,12 @@ Only **LTE** and **WCDMA** neighbour formats exist in the manual:
 ```
 🟢 `AT+QENG=?` on our box → `("servingcell","neighbourcell")` — the type exists.
 🟢 On NR5G-SA it returns a bare `OK` (2026-07-18: no neighbour list exists there).
-❓ LTE / NSA-anchor replies on this box and any NR line format are not captured yet. The Cell lock
-tab's "Neighbour cells" (`src/web/main/neighbours.js`, on click only, through mudimodemd's AT
-queue) parses the two LTE formats above and shows any other `+QENG:` line verbatim, so the first
-user on LTE/NSA who reads it settles both.
+🟢 From the baseband itself (`NON-HLOS_RG650VNA01AC.bin` → `image/modem.b24`, `quectel_eng_atc.c`):
+the only neighbour queries are `quec_qeng_query_lte_ncell` and `quec_qeng_query_wcdma_ncell` — there
+is **no NR neighbour list on any RAT**. LTE intra: `+QENG: "%s","%s",%ld,%d,%d,%d,%d,%s,` then five
+`%d` (or `-`); LTE inter: `+QENG: "%s","%s",%ld,%s,%s,%s,%s,%s,` (PCI…SINR as strings, `-` when not
+measured) then four `%d`. The Cell lock tab's "Neighbour cells" (`src/web/main/neighbours.js`)
+parses exactly these.
 
 ### 4.3 `AT+QNWINFO` 📘🟢
 `+QNWINFO: <AcT>,<oper>,<band>,<channel>` — 📘 note: returns `+QNWINFO: No Service` if unregistered.

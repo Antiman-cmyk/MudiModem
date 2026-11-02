@@ -1761,7 +1761,7 @@ var __mm = (() => {
         this.lockConfirm = null;
         this.scanConfirm = false;
         if (!this.scan.running) this.scan = { towers: [], running: false, error: "", ts: 0, slot: null };
-        if (!this.nb.running) this.nb = { cells: [], other: [], running: false, error: "", ts: 0, slot: null, read: false };
+        if (!this.nb.running) this.nb = { cells: [], running: false, error: "", ts: 0, slot: null, read: false };
         this.nbConfirm = null;
         this.applyError = "";
         this.clearResetNote();
@@ -2252,7 +2252,7 @@ var __mm = (() => {
     return void 0;
   }
   function parseNeighbours(text) {
-    var cells = [], other = [];
+    var cells = [];
     var num = function(v) {
       var s = String(v == null ? "" : v).trim();
       if (s === "" || s === "-") return void 0;
@@ -2261,16 +2261,10 @@ var __mm = (() => {
     };
     String(text || "").replace(/\r/g, "\n").split("\n").forEach(function(l) {
       l = l.trim();
-      var m = l.match(/^\+QENG:\s*"neighbourcell ?([a-z]*)"\s*,\s*"([^"]*)"\s*,(.*)$/i);
-      if (!m) {
-        if (/^\+QENG:/i.test(l)) other.push(l);
-        return;
-      }
-      var f = m[3].split(",");
-      if (m[2] !== "LTE" || num(f[0]) === void 0 || num(f[1]) === void 0) {
-        other.push(l);
-        return;
-      }
+      var m = l.match(/^\+QENG:\s*"neighbourcell ?([a-z]*)"\s*,\s*"LTE"\s*,(.*)$/i);
+      if (!m) return;
+      var f = m[2].split(",");
+      if (num(f[0]) === void 0) return;
       cells.push({
         kind: m[1].toLowerCase() || "?",
         rat: "LTE",
@@ -2284,13 +2278,13 @@ var __mm = (() => {
         band: lteBandOf(f[0])
       });
     });
-    return { cells, other };
+    return { cells };
   }
   var neighbours_default = {
     data() {
       return {
         // the last read: cells/other from parseNeighbours, the slot it was read for, its time
-        nb: { cells: [], other: [], running: false, error: "", ts: 0, slot: null, read: false },
+        nb: { cells: [], running: false, error: "", ts: 0, slot: null, read: false },
         nbConfirm: null
         // index of the row whose Lock awaits confirm
       };
@@ -2300,7 +2294,7 @@ var __mm = (() => {
         var self = this;
         if (this.nb.running || this.scan.running) return;
         var slot = this.slotOf(this.lockData);
-        this.nb = { cells: [], other: [], running: true, error: "", ts: 0, slot: slot == null ? null : slot, read: false };
+        this.nb = { cells: [], running: true, error: "", ts: 0, slot: slot == null ? null : slot, read: false };
         this.nbConfirm = null;
         rpcAt('AT+QENG="neighbourcell"', 8).then(function(r) {
           if (!r || r.error) {
@@ -2314,7 +2308,6 @@ var __mm = (() => {
           }
           var p = parseNeighbours(st.response);
           self.nb.cells = p.cells;
-          self.nb.other = p.other;
           self.nb.read = true;
           self.nb.ts = Date.now();
         }).catch(function(e) {
@@ -2344,7 +2337,7 @@ var __mm = (() => {
         var body = null;
         if (nb.running) body = h("div", { staticClass: "mm-empty" }, "Asking the modem...");
         else if (nb.error) body = h("div", { staticClass: "mm-empty" }, t("Couldn't read neighbours: {err}", { err: t(nb.error) }));
-        else if (nb.read && !nb.cells.length && !nb.other.length)
+        else if (nb.read && !nb.cells.length)
           body = h(
             "div",
             { staticClass: "mm-empty" },
@@ -2388,13 +2381,6 @@ var __mm = (() => {
                 } }
               }, "Lock")
             ]);
-          });
-          nb.other.forEach(function(l, i) {
-            rows.push(h("div", {
-              key: "o" + i,
-              staticClass: "mm-hint",
-              staticStyle: { fontFamily: "ui-monospace,monospace", wordBreak: "break-all" }
-            }, l));
           });
           body = h("div", rows);
         }

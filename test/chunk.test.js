@@ -2049,8 +2049,7 @@ test('the "?" beside the RSRP label opens a glossary of the readings', () => {
 // ---- neighbour cells without a scan (src/web/main/neighbours.js) ----
 const QENG_LTE = '\r\n+QENG: "neighbourcell intra","LTE",66786,301,-11,-92,-60,12,38,62,12,10,22\r\n' +
   '+QENG: "neighbourcell inter","LTE",5230,77,-15,-108,-75,-2,10,3,4,5\r\n' +
-  '+QENG: "neighbourcell inter","LTE",2175,12,-,-,-,-,-,-\r\n' +
-  '+QENG: "neighbourcell","NR5G",627264,516,-90\r\n\r\nOK\r\n';
+  '+QENG: "neighbourcell inter","LTE",2175,-,-,-,-,-,-,-,-,-\r\n\r\nOK\r\n';
 
 test('readNeighbours(): one read-only AT through the queue, {pending} followed via at_result, LTE parsed', async () => {
   const calls = stubRpc([
@@ -2076,14 +2075,14 @@ test('readNeighbours(): one read-only AT through the queue, {pending} followed v
     assert.deepStrictEqual([b.kind, b.earfcn, b.band, b.rsrp], ['inter', 5230, 13, -108]);
     assert.strictEqual(z.rsrp, undefined, '"-" is no reading, never 0');
     assert.strictEqual(z.band, 4, 'EARFCN 2175 is B4');
-    assert.deepStrictEqual(vm.nb.other, ['+QENG: "neighbourcell","NR5G",627264,516,-90'], 'NR shown raw, not guessed');
+    assert.strictEqual(z.pci, undefined, 'an unmeasured inter-frequency cell has no PCI (baseband: %s fields)');
     const tree = vm.renderNeighbours(h);
     const txt = textOf(tree);
     assert.match(txt, /B66  EARFCN 66786  PCI 301/);
-    assert.match(txt, /NR5G",627264/);
     const rows = walk(tree).filter((n) => n.data && n.data.staticClass === 'mm-scan-row');
     assert.strictEqual(textOf(rows[0]).indexOf('PCI 301') >= 0, true, 'strongest first');
-    assert.strictEqual(textOf(rows[2]).indexOf('PCI 12') >= 0, true, 'no RSRP sinks to the bottom');
+    assert.strictEqual(textOf(rows[2]).indexOf('EARFCN 2175') >= 0, true, 'no RSRP sinks to the bottom');
+    assert.ok(walk(rows[2]).filter((n) => n.tag === 'button')[0].data.attrs.disabled, 'no PCI: nothing to lock to');
     const t = vm.nbTarget(a);
     assert.deepStrictEqual([t.rat, t.pci, t.freq, t.band, t.slot], ['4g', 301, 66786, 66, vm.slotOf(vm.lockData)],
       'a 4G lock target: EARFCN + PCI on the SIM it was read for');
@@ -2111,7 +2110,7 @@ test('readNeighbours(): 5G SA answers a bare OK -> an honest empty state; a refu
 test('a SIM change drops the neighbour list (it belongs to the other SIM)', () => {
   const c = loadChunk();
   const vm = makeVm(c, LIVE);
-  vm.nb = { cells: [{ pci: 1 }], other: [], running: false, error: '', ts: 1, slot: 1, read: true };
+  vm.nb = { cells: [{ pci: 1 }], running: false, error: '', ts: 1, slot: 1, read: true };
   vm.nbConfirm = 0;
   vm.fetchBands = () => {}; vm.fetchLock = () => {};
   vm.onSlotChange();

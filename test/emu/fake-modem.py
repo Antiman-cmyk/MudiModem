@@ -19,6 +19,7 @@ STATE = sys.argv[3] if len(sys.argv) > 3 else None
 NR_BANDS = "2:5:7:12:13:14:25:26:29:30:38:41:48:66:70:71:77:78"
 LTE_BANDS = "2:4:5:7:12:13:14:17:25:26:29:30:38:41:42:43:48:66:71"
 sub = {"n": 1}
+slot = {"n": 1}                        # AT+QUIMSLOT: the physical SIM slot in use
 pref = {1: {"mode_pref": "AUTO", "nr5g_disable_mode": "0", "lte_band": LTE_BANDS, "nsa_nr5g_band": NR_BANDS,
             "nr5g_band": NR_BANDS, "roam_pref": "255"},
         2: {"mode_pref": "AUTO", "nr5g_disable_mode": "0", "lte_band": LTE_BANDS, "nsa_nr5g_band": NR_BANDS,
@@ -60,6 +61,12 @@ def answer(cmd):
         return []
     if u == "AT+QUIMSUB?":
         return ["+QUIMSUB: %d" % sub["n"]]
+    m = re.match(r'AT\+QUIMSLOT=(\d)', u)
+    if m:
+        slot["n"] = int(m.group(1))
+        return []
+    if u == "AT+QUIMSLOT?":
+        return ["+QUIMSLOT: %d" % slot["n"]]
     m = re.match(r'AT\+QNWPREFCFG="([a-z0-9_]+)"(?:,(.*))?$', cmd)
     if m:
         k, v = m.group(1), m.group(2)
@@ -84,7 +91,6 @@ def answer(cmd):
     table = {
         "AT": [], "ATE0": [], "ATE1": [], "AT+CMEE=2": [], "AT+CMEE=1": [],
         "AT+CPIN?": ["+CPIN: READY"],
-        "AT+QUIMSLOT?": ["+QUIMSLOT: 1"],
         "AT+CIMI": [s["imsi"]],
         "AT+QCCID": ["+QCCID: " + s["iccid"]], "AT+ICCID": ["+ICCID: " + s["iccid"]],
         "AT+GSN": ["860000000000001"], "AT+CGSN": ["860000000000001"],
@@ -144,7 +150,7 @@ def main():
             line, buf = buf[:m.start()].decode("latin-1").strip(), buf[m.end():]
             if not line:
                 continue
-            log.write(json.dumps({"t": time.time(), "cmd": line, "sub": sub["n"]}) + "\n"); log.flush()
+            log.write(json.dumps({"t": time.time(), "cmd": line, "sub": sub["n"], "slot": slot["n"]}) + "\n"); log.flush()
             out = answer(line)
             if out is None:
                 resp = "\r\nERROR\r\n"

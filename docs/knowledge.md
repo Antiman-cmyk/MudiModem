@@ -106,10 +106,21 @@ from 3GPP TS 38.101-1 / 36.101.
 
 ### 4.2 Writes go through GL's own store
 - Bands: `modem.set_band_config {bus, slot, band_enable, band_filter_mode, network_mode,
-  band_list:{LTE,"NR-SA","NR-NSA"}}` via glc. One write, fail-closed, durable (cellular_manager
-  re-applies GL's store on restart). `band_filter_mode` 0 = allowlist. GL's
-  `quectel_set_band_info` derives `mode_pref` + `nr5g_disable_mode` from `network_mode` AND which
-  lists are empty (@0x29c28 🟡). Panic/open state = `band_enable:false` + `AUTO`.
+  band_list:{LTE,"NR-SA","NR-NSA"}}` via glc. One write, fail-closed, durable. `band_filter_mode`
+  0 = allowlist. Panic/open state = `band_enable:false` + `AUTO`. What GL does with it, measured by
+  running GL's own cellular_manager + glc under emulation (`test/emu/gl-real.sh`, every AT logged):
+  - **current slot**: applies at once, writing only what differs from the module (it queries the
+    three band lists first): AUTO + all lists → `mode_pref` AUTO, `nr5g_disable_mode` 0, the
+    lists; AUTO or NR5G + **empty NR-SA** → `mode_pref` LTE:NR5G, `nr5g_disable_mode` **1** (SA
+    off), no `nr5g_band`; **empty NR-NSA** → LTE:NR5G, mode **2** (NSA off), no `nsa_nr5g_band`;
+    LTE → `mode_pref` LTE, disable 2 then 1; NR5G then re-sends `mode_pref` NR5G after the cycle
+    (so NR5G + empty SA = 5G-only with SA off = no service). `band_enable:false` writes back every
+    band the module supports (modem_list.json). Each apply ends `AT+CFUN=4` → `AT+CFUN=1` (radio
+    cycle) and a redial. A `band_list` **without** the NR-SA key applies nothing at all.
+  - **other slot**: stored only, no AT. GL's connection manager (`libcmcm.so`) compares a slot's
+    stored config with the module **whenever it dials that slot** (SIM switch / failover / boot /
+    redial) and restores it if different ("bus[cpu] slot[2] band set success"), under that
+    slot's subscription — so pre-configuring the standby SIM takes effect when it next connects.
 - Cell lock: `modem.set_cell_tower {bus, slot, lock, network_type, pci, freq, scs?, band?, …}`;
   `lock:false` clears ONE family (chosen by `network_type`). NR lock is PCI-first
   (`QNWLOCK="common/5g",pci,freq,scs,band`), LTE `"common/4g",1,freq,pci`; GL sets
@@ -259,8 +270,11 @@ comma-separated reply. Nothing auto-runs; `{{params}}` must be filled; set/nv ne
 1. `AT+QPRTPARA` (1–4) mapping — believed 1 backup, 3 force restore, 4 info (other family's doc);
    unverified, never run it guessing.
 2. Is `policy_band` writable (`policy_mode` exists, undocumented)?
-3. `AT+QENG="neighbourcell"` on LTE / NSA on this box, and any NR line format (SA answers a bare `OK`). Cell lock → Neighbour cells shows unknown lines verbatim, so the first user report settles it.
+3. ~~`AT+QENG="neighbourcell"` formats~~ — settled from the baseband (`NON-HLOS_*.bin` → `modem.b24`,
+   `quectel_eng_atc.c`): only `quec_qeng_query_lte_ncell` and `quec_qeng_query_wcdma_ncell` exist,
+   so there is no NR neighbour list on any RAT (SA's bare `OK` measured); LTE intra
+   `"%s","%s",%ld,%d,%d,%d,%d,%s,` + five ints or `-`, inter `%ld` then PCI…SINR as `%s` (may be `-`).
 4. `AT+QCAINFO` `<pcell_state>` returned `5` (documented 0|1) — don't decode positionally.
-5. The full `quectel_set_band_info` branch table (which empty-list combinations emit
-   `nr5g_disable_mode` 1/2) — settle by disassembly first.
+5. ~~`quectel_set_band_info` branch table~~ — measured by running GL (§4.2 above); the baseband
+   accepts `nr5g_disable_mode` (0-2) and reads it back (`+QNWPREFCFG: "nr5g_disable_mode",%d`).
 6. Real duration of `scan_cell_tower` vs the 300 s glc timeout.

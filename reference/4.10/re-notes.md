@@ -16,6 +16,16 @@ question can be answered the same way. Scripts in `re-tools/` (dev-box only; nee
 - `boot.img` carries 17 DTBs appended to the kernel: scan for `d00dfeed`, `dtc -I dtb -O dts`.
   The E5800 one says `model = "GL.iNet E5800, Qualcomm Technologies, Inc. SDXPINN IDP MBB"`.
 - `NON-HLOS_*.bin` are FAT16 images of the baseband; `grep -a` finds the revision strings.
+  `re-tools/fatx.py <bin> <dest>` unpacks them (no mount): `image/modem.mdt` + `modem.bNN` is the
+  Hexagon modem; Quectel's AT handlers (`quectel_eng_atc.c`, `quectel_nwpref_atc.c`, …) keep their
+  reply format strings in plain text in `modem.b24` (`strings -n 4`).
+- GL's libraries call everything through the GOT (`adrp/ldr/blr`, no `bl`):
+  `re-tools/gotcalls.py <elf> <function>` names a function's calls (and `--strings` its strings).
+- Easier than reading GL: RUN it. `test/emu/gl-real.sh` (overlay + chroot + binfmt in private
+  namespaces) runs the image's cellular_manager against `test/emu/fake-modem.py`. Gotchas met on
+  the way: GL waits up to 60 s for `/tmp/mcm_*_service_ready.flag`; qemu-user does not translate
+  unix-socket paths (hence chroot); glc's `read(0, buf, 4096)` into a `calloc(len+1)` buffer
+  EFAULTs under qemu unless CONTENT_LENGTH ≥ 4096 (the real kernel copies only what arrived).
 
 ## GL's cellular libraries are section-less ELFs
 `readelf -S` shows nothing; use `readelf -l -W` (PT_LOAD) for vaddr↔offset and

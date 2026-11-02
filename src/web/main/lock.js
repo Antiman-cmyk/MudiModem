@@ -55,7 +55,7 @@ export default {
       this.lockConfirm = null;
       this.scanConfirm = false;
       if (!this.scan.running) this.scan = { towers: [], running: false, error: "", ts: 0, slot: null };
-      if (!this.nb.running) this.nb = { cells: [], other: [], running: false, error: "", ts: 0, slot: null, read: false };
+      if (!this.nb.running) this.nb = { cells: [], running: false, error: "", ts: 0, slot: null, read: false };
       this.nbConfirm = null;
       this.applyError = "";
       this.clearResetNote();

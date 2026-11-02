@@ -226,6 +226,13 @@ pushed as `mudimodem.collect`.
 
 ## 6. What the image settled, and the short list that only a running box can answer
 
+Settled by RUNNING GL (2026-11-02, `test/emu/gl-real.sh`: the image's cellular_manager, modem_AT
+and glc under qemu against a fake RG650V that logs every AT command): `get_signals` (§2), the
+signal levels (§5), `set_band_config` per slot and the dial-time band restore
+(`docs/knowledge.md` §4.2). Settled from the baseband (`NON-HLOS_RG650VNA01AC.bin`, FAT16 →
+`image/modem.b24`; `reference/4.10/re-tools/fatx.py`): the `QENG` neighbour formats (LTE + WCDMA
+only), `nr5g_disable_mode` (0-2, readable), `+QGDCNT: %llu,%llu`.
+
 Settled from the image (second pass, 2026-09-02):
 - **`cellular.modem status` wrapper:** GL's own `lib/functions/modem.sh get_current_sim_slot`
   parses the NO-ARG form as `@.modems[@.bus='…'].current_sim_slot`, as does `websocket/

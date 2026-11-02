@@ -2,11 +2,11 @@
 // mudimodemd's AT queue (the console's transport), only when the user asks. The link stays up;
 // GL's scan_cells takes the modem offline for minutes.
 //
-// What the modem returns (reference/quectel-at-reference.md §4.2): LTE neighbours only,
+// What the modem returns — from the baseband itself (NON-HLOS modem.b24, quectel_eng_atc.c: only
+// quec_qeng_query_lte_ncell and quec_qeng_query_wcdma_ncell exist, so NO NR neighbours on any RAT):
 //   +QENG: "neighbourcell intra","LTE",<earfcn>,<pci>,<rsrq>,<rsrp>,<rssi>,<sinr>,<srxlev>,…
 //   +QENG: "neighbourcell inter","LTE",<earfcn>,<pci>,<rsrq>,<rsrp>,<rssi>,<sinr>,<srxlev>,…
-// and a bare OK on 5G SA (measured: no neighbour list exists there). Any other neighbour line
-// (an NR format, undocumented) is shown as the modem sent it, never guessed at.
+// where an inter-frequency cell's PCI…SINR are strings that may read "-". 5G SA answers a bare OK.
 import { rpcAt } from "../kit/rpc.js";
 import { t as T } from "../kit/i18n.js";
 
@@ -27,10 +27,10 @@ export function lteBandOf(earfcn) {
   return undefined;
 }
 
-// The modem's reply -> { cells: [{kind, rat, earfcn, pci, rsrq, rsrp, rssi, sinr, srxlev, band}],
-// other: [lines] }. A "-" or empty field is undefined, never 0.
+// The modem's reply -> { cells: [{kind, rat, earfcn, pci, rsrq, rsrp, rssi, sinr, srxlev, band}] }.
+// A "-" or empty field is undefined, never 0 (such a cell shows, but cannot be locked).
 export function parseNeighbours(text) {
-  var cells = [], other = [];
+  var cells = [];
   var num = function (v) {
     var s = String(v == null ? "" : v).trim();
     if (s === "" || s === "-") return undefined;
@@ -39,22 +39,22 @@ export function parseNeighbours(text) {
   };
   String(text || "").replace(/\r/g, "\n").split("\n").forEach(function (l) {
     l = l.trim();
-    var m = l.match(/^\+QENG:\s*"neighbourcell ?([a-z]*)"\s*,\s*"([^"]*)"\s*,(.*)$/i);
-    if (!m) { if (/^\+QENG:/i.test(l)) other.push(l); return; }
-    var f = m[3].split(",");
-    if (m[2] !== "LTE" || num(f[0]) === undefined || num(f[1]) === undefined) { other.push(l); return; }
+    var m = l.match(/^\+QENG:\s*"neighbourcell ?([a-z]*)"\s*,\s*"LTE"\s*,(.*)$/i);
+    if (!m) return;
+    var f = m[2].split(",");
+    if (num(f[0]) === undefined) return;
     cells.push({ kind: m[1].toLowerCase() || "?", rat: "LTE", earfcn: num(f[0]), pci: num(f[1]),
                  rsrq: num(f[2]), rsrp: num(f[3]), rssi: num(f[4]), sinr: num(f[5]), srxlev: num(f[6]),
                  band: lteBandOf(f[0]) });
   });
-  return { cells: cells, other: other };
+  return { cells: cells };
 }
 
 export default {
   data() {
     return {
       // the last read: cells/other from parseNeighbours, the slot it was read for, its time
-      nb: { cells: [], other: [], running: false, error: "", ts: 0, slot: null, read: false },
+      nb: { cells: [], running: false, error: "", ts: 0, slot: null, read: false },
       nbConfirm: null,      // index of the row whose Lock awaits confirm
     };
   },
@@ -63,7 +63,7 @@ export default {
       var self = this;
       if (this.nb.running || this.scan.running) return;
       var slot = this.slotOf(this.lockData);
-      this.nb = { cells: [], other: [], running: true, error: "", ts: 0, slot: slot == null ? null : slot, read: false };
+      this.nb = { cells: [], running: true, error: "", ts: 0, slot: slot == null ? null : slot, read: false };
       this.nbConfirm = null;
       rpcAt('AT+QENG="neighbourcell"', 8)
         .then(function (r) {
@@ -74,7 +74,7 @@ export default {
               : "the modem refused the command"; return;
           }
           var p = parseNeighbours(st.response);
-          self.nb.cells = p.cells; self.nb.other = p.other; self.nb.read = true; self.nb.ts = Date.now();
+          self.nb.cells = p.cells; self.nb.read = true; self.nb.ts = Date.now();
         })
         .catch(function (e) { self.nb.error = (e && (e.type || e.message)) || "request failed"; })
         .then(function () { self.nb.running = false; });
@@ -97,7 +97,7 @@ export default {
       var body = null;
       if (nb.running) body = h("div", { staticClass: "mm-empty" }, "Asking the modem...");
       else if (nb.error) body = h("div", { staticClass: "mm-empty" }, T("Couldn't read neighbours: {err}", { err: T(nb.error) }));
-      else if (nb.read && !nb.cells.length && !nb.other.length)
+      else if (nb.read && !nb.cells.length)
         body = h("div", { staticClass: "mm-empty" },
           "The modem reports no neighbours. On 5G SA it never does - only a scan finds other cells there.");
       else if (nb.read) {
@@ -126,10 +126,6 @@ export default {
                   attrs: { disabled: !!self.pending || self.lockBusy || locked || c.pci === undefined },
                   on: { click: function () { self.nbConfirm = i; } } }, "Lock")
           ]);
-        });
-        nb.other.forEach(function (l, i) {
-          rows.push(h("div", { key: "o" + i, staticClass: "mm-hint",
-            staticStyle: { fontFamily: "ui-monospace,monospace", wordBreak: "break-all" } }, l));
         });
         body = h("div", rows);
       }
