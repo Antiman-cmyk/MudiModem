@@ -38,7 +38,9 @@ to its tab.
 Choose which cellular bands the modem may use. Each band is colored for its **real** state — *active*,
 *permitted but not selected*, or **blocked by carrier policy** (shown and explained, but not selectable,
 because the modem will never use it ). A network-mode selector (Auto /
-5G only / 4G only) sits on top.
+5G only / 4G only) sits on top, and a **5G** selector — SA + NSA, **NSA only** or **SA only** — which
+GL's stock page does not offer. With two SIMs you can also edit the **standby SIM's** bands: they are
+stored and GL applies them the next time that SIM connects (a SIM switch or failover).
 
 Band changes are **confirm-or-revert**: applying one starts a ~60-second countdown and automatically
 rolls back unless you confirm you want to keep it — so a bad lock can't strand the cellular link you're

@@ -64,6 +64,11 @@ R4 features built on it, plus the fixes they surfaced.
   spent your time on, with how they performed — "was it like this last week, and where?".
 - **Modem crashes are logged.** When GL saves a modem crash dump (the modem restarted on its own),
   Tracking records a "Modem crash" event at that time.
+- **5G SA / NSA choice:** the Bands tab can turn standalone or non-standalone 5G off (SA + NSA,
+  NSA only, SA only) — GL's engine supports it, its page does not. Same confirm-or-revert as any
+  band change; NSA-only is refused under 5G-only, where it would leave nothing to connect to.
+- **Bands for the standby SIM:** with two SIMs, the Bands tab can edit the SIM that is not in use.
+  GL stores the change and applies it the next time that SIM connects (switch or failover).
 - **Half the modem polling for live RF:** GL already samples both SIMs' signal every 10 s; the
   collector now reads GL's samples instead of asking the modem again, and asks only for the cell
   id when the serving cell changes (or once a minute). Same samples, same signal levels — verified

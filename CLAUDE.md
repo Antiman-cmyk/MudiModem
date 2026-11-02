@@ -30,7 +30,9 @@ Rule of scope (owner): ship only what stock 4.10 lacks or does incompletely.
 - **Never send `sub_id=0`**; resolve slot → sub_id (slot first, IMSI-confirmed). Writes carry the
   slot the page read and refuse if the active SIM changed.
 - Every band/cell-lock write is **confirm-or-revert**, written through GL's own store
-  (`modem.set_band_config` / `set_cell_tower` via glc), and the watchdog is armed **before** the
+  (`modem.set_band_config` / `set_cell_tower` via glc) — except a band write for the standby SIM,
+  which GL only stores (no AT; it applies it when it next dials that slot), so there is nothing to
+  confirm; `panic` resets both slots. The watchdog is armed **before** the
   write (mudimodemd `change_arm`, then the plugin checks the marker itself: no marker, no write).
   The sh watchdog stays the timer and the restore; `panic` must keep working from ssh with
   nothing else running.

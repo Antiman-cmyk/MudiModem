@@ -73,6 +73,9 @@ var __mm = (() => {
     "4G only": "仅 4G",
     "5G NR non-standalone": "5G NR 非独立组网（NSA）",
     "5G NR standalone": "5G NR 独立组网（SA）",
+    "5G NSA only": "5G 仅 NSA",
+    "5G SA + NSA": "5G SA + NSA",
+    "5G SA only": "5G 仅 SA",
     "5G only": "仅 5G",
     "5G selections held back under 4G-only": "仅 4G 模式下 5G 选择不会下发",
     "6 hours": "6 小时",
@@ -188,6 +191,7 @@ var __mm = (() => {
     "Each test uses up to {mb} MB of data — up to {day} a day at this interval.": "每次测速最多消耗 {mb} MB 流量 —— 按此间隔每天最多 {day}。",
     "Earlier battery history didn't load — showing samples since the tab opened; retrying every {s} s.": "更早的电池历史没能加载 — 只显示打开本页以来的采样；每 {s} 秒重试一次。",
     "Earlier history didn't load — showing live samples since the page opened; retrying every {s} s.": "更早的历史没能加载 — 只显示打开页面以来的实时采样；每 {s} 秒重试一次。",
+    "Editing SIM {n}, which is not in use. Changes are stored and GL applies them the next time SIM {n} connects (a SIM switch or failover) - without the 60 s revert, since nothing changes now.": "正在编辑未使用的 SIM {n}。更改会被保存，GL 在 SIM {n} 下次连接时（切卡或故障切换）应用 - 由于现在不会有任何变化，所以没有 60 秒回滚。",
     "Enable higher-risk commands": "启用高风险命令",
     "Enabled · not active · target {target} · current {cur}": "已开启 · 未生效 · 目标 {target} · 当前 {cur}",
     "Estimating…": "正在估算…",
@@ -251,6 +255,8 @@ var __mm = (() => {
     "Modem crash": "Modem 崩溃",
     "MudiModem (version unknown)": "MudiModem（版本未知）",
     "NO SVC": "无服务",
+    "NSA needs LTE: choose Auto to use NSA only": "NSA 需要 LTE：选择“自动”才能仅用 NSA",
+    "NSA only": "仅 NSA",
     "Nearby cells": "附近基站",
     "Neighbour cells": "邻区",
     "Network": "网络",
@@ -271,6 +277,8 @@ var __mm = (() => {
     "Off under {mode} - 5G selections are not sent (GL clears them under 4G-only). Set the mode to {need} to use them.": "在“{mode}”模式下不生效 - 5G 的选择不会下发（仅 4G 时 GL 会清空它们）。要使用请把模式设为“{need}”。",
     "Off under {mode} - these won't apply. Set the mode to {need} to use them.": "在“{mode}”模式下不生效 - 这些选择不会应用。要使用请把模式设为“{need}”。",
     "Off · current {cur}": "关闭 · 当前 {cur}",
+    "Off: 5G NSA only - SA is turned off, so these bands are not used.": "已关闭：5G 仅 NSA - SA 已关闭，这些频段不会使用。",
+    "Off: 5G SA only - NSA is turned off, so these bands are not used.": "已关闭：5G 仅 SA - NSA 已关闭，这些频段不会使用。",
     "Offline": "断网",
     "On battery": "电池供电",
     "PAUSED": "已暂停",
@@ -306,7 +314,11 @@ var __mm = (() => {
     "Reverted - restored your previous bands.": "已恢复 - 已还原之前的频段。",
     "Reverting...": "正在恢复…",
     "Run speed test": "开始测速",
+    "SA + NSA": "SA + NSA",
+    "SA only": "仅 SA",
     "SCS {scs} kHz is assumed from the band.": "SCS {scs} kHz 是根据频段推定的。",
+    "SIM {n} (in use)": "SIM {n}（使用中）",
+    "SIM {n} (standby)": "SIM {n}（备用）",
     "SIM {slot} (active) is not registered on a network right now - {carrier}.": "SIM {slot}（当前使用）目前未注册到网络 - {carrier}。",
     "SIM {slot} (active) is not registered on a network right now.": "SIM {slot}（当前使用）目前未注册到网络。",
     "SINR · dB": "SINR · dB",
@@ -330,6 +342,7 @@ var __mm = (() => {
     "Starting…": "正在启动…",
     "State": "状态",
     "Status": "状态",
+    "Stored for SIM {n}. GL applies it the next time SIM {n} connects.": "已为 SIM {n} 保存。GL 会在 SIM {n} 下次连接时应用。",
     "Target": "目标",
     "Target must be 20–100 % GL UI Reported Charge": "目标必须在 20–100 %（GL 界面电量）之间",
     "Target too low — the charge IC needs at least 50 % IC Reported Charge (about 50 % GL UI Reported Charge)": "目标太低 — 充电芯片至少需要 50 %（电量芯片读数，约合 GL 界面电量 50 %）",
@@ -452,6 +465,7 @@ var __mm = (() => {
     "same frequency": "同频",
     "scan failed": "扫描失败",
     "Carrier cap": "运营商限速",
+    "standalone, non-standalone, or both": "独立组网、非独立组网，或两者",
     "the modem did not answer": "Modem 没有应答",
     "the modem refused the command": "Modem 拒绝了该命令",
     "{dl} / {ul} Mbps": "{dl} / {ul} Mbps",
@@ -502,6 +516,7 @@ var __mm = (() => {
     "{time} to {pct} %": "{time} 充到 {pct} %",
     "{title} (read-only)": "{title}（只读）",
     "{what} changed; applies with a 60s revert": "已修改 {what}；应用后有 60 秒的自动恢复",
+    "{what} changed; stored for SIM {n}": "{what} 已更改；将为 SIM {n} 保存",
     "~{h} h": "约 {h} 小时",
     "~{h} h {m} m": "约 {h} 小时 {m} 分钟",
     "~{m} m": "约 {m} 分钟",
@@ -1230,6 +1245,12 @@ var __mm = (() => {
         // desired allowlists per editable RAT
         selMode: null,
         // desired network mode (AUTO | NR5G | LTE)
+        selNr5g: null,
+        // desired 5G method: both | nsa (SA off) | sa (NSA off)
+        bandSlot: null,
+        // null = the SIM in use; a slot number = the standby SIM being edited
+        storedNote: "",
+        // the note shown after a standby write
         applying: false,
         // Apply in flight
         applyError: "",
@@ -1258,7 +1279,9 @@ var __mm = (() => {
         }
         this.clearResetNote();
         var seq = ++this.bandsSeq;
-        rpc("get_bands", light ? { light: 1 } : {}, { timeout: 15e3 }).then(function(res) {
+        var args = light ? { light: 1 } : {};
+        if (this.bandSlot != null) args.slot = this.bandSlot;
+        rpc("get_bands", args, { timeout: 15e3 }).then(function(res) {
           if (seq !== self.bandsSeq) return;
           if (!res || res.error || !res.config) {
             if (!light) self.bandsError = res && res.error || "request failed";
@@ -1273,6 +1296,7 @@ var __mm = (() => {
           }
           self.sel = { sa: self.seedFor("sa"), nsa: self.seedFor("nsa"), LTE: self.seedFor("LTE") };
           self.selMode = res.meta && res.meta.mode || "AUTO";
+          self.selNr5g = res.config && res.config.nr5g || "both";
         }).catch(function(e) {
           if (seq !== self.bandsSeq) return;
           if (!light) self.bandsError = e && (e.type || e.message) || "request failed";
@@ -1324,6 +1348,39 @@ var __mm = (() => {
       },
       modeChanged() {
         return this.bands && this.selMode !== (this.bands.meta && this.bands.meta.mode || "AUTO");
+      },
+      // The 5G method (SA + NSA / NSA only / SA only): GL turns an empty NR-SA list into
+      // nr5g_disable_mode 1 and an empty NR-NSA list into 2 (measured by running GL itself).
+      appliedNr5g() {
+        return this.bands && this.bands.config && this.bands.config.nr5g || "both";
+      },
+      nr5gChanged() {
+        return !!this.bands && this.selMode !== "LTE" && (this.selNr5g || "both") !== this.appliedNr5g();
+      },
+      offByMethod(group) {
+        return this.selMode !== "LTE" && (this.selNr5g === "nsa" && group === "sa" || this.selNr5g === "sa" && group === "nsa");
+      },
+      setNr5g(m) {
+        if (this.pending) return;
+        this.selNr5g = m;
+        this.applyError = "";
+      },
+      // The SIM not in use, when there is one: its bands can be edited and are stored, then applied by
+      // GL the next time it connects (SIM switch / failover) — docs/knowledge.md §4.2.
+      standbySlot() {
+        var self = this;
+        var other = (this.networks || []).filter(function(n) {
+          return String(n.slot) !== String(self.activeSlot) && (n.iccid || n.imsi);
+        })[0];
+        return other ? Number(other.slot) : null;
+      },
+      editStandby(on) {
+        if (this.pending || this.applying) return;
+        this.bandSlot = on ? this.standbySlot() : null;
+        this.storedNote = "";
+        this.applyError = "";
+        this.bands = null;
+        this.fetchBands();
       },
       // Only policy-permitted bands are selectable; blocked ones never take.
       selectable(group, b) {
@@ -1402,10 +1459,10 @@ var __mm = (() => {
       // them would be a lie the countdown then repeats). They stay edited in the
       // grid and go out once the mode includes them.
       sendable(group) {
-        return this.changed(group) && !(this.selMode === "LTE" && group !== "LTE");
+        return this.changed(group) && !(this.selMode === "LTE" && group !== "LTE") && !this.offByMethod(group);
       },
       changedAny() {
-        return this.sendable("sa") || this.sendable("nsa") || this.sendable("LTE") || this.modeChanged();
+        return this.sendable("sa") || this.sendable("nsa") || this.sendable("LTE") || this.modeChanged() || this.nr5gChanged();
       },
       emptyChange() {
         return this.sendable("sa") && this.sel.sa.length === 0 || this.sendable("nsa") && this.sel.nsa.length === 0 || this.sendable("LTE") && this.sel.LTE.length === 0;
@@ -1430,9 +1487,15 @@ var __mm = (() => {
           include("nsa", "nsa");
           include("LTE", "lte");
           if (this.modeChanged()) payload.mode = this.selMode;
+          if (this.nr5gChanged()) payload.nr5g = this.selNr5g;
         }
         var slot = this.slotOf(this.bands);
         if (slot !== void 0) payload.slot = slot;
+        var standby = this.bandSlot != null;
+        if (standby) {
+          payload.standby = true;
+          payload.slot = this.bandSlot;
+        }
         this.applying = true;
         this.applyError = "";
         this.clearResetNote();
@@ -1442,11 +1505,20 @@ var __mm = (() => {
             if (self.onStaleSlot(res)) self.applyError = res.error;
             return;
           }
+          if (res.stored) {
+            self.storedNote = t("Stored for SIM {n}. GL applies it the next time SIM {n} connects.", { n: res.slot });
+            self.fetchBands();
+            return;
+          }
           self.startCountdown(res.window || 60, res.applied, "bands", res);
         }).catch(function(e) {
           var t2 = e && (e.type || e.message);
           if (t2 === "invalidParams" || t2 === "accessDenied") {
             self.applyError = t2;
+            return;
+          }
+          if (standby) {
+            self.applyError = t2 || "request failed";
             return;
           }
           var a = { mode: payload.mode };
@@ -1553,6 +1625,9 @@ var __mm = (() => {
             this.selMode === "LTE" && group !== "LTE" ? t("Off under {mode} - 5G selections are not sent (GL clears them under 4G-only). Set the mode to {need} to use them.", { mode: modeName2, need }) : t("Off under {mode} - these won't apply. Set the mode to {need} to use them.", { mode: modeName2, need })
           );
         }
+        if (interactive && !gate && this.offByMethod(group)) {
+          gate = h("div", { staticClass: "mm-gate" }, this.selNr5g === "nsa" ? "Off: 5G NSA only - SA is turned off, so these bands are not used." : "Off: 5G SA only - NSA is turned off, so these bands are not used.");
+        }
         return h("div", { staticClass: "mm-grp" + (gate ? " mm-grp-off" : ""), key: group }, [
           h("div", { staticClass: "mm-grp-h" }, [
             h("span", { staticClass: "mm-grp-t" }, interactive ? t(title) : t("{title} (read-only)", { title: t(title) })),
@@ -1593,6 +1668,56 @@ var __mm = (() => {
           }))
         ]);
       },
+      // The 5G method selector. Hidden under 4G-only (no 5G at all); under 5G-only, "NSA only" is
+      // refused: GL re-sends mode_pref NR5G after the apply, and NSA needs an LTE anchor.
+      renderNr5g(h) {
+        var self = this;
+        if (this.selMode === "LTE") return null;
+        var opts = [["both", "SA + NSA"], ["nsa", "NSA only"], ["sa", "SA only"]];
+        return h("div", { staticClass: "mm-grp" }, [
+          h("div", { staticClass: "mm-grp-h" }, [
+            h("span", { staticClass: "mm-grp-t" }, "5G"),
+            this.nr5gChanged() ? h("span", { staticClass: "mm-hint", staticStyle: { color: "var(--warning)" } }, "changed") : h("span", { staticClass: "mm-hint" }, "standalone, non-standalone, or both")
+          ]),
+          h("div", { staticClass: "mm-seg" }, opts.map(function(o) {
+            var blocked = o[0] === "nsa" && self.selMode === "NR5G";
+            return h("button", {
+              key: o[0],
+              staticClass: "mm-seg-b" + ((self.selNr5g || "both") === o[0] ? " on" : ""),
+              attrs: {
+                disabled: !!self.pending || blocked,
+                title: blocked ? t("NSA needs LTE: choose Auto to use NSA only") : void 0
+              },
+              on: { click: function() {
+                self.setNr5g(o[0]);
+              } }
+            }, o[1]);
+          }))
+        ]);
+      },
+      // Which SIM's bands this panel edits: the one in use (confirm-or-revert) or the standby one
+      // (stored, applied by GL when that SIM next connects). Only with two SIMs.
+      renderSimPick(h) {
+        var self = this, other = this.standbySlot();
+        if (other == null && this.bandSlot == null) return null;
+        var on = this.bandSlot != null;
+        return h("div", { staticClass: "mm-seg", staticStyle: { marginBottom: "10px" } }, [
+          h("button", {
+            staticClass: "mm-seg-b" + (on ? "" : " on"),
+            attrs: { disabled: !!this.pending || this.applying },
+            on: { click: function() {
+              if (on) self.editStandby(false);
+            } }
+          }, t("SIM {n} (in use)", { n: this.activeSlot })),
+          h("button", {
+            staticClass: "mm-seg-b" + (on ? " on" : ""),
+            attrs: { disabled: !!this.pending || this.applying || other == null },
+            on: { click: function() {
+              if (!on) self.editStandby(true);
+            } }
+          }, t("SIM {n} (standby)", { n: on ? this.bandSlot : other }))
+        ]);
+      },
       renderBands(h) {
         if (this.bandsLoading) return h("div", { staticClass: "mm-empty" }, "Reading band configuration from the modem...");
         if (this.bandsError) return h("div", { staticClass: "mm-empty" }, t("Couldn't read bands: {err}", { err: this.bandsError }));
@@ -1600,6 +1725,7 @@ var __mm = (() => {
         var d = this.bands, self = this;
         var groups = [
           this.renderMode(h),
+          this.renderNr5g(h),
           this.renderGroup(h, "sa", "5G NR standalone"),
           this.renderGroup(h, "nsa", "5G NR non-standalone"),
           this.renderGroup(h, "LTE", "LTE")
@@ -1644,6 +1770,8 @@ var __mm = (() => {
             { staticClass: "mm-hint", staticStyle: { margin: "3px 0 12px" } },
             "Choose the network mode and which 5G/LTE bands the modem may use. Blocked bands are ones the module supports but your carrier forbids - they can't be selected because they never take."
           ),
+          this.renderSimPick(h),
+          this.bandSlot != null ? h("div", { staticClass: "mm-note", staticStyle: { marginBottom: "10px" } }, t("Editing SIM {n}, which is not in use. Changes are stored and GL applies them the next time SIM {n} connects (a SIM switch or failover) - without the 60 s revert, since nothing changes now.", { n: this.bandSlot })) : null,
           warn,
           modeWarn,
           lockWarn,
@@ -1665,7 +1793,8 @@ var __mm = (() => {
             if (this.changed("sa")) parts.push(this.sel.sa.length + " SA");
             if (this.changed("nsa")) parts.push(this.sel.nsa.length + " NSA");
             if (this.changed("LTE")) parts.push(this.sel.LTE.length + " LTE");
-            status = t("{what} changed; applies with a 60s revert", { what: parts.join(" + ") });
+            if (this.nr5gChanged()) parts.push(t({ both: "5G SA + NSA", nsa: "5G NSA only", sa: "5G SA only" }[this.selNr5g]));
+            status = this.bandSlot != null ? t("{what} changed; stored for SIM {n}", { what: parts.join(" + "), n: this.bandSlot }) : t("{what} changed; applies with a 60s revert", { what: parts.join(" + ") });
           } else status = "No changes";
           footer.push(h("div", { staticClass: "mm-foot" }, [
             h("span", { staticClass: "mm-hint" }, [status]),
@@ -1687,6 +1816,7 @@ var __mm = (() => {
             ])
           ]));
           if (this.resetNote) footer.push(h("div", { staticClass: "mm-note" }, this.resetNote));
+          if (this.storedNote) footer.push(h("div", { staticClass: "mm-note" }, this.storedNote));
         }
         var legend = [h("div", { staticClass: "mm-legend" }, [
           h("span", [h("i", { staticStyle: { background: "var(--success)" } }), "allowed"]),

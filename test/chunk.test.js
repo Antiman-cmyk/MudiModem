@@ -660,8 +660,62 @@ test('network mode selector: seeded, changeable, feeds Apply payload', () => {
   assert.strictEqual(vm.changedAny(), true, 'Apply enabled by a mode change alone');
   // the mode segmented control renders with the current option marked
   const nodes = walk(c.render.call(vm, h));
-  const on = nodes.filter((n) => n.data.staticClass && /mm-seg-b on/.test(n.data.staticClass));
+  const on = nodes.filter((n) => n.data.staticClass && /mm-seg-b on/.test(n.data.staticClass) &&
+    ['Auto', '5G only', '4G only'].includes(textOf(n)));
   assert.strictEqual(on.length, 1, 'exactly one mode option marked active');
+});
+
+test('5G method: seeded from GL, NSA only sends nr5g and leaves SA out; refused under 5G-only', () => {
+  const c = loadChunk();
+  let vm = bandsVm(c, { meta: { mode: 'AUTO', plmn_matched: true } });
+  vm.bands.config.nr5g = 'both'; vm.selNr5g = 'both';
+  assert.strictEqual(vm.nr5gChanged(), false);
+  vm.setNr5g('nsa');
+  assert.strictEqual(vm.nr5gChanged(), true);
+  assert.strictEqual(vm.offByMethod('sa'), true, 'SA is off under NSA only');
+  vm.toggleBand('sa', vm.sel.sa[0]);                      // an SA edit is held back, never sent
+  assert.strictEqual(vm.sendable('sa'), false);
+  const txt = textOf(c.render.call(vm, h));
+  assert.match(txt, /Off: 5G NSA only/);
+  assert.match(txt, /5G NSA only changed; applies with a 60s revert/);
+  const calls = stubRpc([{ ok: true, window: 60, applied: { nr5g: 'nsa' }, slot: 1 }]);
+  try {
+    vm.startCountdown = () => {};
+    vm.applyBands();
+    assert.strictEqual(calls[0].params[2], 'set_bands');
+    assert.strictEqual(calls[0].params[3].nr5g, 'nsa');
+    assert.strictEqual(calls[0].params[3].sa, undefined, 'no SA list with SA off');
+  } finally { unstubRpc(); }
+  vm = bandsVm(c, { meta: { mode: 'NR5G', plmn_matched: true } });
+  const nsaBtn = walk(vm.renderNr5g(h)).filter((n) => n.tag === 'button' && textOf(n) === 'NSA only')[0];
+  assert.ok(nsaBtn.data.attrs.disabled, 'NSA only is not offered under 5G-only');
+  vm.selMode = 'LTE';
+  assert.strictEqual(vm.renderNr5g(h), null, 'no 5G method under 4G-only');
+});
+
+test('standby SIM: the picker reads the other SIM and its Apply is a store, not a countdown', async () => {
+  const c = loadChunk();
+  const vm = bandsVm(c, { meta: { mode: 'AUTO', plmn_matched: true } });
+  assert.strictEqual(vm.standbySlot(), 2, 'the SIM not in use (networks_info)');
+  const calls = stubRpc([
+    Object.assign(JSON.parse(JSON.stringify(vm.bands)), { meta: { mode: 'AUTO', standby: true, slot: 2, active_slot: 1 } }),
+    { ok: true, stored: true, slot: 2, applied: { lte: '66' } },
+    Object.assign(JSON.parse(JSON.stringify(vm.bands)), { meta: { mode: 'AUTO', standby: true, slot: 2, active_slot: 1 } }),
+  ]);
+  try {
+    vm.editStandby(true);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    assert.deepStrictEqual(calls[0].params[3], { slot: 2 }, 'get_bands for the standby SIM');
+    assert.match(textOf(c.render.call(vm, h)), /Editing SIM 2, which is not in use/);
+    vm.toggleBand('LTE', vm.sel.LTE[0]);
+    let started = false; vm.startCountdown = () => { started = true; };
+    vm.applyBands();
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    assert.strictEqual(calls[1].params[3].standby, true);
+    assert.strictEqual(calls[1].params[3].slot, 2);
+    assert.strictEqual(started, false, 'nothing to confirm: no countdown');
+    assert.match(vm.storedNote, /Stored for SIM 2/);
+  } finally { unstubRpc(); }
 });
 
 test('mode gate: NSA is off unless Auto; SA off under 4G-only', () => {

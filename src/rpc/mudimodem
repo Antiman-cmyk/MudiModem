@@ -350,8 +350,7 @@ end
 -- ⚠️ `slot` is nil when GL has no active slot (no SIM, modem resetting): every
 -- caller must REFUSE to write in that case — never fall back to slot 1, which
 -- would mis-target SIM2/eSIM.
-local function resolve_active()
-  local slot = active_slot()
+local function resolve_slot(slot)
   if not slot then return nil, nil, false, nil end
   local want_imsi, want_plmn, iccid
   local sims = ucall("cellular.sim", "info", {})
@@ -375,6 +374,17 @@ local function resolve_active()
     subid_cache = { key = key, sub_id = sub_id, plmn = plmn, at = os.time() }
   end
   return sub_id, plmn, matched, slot
+end
+local function resolve_active() return resolve_slot(active_slot()) end
+
+-- A SIM is present in `slot` (cellular.sim info lists it with an ICCID or IMSI).
+local function sim_present(slot)
+  local sims = ucall("cellular.sim", "info", {})
+  for _, s in ipairs((sims and sims.sims) or {}) do
+    if type(s) == "table" and tonumber(nn(s.slot)) == slot and (nn(s.bus) == nil or s.bus == BUS)
+       and (digits(s.iccid) or digits(s.imsi)) then return true end
+  end
+  return false
 end
 
 -- The page sends the slot its band/lock picture was read for. When the active
@@ -430,12 +440,21 @@ local function band_cfg_get(slot)
   local bl = raw.band_list or {}
   local mode_raw = raw.network_mode
   if type(mode_raw) ~= "string" or mode_raw == "" then mode_raw = nil end
-  return {
+  local cfg = {
     enable   = raw.band_enable == true,
     mode     = MODES[mode_raw] and mode_raw or "AUTO",
     mode_raw = mode_raw,
     LTE = bl.LTE or {}, nsa = bl["NR-NSA"] or {}, sa = bl["NR-SA"] or {},
   }
+  -- The 5G method GL's lists encode (docs/knowledge.md §4.2, measured by running GL): an empty
+  -- NR-SA list with NR-NSA bands = SA off (nr5g_disable_mode 1), the reverse = NSA off (mode 2).
+  -- Filtering off or LTE mode = both (GL empties both lists under LTE itself).
+  cfg.nr5g = "both"
+  if cfg.enable and cfg.mode ~= "LTE" then
+    if #cfg.sa == 0 and #cfg.nsa > 0 then cfg.nr5g = "nsa"
+    elseif #cfg.nsa == 0 and #cfg.sa > 0 then cfg.nr5g = "sa" end
+  end
+  return cfg
 end
 
 -- The exact payload GL's own UI sends to modem.set_band_config: nothing more
@@ -602,14 +621,21 @@ end
 function M.get_bands(args)
   local light = args and (args.light == 1 or args.light == true or args.light == "1") or false
 
-  -- 1. active slot; the PLMN-matched sub_id is needed only for the AT reads.
+  -- 1. the slot: the active one, or (args.slot) the standby SIM — whose bands GL stores without
+  -- touching the modem and applies when it next dials that slot (docs/knowledge.md §4.2). The
+  -- PLMN-matched sub_id is needed only for the AT reads, and is that SIM's own.
   local sub_id, plmn, matched, slot
-  if light then
-    slot = active_slot()
+  local active = active_slot()
+  if not active then return { error = "no active SIM slot (modem not ready)" } end
+  local want = tonumber(args and nn(args.slot))
+  local standby = want ~= nil and want ~= active
+  if standby then
+    if (want ~= 1 and want ~= 2) or not sim_present(want) then return { error = "no SIM in slot " .. tostring(want) } end
+    slot = want
   else
-    sub_id, plmn, matched, slot = resolve_active()
+    slot = active
   end
-  if not slot then return { error = "no active SIM slot (modem not ready)" } end
+  if not light then sub_id, plmn, matched = resolve_slot(slot) end
 
   -- 2. config + mode — GL's per-slot store.
   local config, cfg_err = band_cfg_get(slot)
@@ -636,6 +662,8 @@ function M.get_bands(args)
     -- leaves it alone (a band-only apply passes it through verbatim).
     mode_known = (config.mode_raw == nil) or (MODES[config.mode_raw] == true),
     lock = lock,              -- { active, rat, pci, freq, band } — network-type lock
+    standby = standby or nil, -- true: the SIM that is not in use; writes are stored for later
+    active_slot = active,
   }
   if light then
     meta.light = true
@@ -925,10 +953,18 @@ end
 
 -- WRITE: band allowlists and/or the network mode, protected by
 -- confirm-or-revert. args = { sa={..}, nsa={..}, lte={..}, mode="AUTO"|"NR5G"|"LTE",
--- reset=bool } — each optional. A provided list must be non-empty (an empty
--- allowlist would drop that RAT). Omitted RATs keep their current list, or —
--- when filtering was off — every band the module supports. reset=true ignores
--- the lists and writes GL's true default: filtering OFF + AUTO.
+-- nr5g="both"|"nsa"|"sa", reset=bool, standby=bool } — each optional. A provided list must
+-- be non-empty (an empty allowlist would drop that RAT). Omitted RATs keep their current list, or
+-- — when filtering was off — every band the module supports. reset=true ignores the lists and
+-- writes GL's true default: filtering OFF + AUTO.
+-- nr5g: the 5G method, as GL encodes it — "nsa" = SA off (an empty NR-SA list: GL sends
+-- mode_pref LTE:NR5G + nr5g_disable_mode 1), "sa" = NSA off (empty NR-NSA: mode 2), "both".
+-- Omitted, the current method stays (a disabled family is never refilled behind the user's back).
+-- "nsa" under 5G-only is refused: GL re-sends mode_pref NR5G after the apply, which with SA off
+-- leaves nothing to register on. (Measured by running GL's own glc + cellular_manager.)
+-- standby=true with args.slot = the SIM NOT in use: GL stores that slot's config without any AT
+-- and applies it the next time it dials that slot (SIM switch / failover / boot) — so there is
+-- nothing to confirm now: stored directly, no watchdog. `panic` resets both slots.
 --
 -- Single write path, fail-closed by construction: the ONE write is GL's
 -- modem.set_band_config, which both applies to the modem and persists in GL's
@@ -965,19 +1001,32 @@ function M.set_bands(args)
   if mode ~= nil and not MODES[mode] then
     return { error = "invalid mode: " .. tostring(mode) }
   end
-  if not any_list and not mode and not reset then return { error = "no changes provided" } end
-
-  if file_exists(PENDING) then
-    return { error = "another change is pending; keep or revert it first" }
+  local nr5g = args.nr5g
+  if nr5g ~= nil and nr5g ~= "both" and nr5g ~= "nsa" and nr5g ~= "sa" then
+    return { error = "invalid 5G method: " .. tostring(nr5g) }
   end
+  if not any_list and not mode and not nr5g and not reset then return { error = "no changes provided" } end
 
   -- Bands are slot-addressed end to end (GL's per-slot store, and the watchdog
   -- restores the snapshot through it), so no sub_id is resolved: that would
   -- spend 1-3 AT round-trips on the shared channel for a value nothing uses.
-  local slot = active_slot()
-  if not slot then return { error = "no active SIM slot (modem not ready)" } end
-  local changed = slot_changed(args, slot)
-  if changed then return changed end
+  local active = active_slot()
+  if not active then return { error = "no active SIM slot (modem not ready)" } end
+  local standby = args.standby == true
+  local slot
+  if standby then
+    slot = tonumber(nn(args.slot))
+    if not slot or slot == active or (slot ~= 1 and slot ~= 2) or not sim_present(slot) then
+      return { error = "standby needs the slot of the SIM that is not in use" }
+    end
+  else
+    if file_exists(PENDING) then
+      return { error = "another change is pending; keep or revert it first" }
+    end
+    slot = active
+    local changed = slot_changed(args, slot)
+    if changed then return changed end
+  end
 
   -- Snapshot the revert target: GL's stored config for this slot, verbatim.
   local prev, perr = band_cfg_get(slot)
@@ -1000,7 +1049,18 @@ function M.set_bands(args)
     if new_mode == "LTE" and (lists.sa or lists.nsa) then
       return { error = "5G band lists cannot be applied under 4G-only mode; set the mode to Auto or 5G first" }
     end
-    if not prev.enable and not any_list then
+    local method = nr5g or prev.nr5g
+    if new_mode == "LTE" then
+      if nr5g and nr5g ~= "both" then return { error = "a 5G method needs 5G: set the mode to Auto or 5G first" } end
+      method = "both"
+    end
+    if new_mode == "NR5G" and method == "nsa" then
+      return { error = "5G-only with SA off leaves nothing to connect to (NSA needs LTE): choose Auto, or keep SA" }
+    end
+    if (method == "nsa" and lists.sa) or (method == "sa" and lists.nsa) then
+      return { error = "bands given for a 5G family that this method turns off" }
+    end
+    if not prev.enable and not any_list and method == "both" then
       -- Filtering is OFF and only the mode changes: keep it off. Materialising
       -- an allowlist here would silently switch filtering ON with every
       -- module-supported band pinned (policy-blocked ones included).
@@ -1024,12 +1084,15 @@ function M.set_bands(args)
       for _, rat in ipairs(RATS) do
         local ck = (rat.key == "lte") and "LTE" or rat.key    -- config/supported key
         local cur = prev.enable and prev[ck] or nil
-        if lists[rat.key] then final[ck] = lists[rat.key]
+        local off = (method == "nsa" and ck == "sa") or (method == "sa" and ck == "nsa")
+        if off then final[ck] = {}                            -- the 5G method: GL's empty list
+        elseif lists[rat.key] then final[ck] = lists[rat.key]
         elseif type(cur) == "table" and #cur > 0 then final[ck] = cur
         else final[ck] = supported_for(ck) end
       end
       payload = band_cfg_payload(slot, new_mode, final)
       applied = { mode = new_mode }
+      if method ~= prev.nr5g then applied.nr5g = method end
       -- Report the lists GL is actually asked to store (what band_cfg_payload
       -- arrays), never the request — the countdown text and the Tracking
       -- event can then never claim a list GL did not receive.
@@ -1042,6 +1105,16 @@ function M.set_bands(args)
         end
       end
     end
+  end
+
+  -- The standby SIM: GL stores it and applies it when it next dials that slot. Nothing reaches the
+  -- modem now, so there is nothing to confirm — one store write, no pending, no watchdog.
+  if standby then
+    local res, err = band_cfg_set(payload)
+    if not res then return { error = "set_band_config failed: " .. tostring(err) } end
+    append_event("user", "Bands stored for SIM " .. slot,
+      "applies when SIM " .. slot .. " next connects" .. (applied.nr5g and ("; 5G " .. applied.nr5g) or ""))
+    return { ok = true, stored = true, slot = slot, applied = applied }
   end
 
   -- The snapshot GL will be asked to restore: its own get_band_config answer,
@@ -1080,6 +1153,7 @@ function M.set_bands(args)
   if applied.sa  then bits[#bits + 1] = "SA "  .. applied.sa:gsub(":", " n"):gsub("^", "n") end
   if applied.nsa then bits[#bits + 1] = "NSA " .. applied.nsa:gsub(":", " n"):gsub("^", "n") end
   if applied.lte then bits[#bits + 1] = "LTE " .. applied.lte:gsub(":", " B"):gsub("^", "B") end
+  if applied.nr5g then bits[#bits + 1] = ({ both = "5G SA + NSA", nsa = "5G NSA only", sa = "5G SA only" })[applied.nr5g] end
   if applied.mode and not applied.reset then bits[#bits + 1] = "mode " .. applied.mode end
   append_event("user", "Bands applied", table.concat(bits, "; "))
 
