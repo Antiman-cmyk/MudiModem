@@ -42,6 +42,7 @@ for f in test/*.test.js; do run "$f" node --test --test-reporter=tap "$f"; done
 if [ -f "${MM_ROOTFS:-firmware/rootfs}/www/theme/base.css" ] && node -e 'require("playwright")' 2>/dev/null; then
   echo "== page preview (headless Chromium, GL's theme CSS; every tab x desktop/phone x light/dark) =="
   run "preview matrix (no page errors, no sideways scroll)" node tools/preview.js --matrix
+  run "preview i18n audit (every rendered string translated at zh-cn)" node tools/preview.js --i18n-audit --locale zh-cn
 else
   echo "== page preview SKIPPED: needs firmware/rootfs + playwright =="
 fi

@@ -18,7 +18,9 @@
 // Vue is runtime-only here too: render(h) only, never template:.
 import { hasRpc, rpc, rpcSilent } from "../kit/rpc.js";
 import { mdhm } from "../kit/fmt.js";
-export default (function () {
+import { localize } from "../kit/i18n.js";
+import { t as T } from "../kit/i18n.js";
+export default localize((function () {
   "use strict";
 
   var IFACES = [["cellular", "Cellular"], ["wired", "Wired WAN"]];
@@ -220,7 +222,7 @@ export default (function () {
             if (self._dead) return;
             if (r && r.error === "iface_down") {
               self.status = { running: false, phase: "error",
-                message: (self.runIface === "cellular" ? "Cellular" : "Wired WAN") + " is not connected" };
+                message: T("{name} is not connected", { name: T(self.runIface === "cellular" ? "Cellular" : "Wired WAN") }) };
               return;
             }
             if (r && r.error) { self.status = { running: false, phase: "error", message: r.error }; return; }
@@ -278,7 +280,7 @@ export default (function () {
           on: { change: function (ev) { self.runIface = ev.target.value; } }
         }, IFACES.map(function (i) {
           var down = self.ifaces && self.ifaces[i[0]] && !self.ifaces[i[0]].up;
-          return h("option", { attrs: { value: i[0] }, key: i[0] }, i[1] + (down ? " (not connected)" : ""));
+          return h("option", { attrs: { value: i[0] }, key: i[0] }, down ? T("{name} (not connected)", { name: T(i[1]) }) : i[1]);
         }));
         var runBtn = h("button", {
           staticClass: "mms-btn primary",
@@ -288,7 +290,7 @@ export default (function () {
         var err = (!this.status.running && this.status.phase === "error")
           ? h("span", { staticClass: "mms-err" }, this.status.message) : null;
         var ifaceErr = this.ifacesErr
-          ? h("span", { staticClass: "mms-err" }, "Couldn't check interfaces: " + this.ifacesErr) : null;
+          ? h("span", { staticClass: "mms-err" }, T("Couldn't check interfaces: {err}", { err: this.ifacesErr })) : null;
         return h("div", { staticClass: "mms-controls" }, [ifaceSel, runBtn, err, ifaceErr].filter(Boolean));
       },
       renderSchedule: function (h) {
@@ -314,9 +316,9 @@ export default (function () {
             self.setSchedule(self.schedule.enabled, parseInt(el.value, 10))
               .then(function () { self.syncScheduleControl(el, "value"); });
           } }
-        }, INTERVALS.map(function (iv) { return h("option", { attrs: { value: iv[0] }, key: iv[0] }, "Every " + iv[1]); }));
+        }, INTERVALS.map(function (iv) { return h("option", { attrs: { value: iv[0] }, key: iv[0] }, T("Every {n}", { n: T(iv[1]) })); }));
         var err = this.scheduleErr
-          ? h("span", { staticClass: "mms-err" }, "Couldn't save the schedule: " + this.scheduleErr) : null;
+          ? h("span", { staticClass: "mms-err" }, T("Couldn't save the schedule: {err}", { err: this.scheduleErr })) : null;
         return h("div", { staticClass: "mms-sched" }, [toggle, sel, err].filter(Boolean));
       },
       renderLatestResult: function (h) {
@@ -340,7 +342,7 @@ export default (function () {
         return h("div", { staticClass: "mms-card" }, [
           h("div", { staticClass: "mms-latest-head" }, [
             h("span", { staticClass: "mms-title" }, "Latest result"),
-            h("span", { staticClass: "mms-latest-when" }, ifaceLabel(r.iface) + " · " + this.clock(r.t))
+            h("span", { staticClass: "mms-latest-when" }, T(ifaceLabel(r.iface)) + " · " + this.clock(r.t))
           ]),
           big,
           h("div", {}, rows.map(function (row) {
@@ -351,7 +353,7 @@ export default (function () {
       renderGraph: function (h) {
         var self = this, results = this.filtered;
         if (this.resultsLoading) return h("div", { staticClass: "mms-empty" }, "Loading history…");
-        if (this.resultsErr) return h("div", { staticClass: "mms-empty" }, "Couldn't load history: " + this.resultsErr);
+        if (this.resultsErr) return h("div", { staticClass: "mms-empty" }, T("Couldn't load history: {err}", { err: this.resultsErr }));
         if (!results.length) return h("div", { staticClass: "mms-empty" },
           "No results yet for this interface. Run a speed test above.");
 
@@ -483,7 +485,7 @@ export default (function () {
             ["Up", r.up_mbps == null ? "—" : r.up_mbps + " Mbps"]
           ].concat(resultDetailRows(r));
           tip = h("div", { staticClass: "mms-tip" }, [
-            h("div", { staticClass: "t" }, this.clock(r.t) + (this.pinned != null ? " · pinned" : ""))
+            h("div", { staticClass: "t" }, this.clock(r.t) + (this.pinned != null ? " · " + T("pinned") : ""))
           ].concat(rows.map(function (row) {
             return h("div", { staticClass: "mms-tip-row" }, [h("span", row[0]), h("b", row[1])]);
           })));
@@ -571,4 +573,4 @@ export default (function () {
     render: function (h) { return this.renderPage(h); }
   };
   return component;
-})();
+})());

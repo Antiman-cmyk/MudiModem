@@ -25,7 +25,9 @@
 // sample arrays. Data plane and chargeState model are unchanged.
 import { hasRpc, rpc, rpcSilent } from "../kit/rpc.js";
 import { hhmm } from "../kit/fmt.js";
-export default (function () {
+import { localize } from "../kit/i18n.js";
+import { t as T } from "../kit/i18n.js";
+export default localize((function () {
   "use strict";
 
   // Four lanes stacked on ONE shared x-axis — deliberately NOT the Tracking
@@ -251,8 +253,10 @@ export default (function () {
               // has to be told — without GL's global banner.
               if (self.failStreak >= FAIL_NOTE_AFTER) {
                 var stale = self.lastGoodAt ? Math.round((Date.now() - self.lastGoodAt) / 1000) : 0;
-                self.err = "Can't reach the router — battery history stopped updating"
-                  + (stale ? " " + (stale >= 120 ? Math.round(stale / 60) + " min" : stale + " s") + " ago." : ".");
+                self.err = stale
+                  ? T("Can't reach the router — battery history stopped updating {age} ago.",
+                      { age: stale >= 120 ? T("{n} min", { n: Math.round(stale / 60) }) : T("{n} s", { n: stale }) })
+                  : T("Can't reach the router — battery history stopped updating.");
               }
               if (incremental) {
                 self.noteMissing(opts.since);    // the next push asks again
@@ -421,7 +425,7 @@ export default (function () {
         var limit_gui = (patch && patch.limit_gui != null)
           ? Number(patch.limit_gui) : Number(this.blDraft || cur.limit_gui);
         if (!(limit_gui >= 20 && limit_gui <= 100)) {
-          this.blErr = "Target must be 20–100 % GL UI Reported Charge";
+          this.blErr = T("Target must be 20–100 % GL UI Reported Charge");
           return;
         }
         // Same gui2gauge floor as glbattlimit / the backend (gauge must be ≥ 50).
@@ -434,8 +438,7 @@ export default (function () {
         // this closes it through the toggle.
         var gauge = this.gaugeOf(limit_gui);
         if (gauge < 50 || gauge > 100) {
-          this.blErr = "Target too low — the charge IC needs at least "
-            + "50 % IC Reported Charge (about 50 % GL UI Reported Charge)";
+          this.blErr = T("Target too low — the charge IC needs at least 50 % IC Reported Charge (about 50 % GL UI Reported Charge)");
           return;
         }
         this.blBusy = true; this.blErr = ""; this._blErrBg = false;
@@ -518,11 +521,11 @@ export default (function () {
       fmtAgo: function (t) {
         if (t == null) return "—";
         var seconds = Math.max(0, Math.round((this.nowMs() - t) / 1000));
-        if (seconds < 60) return seconds + "s ago";
+        if (seconds < 60) return T("{n}s ago", { n: seconds });
         var minutes = Math.round(seconds / 60);
-        if (minutes < 60) return minutes + " min ago";
+        if (minutes < 60) return T("{n} min ago", { n: minutes });
         var hours = Math.round(minutes / 60);
-        return hours + " h ago";
+        return T("{n} h ago", { n: hours });
       },
       // gauge % -> GL's "GUI" %, using the constants get_battlimit serves so the
       // fit lives in exactly one place (the Lua backend).
@@ -804,11 +807,11 @@ export default (function () {
       // extrapolation is its own kind of lie.
       fmtEstimate: function (mins) {
         if (mins == null || !isFinite(mins)) return "—";
-        if (mins > EST_MAX_MIN) return "> 2 d";
+        if (mins > EST_MAX_MIN) return T("> 2 d");
         var m = Math.round(mins / 5) * 5;
-        if (m < 60) return "~" + m + " m";
+        if (m < 60) return T("~{m} m", { m: m });
         var hh = Math.floor(m / 60), mm = m % 60;
-        return mm ? "~" + hh + " h " + mm + " m" : "~" + hh + " h";
+        return mm ? T("~{h} h {m} m", { h: hh, m: mm }) : T("~{h} h", { h: hh });
       },
 
       chargeState: function (s) {
@@ -987,15 +990,14 @@ export default (function () {
         var bl = this.bl || {};
         var head;
         if (r.minutes != null && r.kind === "down") {
-          head = this.fmtEstimate(r.minutes) + " remaining";
+          head = T("{time} remaining", { time: this.fmtEstimate(r.minutes) });
         } else if (r.minutes != null && r.kind === "up") {
-          head = this.fmtEstimate(r.minutes) + " to " + r.targetPct + " %";
+          head = T("{time} to {pct} %", { time: this.fmtEstimate(r.minutes), pct: r.targetPct });
         } else if (r.kind === "hold") {
           // No countdown here on purpose: the battery IS draining, but the
           // limiter resumes charging at a lower threshold, so a time-to-empty
           // would be a prediction the device is designed to falsify.
-          head = "Holding at "
-            + (typeof bl.limit_gui === "number" ? bl.limit_gui + " %" : "the limit");
+          head = typeof bl.limit_gui === "number" ? T("Holding at {pct} %", { pct: bl.limit_gui }) : T("Holding at the limit");
         } else if (r.kind === "full") {
           head = "Full";
         } else {
@@ -1004,7 +1006,7 @@ export default (function () {
         var kids = [h("b", head)];
         if (r.spanMin >= 1) {
           kids.push(h("span", { staticClass: "mmb-prov" },
-            "from the last " + Math.round(r.spanMin) + " min"));
+            T("from the last {n} min", { n: Math.round(r.spanMin) })));
         }
         return h("div", { staticClass: "mmb-est" }, kids);
       },
@@ -1034,7 +1036,7 @@ export default (function () {
         push("Temp", s ? fmt(s.temp, 1, " °C") : "—");
         push("State", s ? STATE_LABEL[this.chargeState(s)] : "—");
         push("Limit", bl.available === false ? "n/a"
-          : (bl.enabled ? bl.limit_gui + " % GL UI" : "Off"));
+          : (bl.enabled ? T("{pct} % GL UI", { pct: bl.limit_gui }) : T("Off")));
         return h("div", { staticClass: "mmb-card" }, [
           this.renderEstimate(h, ss),
           h("div", { staticClass: "mmb-row" }, stats)
@@ -1056,7 +1058,7 @@ export default (function () {
       // presentation-attribute rules.
       renderLaneHead: function (h, L, focus, ss) {
         var valueStr = this.fmtLaneValue(L, focus);
-        var rangeStr = "Range " + this.observedRange(ss, L.key, L.dec) + " " + L.unit;
+        var rangeStr = T("Range {r}", { r: this.observedRange(ss, L.key, L.dec) + " " + L.unit });
         return h("div", { staticClass: "mmb-lane-head" }, [
           h("span", { staticClass: "mmb-lane-name" }, L.label),
           h("b", valueStr),
@@ -1135,7 +1137,7 @@ export default (function () {
               "stroke-width": 1.25, "stroke-dasharray": "5 3" } }));
             strip.push(h("text", { attrs: { x: W - PADR, y: Math.max(10, yt - 3),
               "font-size": FS_TICK, "text-anchor": "end", fill: "var(--warning)" } },
-              "target " + self.bl.limit_gui + "%"));
+              T("target {pct}%", { pct: self.bl.limit_gui })));
           }
 
           self.segmentsFrom(ss, L.key).forEach(function (seg) {
@@ -1283,11 +1285,11 @@ export default (function () {
                   change: function () { self.applyBattLimit({ limit_gui: self.blDraft }); }
                 }
               }),
-              " " + self.blDraft + " % GL UI Reported Charge",
+              " " + T("{pct} % GL UI Reported Charge", { pct: self.blDraft }),
               // Tracks the DRAFT, not bl.limit_gauge — the latter is the SAVED
               // value and would lag the thumb during a drag.
               h("span", { staticClass: "mmb-note" },
-                "  (≈ " + self.gaugeOf(self.blDraft) + " % IC Reported Charge)")
+                "  (" + T("≈ {pct} % IC Reported Charge", { pct: self.gaugeOf(self.blDraft) }) + ")")
             ])
           ]));
           // GUI % leads; gauge stays on the slider note above. "Charging
@@ -1305,16 +1307,14 @@ export default (function () {
             ? ("~" + bl.capacity_gui + "%") : "—";
           var statusLine;
           if (bl.active) {
-            statusLine = "Active · target " + targetGui + " GL UI · current " + currentGui;
-            if (chargeStopped) statusLine += " · Charging stopped";
+            statusLine = T("Active · target {target} GL UI · current {cur}", { target: targetGui, cur: currentGui });
+            if (chargeStopped) statusLine += " · " + T("Charging stopped");
           } else if (bl.enabled && !bl.charger_online) {
-            statusLine = "Armed · target " + targetGui
-              + " · will apply when the charger connects · current " + currentGui;
+            statusLine = T("Armed · target {target} · will apply when the charger connects · current {cur}", { target: targetGui, cur: currentGui });
           } else if (bl.enabled && bl.charger_online) {
-            statusLine = "Enabled · not active · target " + targetGui
-              + " · current " + currentGui;
+            statusLine = T("Enabled · not active · target {target} · current {cur}", { target: targetGui, cur: currentGui });
           } else {
-            statusLine = "Off · current " + currentGui;
+            statusLine = T("Off · current {cur}", { cur: currentGui });
           }
           kids.push(h("div", { staticClass: "mmb-kv" }, [
             h("span", { staticClass: "mmb-k" }, "Status"),
@@ -1322,10 +1322,9 @@ export default (function () {
           ]));
           if (bl.active_gauge != null || bl.capacity_gauge != null) {
             kids.push(h("div", { staticClass: "mmb-note" },
-              "Low-level: target "
-              + (bl.limit_gauge != null ? bl.limit_gauge + "% IC" : "—")
-              + ", current "
-              + (bl.capacity_gauge != null ? bl.capacity_gauge + "% IC" : "—")));
+              T("Low-level: target {target}, current {cur}", {
+                target: bl.limit_gauge != null ? bl.limit_gauge + "% IC" : "—",
+                cur: bl.capacity_gauge != null ? bl.capacity_gauge + "% IC" : "—" })));
           }
           if (this.blErr) kids.push(h("div", { staticClass: "mmb-err" }, this.blErr));
         }
@@ -1373,17 +1372,16 @@ export default (function () {
         // about the collector — say THAT instead.
         chartKids.push(h("div", { staticClass: "mmb-note" },
           (failing && !this.preloaded)
-            ? "Couldn't reach the router — retrying every " + every + " s."
+            ? T("Couldn't reach the router — retrying every {s} s.", { s: every })
             : "No battery history yet — sampling starts within 20 s."));
         if (this.err) chartKids.push(h("div", { staticClass: "mmb-err" }, this.err));
       } else {
         chartKids.push(this.renderLanes(h, ss));
         // Pushes are drawing, but the window before them never loaded.
         if (failing)
-          chartKids.push(h("div", { staticClass: "mmb-note" }, (this.preloaded
-            ? "Couldn't load the wider range yet"
-            : "Earlier battery history didn't load — showing samples since the tab opened")
-            + "; retrying every " + every + " s."));
+          chartKids.push(h("div", { staticClass: "mmb-note" }, T(this.preloaded
+            ? "Couldn't load the wider range yet; retrying every {s} s."
+            : "Earlier battery history didn't load — showing samples since the tab opened; retrying every {s} s.", { s: every })));
         if (this.err) chartKids.push(h("div", { staticClass: "mmb-err" }, this.err));
       }
       kids.push(h("div", { staticClass: "mmb-card" }, chartKids));
@@ -1400,4 +1398,4 @@ export default (function () {
   component.FAIL_NOTE_AFTER = FAIL_NOTE_AFTER;
   component.STATE_LABEL = STATE_LABEL;
   return component;
-})();
+})());

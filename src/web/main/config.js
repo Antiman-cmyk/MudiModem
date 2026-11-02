@@ -1,5 +1,6 @@
 // Config tab: version / self-update, device info, history-on-flash.
 import { rpc, hasRpc } from "../kit/rpc.js";
+import { t, tp } from "../kit/i18n.js";
 export default {
   data() {
     return {
@@ -135,13 +136,13 @@ export default {
       // status line so it stays visible without an actionable link beside it.
       var target = (this.appVer && this.appVer.latest) || "";
       this.updating = true;
-      this.updateMsg = "Updating" + (target ? " to v" + target : "") + "…";
+      this.updateMsg = target ? t("Updating to v{v}…", { v: target }) : t("Updating…");
       this.pollStopped = false; this.pollAttempts = 0;   // fresh run — a prior update may have stopped/capped it
       return rpc("self_update", {}, { timeout: 12000 })
         .then(function () { self.pollUpdate(); })
         .catch(function (e) {
           self.updating = false;
-          self.updateMsg = "Couldn't start update: " + ((e && (e.message || e.type)) || "error");
+          self.updateMsg = t("Couldn't start update: {err}", { err: (e && (e.message || e.type)) || "error" });
         });
     },
 
@@ -171,12 +172,11 @@ export default {
               if (s.result.ok) {
                 var v = (self.appVer && self.appVer.latest) || "";
                 self.updateDone = true;   // spent: this page can't offer it again
-                self.updateMsg = "Updated" + (v ? " to v" + v : "") +
-                  ". The page is still running the old interface —";
+                self.updateMsg = v ? t("Updated to v{v}. The page is still running the old interface —", { v: v })
+                                   : t("Updated. The page is still running the old interface —");
                 self.refreshVersionAfterUpdate(v, 4);
               } else {
-                self.updateMsg = "Update failed: " + (s.result.error || "unknown") +
-                  " — see /var/log/mudimodem-update.log";
+                self.updateMsg = t("Update failed: {err} — see /var/log/mudimodem-update.log", { err: s.result.error || "unknown" });
               }
             } else if (self.pollAttempts >= self.POLL_MAX) {
               self.updating = false;
@@ -218,15 +218,14 @@ export default {
       // --- MudiModem / version card ---
       var av = this.appVer || {};
       var installed = av.installed || "unknown";
-      var verNodes = [h("span", {}, "MudiModem "
-        + (installed === "unknown" ? "(version unknown)" : "v" + installed))];
+      var verNodes = [h("span", {}, installed === "unknown" ? t("MudiModem (version unknown)") : "MudiModem v" + installed)];
       // The offer shows only while it is actionable: not mid-update (the click
       // would do nothing, and the status line already says what's happening),
       // and not after a successful one (this page is still running the OLD
       // chunk, so its "available" flag is stale until reload).
       if (av.checked && av.update_available && av.latest && !this.updating && !this.updateDone) {
         verNodes.push(h("span", { staticClass: "mm-upd" }, [
-          " (v" + av.latest + " available — ",
+          " (" + t("v{v} available", { v: av.latest }) + " — ",
           this.updateConfirm
             ? h("a", { staticClass: "mm-link mm-warn", attrs: { href: "#" },
                 on: { click: function (e) { if (e.preventDefault) e.preventDefault(); self.confirmUpdate(); } } },
@@ -273,10 +272,8 @@ export default {
           ])
         ]));
         histKids.push(h("div", { staticClass: "mm-note" },
-          "Live charts still use RAM. When this is on, the collector appends new "
-          + "samples to eMMC about every "
-          + ((hp.flush_interval_s && Math.round(hp.flush_interval_s / 60)) || 10)
-          + " minutes (~6 MiB for a full day of signal + battery). Off by default."));
+          t("Live charts still use RAM. When this is on, the collector appends new samples to eMMC about every {n} minutes (~6 MiB for a full day of signal + battery). Off by default.",
+            { n: (hp.flush_interval_s && Math.round(hp.flush_interval_s / 60)) || 10 })));
         if (hp.enabled || (hp.size_bytes && hp.size_bytes > 0)) {
           histKids.push(row("Backup size", self.fmtHistSize(hp.size_bytes)));
         }

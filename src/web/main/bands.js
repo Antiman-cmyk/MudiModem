@@ -1,5 +1,6 @@
 // Bands tab: the three-layer band model (module / carrier policy / config), mode, Apply.
 import { rpc, hasRpc } from "../kit/rpc.js";
+import { t, tp } from "../kit/i18n.js";
 export default {
   data() {
     return {
@@ -287,19 +288,19 @@ export default {
         var cls, tip;
         if (interactive) {
           if (!self.selectable(group, b)) {
-            cls = "blocked"; tip = pre + b + " blocked by carrier policy; selecting has no effect";
+            cls = "blocked"; tip = t("{b} blocked by carrier policy; selecting has no effect", { b: pre + b });
           } else if (self.isSelected(group, b)) {
-            cls = "sel"; tip = pre + b + " allowed (click to remove)";
+            cls = "sel"; tip = t("{b} allowed (click to remove)", { b: pre + b });
           } else {
-            cls = "unsel"; tip = pre + b + " permitted (click to allow)";
+            cls = "unsel"; tip = t("{b} permitted (click to allow)", { b: pre + b });
           }
         } else {
           var st = self.bandState(group, b);
           cls = st;
-          tip = pre + b + " " + ({ active: "in use", permitted: "permitted, not active", blocked: "blocked by carrier policy" })[st];
+          tip = pre + b + " " + t(({ active: "in use", permitted: "permitted, not active", blocked: "blocked by carrier policy" })[st]);
         }
         var clickable = interactive && cls !== "blocked" && !self.pending;
-        if (serving) tip += " — serving now (" + servingHere[b] + ")";
+        if (serving) tip += " — " + t("serving now ({role})", { role: servingHere[b] });
         return h("span", {
           key: b,
           staticClass: "mm-band " + cls + (serving ? " serving" : "") + (clickable ? " clickable" : ""),
@@ -319,22 +320,24 @@ export default {
           mkAct("Invert", function () { self.invertSel(group); })
         ]);
       }
-      var counts = (d.supported[group] || []).length + " supported / " +
-        (d.policy[group] || []).length + " permitted / " + (d.capability[group] || []).length + " active";
+      var counts = t("{s} supported / {p} permitted / {a} active", {
+        s: (d.supported[group] || []).length, p: (d.policy[group] || []).length, a: (d.capability[group] || []).length });
       // Mode gate: if the selected mode doesn't enable this RAT, say so — the
       // selections are inert until the mode includes it.
       var gate = null;
       if (interactive && !this.ratActive(group)) {
-        var need = group === "nsa" ? "Auto" : (group === "LTE" ? "Auto or 4G only" : "Auto or 5G only");
+        var need = t(group === "nsa" ? "Auto" : (group === "LTE" ? "Auto or 4G only" : "Auto or 5G only"));
+        var modeName = t({ AUTO: "Auto", NR5G: "5G only", LTE: "4G only" }[this.selMode] || this.selMode);
         gate = h("div", { staticClass: "mm-gate" },
           this.selMode === "LTE" && group !== "LTE"
-            ? "Off under " + this.selMode + " mode - 5G selections are not sent (GL clears them under 4G-only). Set mode to " + need + " to use them."
-            : "Off under " + this.selMode + " mode - these won't apply. Set mode to " + need + " to use them.");
+            ? t("Off under {mode} - 5G selections are not sent (GL clears them under 4G-only). Set the mode to {need} to use them.", { mode: modeName, need: need })
+            : t("Off under {mode} - these won't apply. Set the mode to {need} to use them.", { mode: modeName, need: need }));
       }
       return h("div", { staticClass: "mm-grp" + (gate ? " mm-grp-off" : ""), key: group }, [
         h("div", { staticClass: "mm-grp-h" }, [
-          h("span", { staticClass: "mm-grp-t" }, title + (interactive ? "" : "  (read-only)")),
-          actions || h("span", { staticClass: "mm-hint" }, counts)
+          h("span", { staticClass: "mm-grp-t" }, interactive ? t(title) : t("{title} (read-only)", { title: t(title) })),
+          // interactive groups show the counts on their own line below; never twice
+          actions || (interactive ? null : h("span", { staticClass: "mm-hint" }, counts))
         ]),
         interactive ? h("div", { staticClass: "mm-hint", staticStyle: { margin: "-3px 0 6px" } }, counts) : null,
         gate,
@@ -367,8 +370,7 @@ export default {
             attrs: {
               disabled: !!self.pending || blocked,
               title: blocked
-                ? ("Would strand your " + (self.lockInfo().rat === "4g" ? "LTE" : "5G") +
-                   " cell lock - clear the lock first")
+                ? t("Would strand your {rat} cell lock - clear the lock first", { rat: self.lockInfo().rat === "4g" ? "LTE" : "5G" })
                 : undefined
             },
             on: { click: function () { self.setMode(o[0]); } }
@@ -379,7 +381,7 @@ export default {
 
     renderBands(h) {
       if (this.bandsLoading) return h("div", { staticClass: "mm-empty" }, "Reading band configuration from the modem...");
-      if (this.bandsError) return h("div", { staticClass: "mm-empty" }, "Couldn't read bands: " + this.bandsError);
+      if (this.bandsError) return h("div", { staticClass: "mm-empty" }, t("Couldn't read bands: {err}", { err: this.bandsError }));
       if (!this.bands) return h("div", { staticClass: "mm-empty" }, "...");
       var d = this.bands, self = this;
       var groups = [
@@ -388,7 +390,7 @@ export default {
         this.renderGroup(h, "nsa", "5G NR non-standalone"),
         this.renderGroup(h, "LTE", "LTE")
       ].filter(Boolean);
-      var op = (d.meta && d.meta.plmn) ? d.meta.plmn : "carrier";
+      var op = (d.meta && d.meta.plmn) ? d.meta.plmn : "";
       var warn = (d.meta && d.meta.plmn_matched === false)
         ? h("div", { staticClass: "mm-hint", staticStyle: { color: "var(--warning)", marginTop: "2px" } },
             "Couldn't confirm which SIM answered - values may be for the other slot")
@@ -398,19 +400,17 @@ export default {
       // through untouched, only an explicit mode pick here replaces it.
       var modeWarn = (d.meta && d.meta.mode_known === false)
         ? h("div", { staticClass: "mm-hint", staticStyle: { color: "var(--warning)", marginTop: "2px" } },
-            "GL reports network mode \"" + d.meta.mode_raw + "\", which this panel doesn't offer - it stays as it is unless you pick a mode below.")
+            t("GL reports network mode \"{mode}\", which this panel doesn't offer - it stays as it is unless you pick a mode below.", { mode: d.meta.mode_raw }))
         : null;
       // Network-type lock conflict: the modem is cell-locked to a RAT the current
       // mode excludes, so the lock can't take effect. Name the lock + the fix.
       var lockWarn = this.lockConflict()
         ? h("div", { staticClass: "mm-revert" }, [
             h("div", { staticClass: "mm-revert-row", staticStyle: { display: "block", color: "var(--warning-hover)" } }, [
-              h("b", "⚠ Modem is cell-locked to " + this.lockLabel() + ", "),
-              "but network mode is " +
-                ({ NR5G: "5G only", LTE: "4G only", AUTO: "Auto" }[this.appliedMode()] || this.appliedMode()) +
-                " - the lock can't take effect. Set mode to " +
-                (this.lockInfo().rat === "4g" ? "Auto or 4G only" : "Auto or 5G only") +
-                ", or clear the lock on the Cell Lock tab."
+              h("b", t("⚠ Modem is cell-locked to {lock}, ", { lock: this.lockLabel() })),
+              t("but the network mode is {mode} - the lock can't take effect. Set the mode to {need}, or clear the lock on the Cell lock tab.", {
+                mode: t({ NR5G: "5G only", LTE: "4G only", AUTO: "Auto" }[this.appliedMode()] || this.appliedMode()),
+                need: t(this.lockInfo().rat === "4g" ? "Auto or 4G only" : "Auto or 5G only") })
             ])
           ])
         : null;
@@ -418,7 +418,7 @@ export default {
         h("div", { staticStyle: { display: "flex", justifyContent: "space-between", alignItems: "baseline" } }, [
           h("span", { staticClass: "mm-sect" }, "Bands"),
           h("span", [
-            h("span", { staticClass: "mm-hint", staticStyle: { marginRight: "10px" } }, "carrier " + op),
+            h("span", { staticClass: "mm-hint", staticStyle: { marginRight: "10px" } }, op ? t("carrier {plmn}", { plmn: op }) : ""),
             h("button", {
               staticClass: "mm-tab", staticStyle: { fontSize: "11.5px", padding: "2px 0", borderBottom: "0" },
               attrs: { disabled: !!this.pending },
@@ -427,8 +427,7 @@ export default {
           ])
         ]),
         h("div", { staticClass: "mm-hint", staticStyle: { margin: "3px 0 12px" } },
-          "Choose the network mode and which 5G/LTE bands the modem may use. Blocked bands are ones " +
-          "the module supports but your carrier forbids - they can't be selected because they never take."),
+          "Choose the network mode and which 5G/LTE bands the modem may use. Blocked bands are ones the module supports but your carrier forbids - they can't be selected because they never take."),
         warn,
         modeWarn,
         lockWarn,
@@ -443,13 +442,13 @@ export default {
         else if (empty) status = h("span", { staticStyle: { color: "var(--error)" } }, "Each edited band group needs at least one band");
         else if (changed) {
           var parts = [];
-          if (this.modeChanged()) parts.push("mode -> " + this.selMode);
+          if (this.modeChanged()) parts.push(t("mode -> {m}", { m: t({ AUTO: "Auto", NR5G: "5G only", LTE: "4G only" }[this.selMode] || this.selMode) }));
           if (this.selMode === "LTE" && (this.changed("sa") || this.changed("nsa")))
-            parts.push("5G selections held back under 4G-only");
+            parts.push(t("5G selections held back under 4G-only"));
           if (this.changed("sa")) parts.push(this.sel.sa.length + " SA");
           if (this.changed("nsa")) parts.push(this.sel.nsa.length + " NSA");
           if (this.changed("LTE")) parts.push(this.sel.LTE.length + " LTE");
-          status = parts.join(" + ") + " changed; applies with a 60s revert";
+          status = t("{what} changed; applies with a 60s revert", { what: parts.join(" + ") });
         } else status = "No changes";
         footer.push(h("div", { staticClass: "mm-foot" }, [
           h("span", { staticClass: "mm-hint" }, [status]),

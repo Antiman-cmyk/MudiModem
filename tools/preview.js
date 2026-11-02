@@ -5,6 +5,11 @@
 //   node tools/preview.js [--tab bands] [--theme default|dark|classic] [--width 1280] [--height 900]
 //                         [--pending] [--out build/preview/bands.png]
 //   node tools/preview.js --matrix            every tab x {desktop, phone} x {default, dark}
+//   node tools/preview.js --locale zh-cn ...  as if GL's language were zh-cn (window.$i18n.locale)
+//   node tools/preview.js --i18n-audit [--locale zh-cn]
+//                                             render every tab (also with a pending change) and
+//                                             list the English text the active table does not
+//                                             translate -> build/i18n-audit.json
 //
 // What is real: GL's theme CSS (from firmware/rootfs, tools/firmware.sh), Vue 2.6.12 runtime
 // (fetched once into build/.cache with `npm pack`), the BUILT chunks from dist/views loaded by
@@ -120,6 +125,8 @@ html,body{margin:0;background:var(--background-content);color:var(--text-regular
   };
   Vue.prototype.$store = { getters: { moduleStatus: function (n) { return WS[n] || {}; } }, state: {} };
   Vue.prototype.$t = function (k) { return k; };
+  if (${JSON.stringify(opt("locale", ""))}) window.$i18n = { locale: ${JSON.stringify(opt("locale", ""))} };
+  window.__mmI18nSeen = function (s) { (window.__mmSeen = window.__mmSeen || {})[s] = 1; };
   var module = { exports: {} };
   var comp = eval(${JSON.stringify(chunk("gl-sdk4-ui-mudimodem.common.js"))});
   window.__vm = new Vue({ render: function (h) { return h(comp); } }).$mount("#app");
@@ -138,8 +145,9 @@ async function shot(browser, o) {
   await pg.goto("http://mudi.preview/", { waitUntil: "load" });
   await pg.waitForTimeout(300);
   if (o.tab && o.tab !== "tracking") {
-    const label = { bands: "Bands", lock: "Cell lock", at: "AT console", speedtest: "Speedtest", battery: "Battery", config: "Config" }[o.tab] || o.tab;
-    await pg.click(`.mm-tab:has-text("${label}")`);
+    // By position, not label: the labels are translated under --locale.
+    const order = ["tracking", "lock", "bands", "at", "speedtest", "battery", "config"];
+    await pg.locator(".mm-tabs .mm-tab").nth(order.indexOf(o.tab)).click();
   }
   await pg.waitForTimeout(700);
   const overflow = await pg.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -156,6 +164,7 @@ async function shot(browser, o) {
   }
   fs.mkdirSync(path.dirname(o.out), { recursive: true });
   await pg.screenshot({ path: o.out, fullPage: true });
+  o.seen = await pg.evaluate(() => Object.keys(window.__mmSeen || {}));
   await pg.close();
   return { errors, overflow };
 }
@@ -173,6 +182,30 @@ async function shot(browser, o) {
     const tab = opt("tab", "tracking"), theme = opt("theme", "default");
     jobs.push({ tab, theme, width: +opt("width", 1280), height: +opt("height", 900),
                 out: path.resolve(opt("out", path.join(ROOT, `build/preview/${tab}-${theme}.png`))) });
+  }
+  if (flag("i18n-audit")) {
+    const loc = opt("locale", "zh-cn");
+    const all = new Set();
+    for (const tab of ["tracking", "bands", "lock", "at", "speedtest", "battery", "config"]) {
+      const j = { tab, theme: "default", width: 1280, height: 900, out: path.join(ROOT, `build/preview/i18n-${tab}.png`) };
+      await shot(browser, j);
+      j.seen.forEach((x) => all.add(x));
+    }
+    await browser.close();
+    // A string "needs translation" when it has a word of 2+ Latin letters that is not a
+    // technical token, and the page did not translate it (it reached h() as English).
+    const TECH = /^(RSRP|RSRQ|SINR|RSSI|PCI|ARFCN|EARFCN|SCS|SA|NSA|LTE|NR|NR5G|NR5G-SA|NR5G-NSA|5G|4G|AT|ATI|SIM|ms|MHz|kHz|dBm|dB|mA|mV|V|Mbps|ID|TAC|CA|PCC|SCC\d*|B\d+|n\d+|IMSI|ICCID|MCC|MNC|PLMN|AMBR|GL|eMMC|T-Mobile|AT&T|USB|API|JSON|OK|Wi-Fi|GitHub|Cloudflare|Modem|MudiModem|WAN|NV|nv|VPN|Tailscale|ChiliApple|CPU|RAT|RG650V-NA|RG650V-EU|ssh|root|router|usr|sbin|mudimodem-revert|mudimodem-collectd|panic|unknown|Ch|BW|KiB|MiB|GiB)$/;
+    // AT-library entries are community data (English by design), never page copy.
+    const lib = JSON.parse(fs.readFileSync(path.join(ROOT, "src/at-library.snapshot.json"), "utf8"));
+    const libText = new Set();
+    (lib.entries || []).forEach((e) => ["title", "cat", "summary"].forEach((k) => { if (typeof e[k] === "string") libText.add(e[k]); }));
+    const words = (x) => (x.match(/[A-Za-z][A-Za-z0-9+&-]*/g) || []).filter((w) => /[a-z]{2}|^[A-Z][a-z]/.test(w));
+    const needs = [...all].filter((x) => !libText.has(x.trim()) && words(x).some((w) => w.length > 1 && !TECH.test(w)) && !/^[A-Z]{2,}\+|^AT\+/.test(x.trim()));
+    fs.mkdirSync(path.join(ROOT, "build"), { recursive: true });
+    fs.writeFileSync(path.join(ROOT, "build/i18n-audit.json"), JSON.stringify({ locale: loc, untranslated: needs.sort() }, null, 1));
+    console.log(`${needs.length} untranslated string(s) at ${loc} -> build/i18n-audit.json`);
+    needs.forEach((x) => console.log("  " + JSON.stringify(x)));
+    process.exit(needs.length ? 1 : 0);
   }
   let bad = 0;
   for (const j of jobs) {

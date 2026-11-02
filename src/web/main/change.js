@@ -1,5 +1,9 @@
 // Confirm-or-revert: the pending change as the router reports it (change_status), countdown, Keep / Revert, banner.
 import { rpc } from "../kit/rpc.js";
+import { t, tp } from "../kit/i18n.js";
+
+// GL's network_mode codes in the selector's own words.
+function modeName(m) { return t({ AUTO: "Auto", NR5G: "5G only", LTE: "4G only" }[m] || m); }
 export default {
   data() {
     return {
@@ -62,7 +66,7 @@ export default {
         }
         if (res && res.pending) {
           self.patchPending({ reverting: false, revertError:
-            "The auto-revert has not finished after 30 s - use Revert now, or the ssh panic restore." });
+            t("The auto-revert has not finished after 30 s - use Revert now, or the ssh panic restore.") });
           return;
         }
         var k = p.kind;
@@ -95,7 +99,7 @@ export default {
         } else if (p && p.uncertain) {
           // Nothing is armed: the dropped apply never took, or was already reverted.
           self.pending = null;
-          self.applyError = "The connection dropped while applying, and nothing is pending on the router now - the change did not take, or was already reverted.";
+          self.applyError = t("The connection dropped while applying, and nothing is pending on the router now - the change did not take, or was already reverted.");
         }
       });
     },
@@ -120,8 +124,8 @@ export default {
         .catch(function (e) {
           // Most likely the apply's redial: the change is still pending and the watchdog still
           // counts, so keep the banner (and its timer) and let the user try again.
-          self.patchPending({ keeping: false, keepError: "Couldn't reach the router to keep it (" +
-            ((e && (e.type || e.message)) || "error") + "). The countdown is still running - press Keep again." });
+          self.patchPending({ keeping: false, keepError: t("Couldn't reach the router to keep it ({err}). The countdown is still running - press Keep again.",
+            { err: (e && (e.type || e.message)) || "error" }) });
         });
     },
 
@@ -143,12 +147,12 @@ export default {
           self.doneTimer = setTimeout(function () { if (self.pending && self.pending.done) self.pending = null; }, 4000);
         })
         .catch(function (e) {
-          self.patchPending({ reverting: false, revertError: "Couldn't reach the router to revert (" +
-            ((e && (e.type || e.message)) || "error") + "). The auto-revert is still armed." });
+          self.patchPending({ reverting: false, revertError: t("Couldn't reach the router to revert ({err}). The auto-revert is still armed.",
+            { err: (e && (e.type || e.message)) || "error" }) });
         });
     },
 
-    // Confirm-or-revert banner (design C1: inline, on the tab that caused it).
+    // Confirm-or-revert banner: page-wide, above the tab bar (render in index.js).
     revertButtons(h) {
       var self = this, p = this.pending, busy = p.keeping || p.reverting;
       return h("span", { staticStyle: { flex: "none", display: "flex", gap: "6px" } }, [
@@ -168,8 +172,9 @@ export default {
       var self = this, p = this.pending;
       if (p.done) {
         var doneMsg = p.reverting ? "Reverting..." :
-          p.tooLate ? "Too late to keep: the auto-revert had already restored your previous " +
-                      (p.kind === "cell" ? "cell setting." : "bands.") + " Apply it again if you want it." :
+          p.tooLate ? (p.kind === "cell"
+            ? "Too late to keep: the auto-revert had already restored your previous cell setting. Apply it again if you want it."
+            : "Too late to keep: the auto-revert had already restored your previous bands. Apply it again if you want it.") :
           p.unknown ? "Couldn't reach the router to see what the auto-revert did - reload once you're back online." :
           (p.reverted ? (p.kind === "cell" ? "Reverted - cell lock removed." : "Reverted - restored your previous bands.") : "");
         return h("div", { staticClass: "mm-revert" }, [
@@ -189,17 +194,16 @@ export default {
       if (p.uncertain) {
         var ua = p.applied || {};
         var what = p.kind === "cell"
-          ? [" the ", h("b", (ua.rat === "4g" ? "LTE" : "5G") + " lock PCI " + ua.pci + " / ARFCN " + ua.freq), " did apply."]
-          : [" the band change (", h("b", ua.reset ? "filtering off + Auto" :
-              [ua.mode ? "mode " + ua.mode : "", ua.sa ? " SA " + ua.sa : "", ua.nsa ? " NSA " + ua.nsa : "", ua.lte ? " LTE " + ua.lte : ""].join("").trim()),
-             ") most likely applied."];
+          ? tp("Your connection dropped while applying, but the {lock} did apply.",
+               { lock: h("b", t("{rat} lock PCI {pci} / ARFCN {freq}", { rat: ua.rat === "4g" ? "LTE" : "5G", pci: ua.pci, freq: ua.freq })) })
+          : tp("Your connection dropped while applying, but the band change ({what}) most likely applied.",
+               { what: h("b", ua.reset ? t("filtering off + Auto") :
+                 [ua.mode ? t("mode {m}", { m: modeName(ua.mode) }) : "", ua.sa ? " SA " + ua.sa : "", ua.nsa ? " NSA " + ua.nsa : "", ua.lte ? " LTE " + ua.lte : ""].join("").trim()) });
         return h("div", { staticClass: "mm-revert" }, [
           h("div", { staticClass: "mm-revert-row" }, [
-            h("span", [
-              "Your connection dropped while applying, but"].concat(what).concat([
-              " If the auto-revert is still running it will undo this within ~60s - ",
-              h("b", "Keep"), " to make it stick, or ", h("b", "Revert"), " to remove it now."
-            ])),
+            h("span", what.concat([" "]).concat(
+              tp("If the auto-revert is still running it will undo this within ~60s - {keep} to make it stick, or {revert} to remove it now.",
+                 { keep: h("b", t("Keep")), revert: h("b", t("Revert")) }))),
             this.revertButtons(h)
           ]),
           this.revertErrors(h)
@@ -209,11 +213,11 @@ export default {
       // { rat, pci, freq } for a cell lock).
       var a = p.applied || {}, bits = [];
       if (p.kind === "cell") {
-        bits.push((a.rat === "4g" ? "LTE" : "5G") + " cell PCI " + a.pci + " / ARFCN " + a.freq);
+        bits.push(t("{rat} cell PCI {pci} / ARFCN {freq}", { rat: a.rat === "4g" ? "LTE" : "5G", pci: a.pci, freq: a.freq }));
       } else if (a.reset) {
-        bits.push("default: band filtering off, mode Auto");
+        bits.push(t("default: band filtering off, mode Auto"));
       } else {
-        if (a.mode) bits.push("mode " + a.mode);
+        if (a.mode) bits.push(t("mode {m}", { m: modeName(a.mode) }));
         if (a.sa) bits.push("5G-SA " + a.sa.split(":").map(function (b) { return "n" + b; }).join(" "));
         if (a.nsa) bits.push("5G-NSA " + a.nsa.split(":").map(function (b) { return "n" + b; }).join(" "));
         if (a.lte) bits.push("LTE " + a.lte.split(":").map(function (b) { return "B" + b; }).join(" "));
@@ -222,11 +226,11 @@ export default {
       return h("div", { staticClass: "mm-revert" }, [
         h("div", { staticClass: "mm-revert-row" }, [
           h("span", p.expiring
-            ? ["Applied ", h("b", bits.join("; ") || "band change"),
-               ". Time's up - the auto-revert is restoring your previous settings..."]
-            : ["Applied ", h("b", bits.join("; ") || "band change"),
-               ". Reverting in ", h("b", { staticClass: "mm-cd" }, String(p.remaining) + "s"),
-               " unless you keep it - watch the trace above."]),
+            ? tp("Applied {what}. Time's up - the auto-revert is restoring your previous settings...",
+                 { what: h("b", bits.join("; ") || t("band change")) })
+            : tp("Applied {what}. Reverting in {s} unless you keep it - watch the trace above.",
+                 { what: h("b", bits.join("; ") || t("band change")),
+                   s: h("b", { staticClass: "mm-cd" }, String(p.remaining) + "s") })),
           this.revertButtons(h)
         ]),
         h("div", { staticClass: "mm-bar" }, [h("i", { staticStyle: { width: pct.toFixed(1) + "%" } })]),

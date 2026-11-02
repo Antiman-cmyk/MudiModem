@@ -7,7 +7,7 @@ recs() { sed -e 's/#.*$//' -e '/^[[:space:]]*$/d' manifest.txt; }
 
 # Repo files that are deliberately NOT shipped (dev-box tools). Anything else under src/ or tools/
 # must be in the manifest — a new file nobody listed would silently never reach the router.
-UNSHIPPED="tools/build.sh tools/build-web.mjs tools/deploy.sh tools/verify.sh tools/test-local.sh tools/firmware.sh tools/emu.sh tools/preview.js"
+UNSHIPPED="tools/build.sh tools/build-web.mjs tools/deploy.sh tools/verify.sh tools/test-local.sh tools/firmware.sh tools/emu.sh tools/preview.js tools/i18n-keys.mjs"
 
 seen_dest=""; seen_svc=""; n=0
 recs | {

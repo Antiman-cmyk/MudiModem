@@ -672,7 +672,7 @@ test('mode gate: NSA is off unless Auto; SA off under 4G-only', () => {
   assert.strictEqual(vm.ratActive('nsa'), false, 'NSA needs Auto');
   assert.strictEqual(vm.ratActive('LTE'), false, 'LTE off under 5G-only');
   let txt = textOf(c.render.call(vm, h));
-  assert.match(txt, /Off under NR5G mode/, 'shows the mode-gate note');
+  assert.match(txt, /Off under 5G only/, 'shows the mode-gate note in the selector words');
   // Auto: everything active, no gate.
   vm = bandsVm(c, { meta: { mode: 'AUTO', plmn_matched: true } });
   assert.ok(vm.ratActive('sa') && vm.ratActive('nsa') && vm.ratActive('LTE'), 'all active under Auto');

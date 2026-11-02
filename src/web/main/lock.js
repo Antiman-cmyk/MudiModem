@@ -1,5 +1,6 @@
 // Cell lock tab: serving cell, pin / scan / lock / unlock, recovery notes.
 import { rpc, hasRpc } from "../kit/rpc.js";
+import { t as T, tp as TP } from "../kit/i18n.js";
 export default {
   data() {
     return {
@@ -232,8 +233,8 @@ export default {
       var rows = [];
       var push = function (k, v) { if (v !== undefined && v !== null && v !== "") rows.push([k, v]); };
       push("RAT", s.rat); push("PCI", s.pci); push("ARFCN", s.arfcn);
-      push("Band", s.band != null ? ((/NR5G/.test(s.rat || "") ? "n" : "B") + s.band) : null);
-      push("Cell ID", s.cell_id);
+      push(T("Band"), s.band != null ? ((/NR5G/.test(s.rat || "") ? "n" : "B") + s.band) : null);
+      push(T("Cell ID"), s.cell_id);
       push("RSRP", this.serving.rsrp != null ? this.serving.rsrp + " dBm" : null);
       push("SINR", this.serving.sinr != null ? this.serving.sinr + " dB" : null);
 
@@ -247,16 +248,14 @@ export default {
         var hasPci = lk.pci !== undefined && lk.pci !== null;
         var hasFreq = lk.freq !== undefined && lk.freq !== null;
         var lockedDetail;
-        if (hasPci && hasFreq) lockedDetail = " to PCI " + lk.pci + " / ARFCN " + lk.freq;
-        else if (hasPci) lockedDetail = " to PCI " + lk.pci;
-        else if (hasFreq) lockedDetail = " to ARFCN " + lk.freq;
-        else lockedDetail = " (details unavailable)";
-        var lockedSuffix = (hasPci || hasFreq) && lk.band ? " (n" + lk.band + ")" : "";
+        var lkTarget = (hasPci ? "PCI " + lk.pci : "") + (hasPci && hasFreq ? " / " : "") + (hasFreq ? "ARFCN " + lk.freq : "");
+        // GL's tower record names the RAT: an LTE lock's band is B<n>, an NR lock's n<n>.
+        var lkNR = l5.locked || /NR|5G/.test(String(lk.network_type || ""));
+        if (lkTarget && lk.band) lkTarget += " (" + (lkNR ? "n" : "B") + lk.band + ")";
         action = h("div", { staticClass: "mm-foot" }, [
-          h("span", { staticClass: "mm-hint" }, [
-            h("b", { staticStyle: { color: "var(--success)" } }, "Locked"),
-            lockedDetail + lockedSuffix + ". The modem will not hand over."
-          ]),
+          h("span", { staticClass: "mm-hint" }, TP("{locked} to {target}. The modem will not hand over.", {
+            locked: h("b", { staticStyle: { color: "var(--success)" } }, T("Locked")),
+            target: lkTarget || T("(details unavailable)") })),
           h("button", {
             staticClass: "mm-btn danger",
             attrs: { disabled: this.lockBusy || !!this.pending },
@@ -267,11 +266,12 @@ export default {
         var target = this.pinTarget();
         if (this.lockConfirm && this.lockConfirm.pin) {
           action = h("div", { staticClass: "mm-foot" }, [
-            h("span", { staticClass: "mm-hint", staticStyle: { color: "var(--warning)" } },
-              "Lock to PCI " + target.pci + "? Network mode switches to " +
-              (target.rat === "5g" ? "5G-only" : "4G-preferred") + " until unlocked." +
-              (target.scsAssumed ? " SCS " + target.scs + " kHz is assumed from the band." : "") +
-              " Auto-reverts in 60s unless kept."),
+            h("span", { staticClass: "mm-hint", staticStyle: { color: "var(--warning-hover)" } },
+              T(target.rat === "5g"
+                ? "Lock to PCI {pci}? Network mode switches to 5G-only until unlocked."
+                : "Lock to PCI {pci}? Network mode switches to 4G-preferred until unlocked.", { pci: target.pci }) +
+              (target.scsAssumed ? " " + T("SCS {scs} kHz is assumed from the band.", { scs: target.scs }) : "") +
+              " " + T("Auto-reverts in 60s unless kept.")),
             h("span", { staticStyle: { flex: "none", display: "flex", gap: "6px" } }, [
               h("button", { staticClass: "mm-btn", on: { click: function () { self.lockConfirm = null; } } }, "Cancel"),
               h("button", {
@@ -315,7 +315,7 @@ export default {
         h("span", { staticClass: "mm-grp-t" }, "Nearby cells"),
         this.scan.ts
           ? h("span", { staticClass: "mm-hint" },
-              "scanned " + Math.max(1, Math.round((Date.now() - this.scan.ts) / 60000)) + " min ago")
+              T("scanned {n} min ago", { n: Math.max(1, Math.round((Date.now() - this.scan.ts) / 60000)) }))
           : h("span", { staticClass: "mm-hint" }, "requires a scan")
       ]);
       var body;
@@ -379,15 +379,14 @@ export default {
         body = h("div", rows);
       } else {
         body = h("div", { staticClass: "mm-empty" }, this.scan.error
-          ? "Scan failed: " + this.scan.error
-          : "5G SA exposes no neighbour list - only the serving cell is visible without a scan, " +
-            "and a scan takes the modem offline for up to ~10 minutes.");
+          ? T("Scan failed: {err}", { err: this.scan.error })
+          : "5G SA exposes no neighbour list - only the serving cell is visible without a scan, and a scan takes the modem offline for up to ~10 minutes.");
       }
       var foot;
       if (!this.scan.running) {
         foot = this.scanConfirm
           ? h("div", { staticClass: "mm-foot" }, [
-              h("span", { staticClass: "mm-hint", staticStyle: { color: "var(--warning)" } },
+              h("span", { staticClass: "mm-hint", staticStyle: { color: "var(--warning-hover)" } },
                 "Scanning takes the modem OFFLINE for up to ~10 minutes. This connection will drop if it runs over cellular."),
               h("span", { staticStyle: { flex: "none", display: "flex", gap: "6px" } }, [
                 h("button", { staticClass: "mm-btn", on: { click: function () { self.scanConfirm = false; } } }, "Cancel"),
@@ -410,7 +409,7 @@ export default {
       if (this.lockLoading && !this.lockData)
         return h("div", { staticClass: "mm-card" }, [h("div", { staticClass: "mm-empty" }, "Reading lock state from the modem...")]);
       if (this.lockError && !this.lockData)
-        return h("div", { staticClass: "mm-card" }, [h("div", { staticClass: "mm-empty" }, "Couldn't read lock state: " + this.lockError)]);
+        return h("div", { staticClass: "mm-card" }, [h("div", { staticClass: "mm-empty" }, T("Couldn't read lock state: {err}", { err: this.lockError }))]);
       if (!this.lockData)
         return h("div", { staticClass: "mm-card" }, [h("div", { staticClass: "mm-empty" }, "...")]);
       var kids = [
@@ -428,10 +427,8 @@ export default {
         (this.lockData.stale)
           ? h("div", { staticClass: "mm-revert" }, [
               h("div", { staticClass: "mm-revert-row" }, [
-                h("span", [
-                  "The watchdog reverted a lock, but ", h("b", "GL's stored lock"),
-                  " still remembers it - GL may re-apply it later. Clear it to reconcile."
-                ]),
+                h("span", TP("The watchdog reverted a lock, but {gl} still remembers it - GL may re-apply it later. Clear it to reconcile.",
+                  { gl: h("b", T("GL's stored lock")) })),
                 h("button", { staticClass: "mm-btn keep", attrs: { disabled: this.lockBusy },
                   on: { click: this.unlockCell } }, "Clear it")
               ])
@@ -450,21 +447,17 @@ export default {
           h("span", { staticClass: "mm-grp-t" }, "Recovery"),
           h("span", { staticClass: "mm-hint" }, "read before locking")
         ]),
-        h("div", { staticClass: "mm-hint", staticStyle: { lineHeight: "1.6" } }, [
-          "A kept cell lock lives in the modem's own NV (survives reboot, reflash and factory reset) ",
-          "and in GL's store. Every lock made here auto-reverts in 60s unless you keep it, and the ",
-          "watchdog fires even if this page is closed. If the router ever becomes unreachable over ",
-          "the web, the ssh way back is: ", h("b", "ssh root@<router> /usr/sbin/mudimodem-revert panic"),
-          " - it clears the cell lock on both slots (GL's store and the modem), resets lock persistence ",
-          "and the network mode to Auto, and turns band filtering off."
-        ]),
-        h("div", { staticClass: "mm-hint", staticStyle: { lineHeight: "1.6", marginTop: "8px", color: "var(--warning-hover)" } }, [
-          h("b", "Remote sessions: "),
-          "applying a lock briefly re-registers the modem, which can drop a remote (Tailscale / VPN) ",
-          "connection to this router for a few seconds. It reconnects on its own - if the request ",
-          "seems to hang or fail, wait a moment; the lock likely applied and this page will offer to ",
-          "keep or revert it once you're back."
-        ])
+        h("div", { staticClass: "mm-hint", staticStyle: { lineHeight: "1.6" } }, TP(
+          "A kept cell lock lives in the modem's own NV (survives reboot, reflash and factory reset) and in GL's store. " +
+          "Every lock made here auto-reverts in 60s unless you keep it, and the watchdog fires even if this page is closed. " +
+          "If the router ever becomes unreachable over the web, the ssh way back is: {cmd} - it clears the cell lock on " +
+          "both slots (GL's store and the modem), resets lock persistence and the network mode to Auto, and turns band filtering off.",
+          { cmd: h("b", "ssh root@<router> /usr/sbin/mudimodem-revert panic") })),
+        h("div", { staticClass: "mm-hint", staticStyle: { lineHeight: "1.6", marginTop: "8px", color: "var(--warning-hover)" } }, TP(
+          "{label} applying a lock briefly re-registers the modem, which can drop a remote (Tailscale / VPN) connection to " +
+          "this router for a few seconds. It reconnects on its own - if the request seems to hang or fail, wait a moment; " +
+          "the lock likely applied and this page will offer to keep or revert it once you're back.",
+          { label: h("b", T("Remote sessions:")) }))
       ]);
     },
   }

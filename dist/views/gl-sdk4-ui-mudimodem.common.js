@@ -61,6 +61,485 @@ var __mm = (() => {
     return out;
   }
 
+  // src/web/locales/zh-cn.js
+  var zh_cn_default = {
+    "(carrier change)": "（载波变化）",
+    "(details unavailable)": "（详情不可用）",
+    "1 hour": "1 小时",
+    "12 hours": "12 小时",
+    "2 hours": "2 小时",
+    "24 hours": "24 小时",
+    "30 min": "30 分钟",
+    "4G only": "仅 4G",
+    "5G NR non-standalone": "5G NR 非独立组网（NSA）",
+    "5G NR standalone": "5G NR 独立组网（SA）",
+    "5G SA exposes no neighbour list - only the serving cell is visible without a scan, and a scan takes the modem offline for up to ~10 minutes.": "5G SA 不提供邻区列表 - 不扫描只能看到当前服务小区，而扫描会让 Modem 离线最长约 10 分钟。",
+    "5G only": "仅 5G",
+    "5G selections held back under 4G-only": "仅 4G 模式下 5G 选择不会下发",
+    "6 hours": "6 小时",
+    "> 2 d": "> 2 天",
+    "A change is already pending - Keep or Revert it first.": "已有待确认的修改 - 请先保留或恢复。",
+    "A kept cell lock lives in the modem's own NV (survives reboot, reflash and factory reset) and in GL's store. Every lock made here auto-reverts in 60s unless you keep it, and the watchdog fires even if this page is closed. If the router ever becomes unreachable over the web, the ssh way back is: {cmd} - it clears the cell lock on both slots (GL's store and the modem), resets lock persistence and the network mode to Auto, and turns band filtering off.": "保留下来的基站锁定同时存在于 Modem 自己的 NV（重启、重刷固件和恢复出厂设置后都还在）和 GL 的配置里。这里做的每次锁定在 60 秒内不保留就会自动恢复，即使关闭本页面看门狗也会照常执行。如果路由器的网页再也打不开，可以通过 ssh 恢复：{cmd} - 它会清除两个卡槽的基站锁定（GL 配置和 Modem），重置锁定持久化，把网络模式设为自动，并关闭频段过滤。",
+    "AT command": "AT 命令",
+    "AT console": "AT 控制台",
+    "Active · target {target} GL UI · current {cur}": "生效中 · 目标 {target}（GL 界面）· 当前 {cur}",
+    "All": "全选",
+    "All SIMs": "所有 SIM 卡",
+    "Already at the default - re-sending 'filtering off + Auto' to the modem anyway.": "已经是默认设置 - 仍然向 Modem 重新发送“关闭过滤 + 自动”。",
+    "Applied {what}. Reverting in {s} unless you keep it - watch the trace above.": "已应用 {what}。{s} 后自动恢复，除非你选择保留 - 请观察上方的信号曲线。",
+    "Applied {what}. Time's up - the auto-revert is restoring your previous settings...": "已应用 {what}。时间到 - 自动恢复正在还原之前的设置…",
+    "Apply": "应用",
+    "Applying...": "正在应用…",
+    "Armed · target {target} · will apply when the charger connects · current {cur}": "已开启 · 目标 {target} · 接上充电器后生效 · 当前 {cur}",
+    "Auto": "自动",
+    "Auto or 4G only": "自动或仅 4G",
+    "Auto or 5G only": "自动或仅 5G",
+    "Auto-revert FAILED": "自动恢复失败",
+    "Auto-revert fired": "已自动恢复",
+    "Auto-reverts in 60s unless kept.": "60 秒内不保留则自动恢复。",
+    "Automatic background tests": "后台自动测速",
+    "BAND": "频段",
+    "BW": "带宽",
+    "Backup size": "备份大小",
+    "Band": "频段",
+    "Band change confirmed": "已确认频段修改",
+    "Bands": "频段",
+    "Bands applied": "已应用频段",
+    "Bands haven't loaded yet - hit refresh.": "频段尚未加载 - 请点击刷新。",
+    "Based on ChiliApple's battery control scripts": "基于 ChiliApple 的电池控制脚本",
+    "Battery": "电池",
+    "Battery charge limit": "电池充电上限",
+    "CELL": "小区",
+    "Can't reach the router — battery history stopped updating {age} ago.": "无法连接路由器 — 电池历史已在 {age} 前停止更新。",
+    "Can't reach the router — battery history stopped updating.": "无法连接路由器 — 电池历史已停止更新。",
+    "Cancel": "取消",
+    "Carrier": "运营商",
+    "Cell": "小区",
+    "Cell ID": "小区 ID",
+    "Cell lock": "锁定基站",
+    "Cell lock applied": "已锁定基站",
+    "Cell lock cleared": "已解除基站锁定",
+    "Cell lock confirmed": "已确认基站锁定",
+    "Cell lock removed": "已移除基站锁定",
+    "Cell lock — open Cell lock tab": "基站锁定 — 打开锁定基站页",
+    "Cell scan": "基站扫描",
+    "Cell {from} → {to}": "小区 {from} → {to}",
+    "Cellular": "蜂窝网络",
+    "Ch": "信道",
+    "Charge blocked (limit)": "充电已暂停（充电上限）",
+    "Charge limit not available on this device.": "此设备不支持充电上限。",
+    "Charging": "充电中",
+    "Charging stopped": "已停止充电",
+    "Choose the network mode and which 5G/LTE bands the modem may use. Blocked bands are ones the module supports but your carrier forbids - they can't be selected because they never take.": "选择网络模式，以及 Modem 可以使用的 5G/LTE 频段。被屏蔽的频段是模组支持、但运营商策略不允许的频段 - 选了也不会生效，所以不能选。",
+    "Clear history": "清除历史",
+    "Clear it": "清除",
+    "Commands go straight to the {modem}. Nothing is validated. Entries marked nv write modem memory that survives a factory reset.": "命令会直接发给 {modem}，不做任何校验。标记为 nv 的条目会写入 Modem 的存储，恢复出厂设置后仍然存在。",
+    "Config": "配置",
+    "Confirm": "确认",
+    "Connection dropped while applying the lock - checking whether it took...": "锁定时连接中断 - 正在确认是否已生效…",
+    "Connection dropped while locking and hasn't recovered yet - refresh once you're back to see the current lock state.": "锁定时连接中断且尚未恢复 - 恢复后请刷新以查看当前锁定状态。",
+    "Contributed by": "贡献者",
+    "Copy": "复制",
+    "Copy the transcript": "复制记录",
+    "Couldn't check interfaces: {err}": "无法检查网络接口：{err}",
+    "Couldn't confirm which SIM answered - values may be for the other slot": "无法确认是哪张 SIM 卡在应答 - 数值可能属于另一个卡槽",
+    "Couldn't load history: {err}": "无法加载历史：{err}",
+    "Couldn't load history: {err} — retrying every {s} s.": "无法加载历史：{err} — 每 {s} 秒重试一次。",
+    "Couldn't load the AT console: {err}": "无法加载 AT 控制台：{err}",
+    "Couldn't load the battery view: {err}": "无法加载电池页：{err}",
+    "Couldn't load the graph: {err}": "无法加载信号图：{err}",
+    "Couldn't load the library: {err}": "无法加载命令库：{err}",
+    "Couldn't load the speed test: {err}": "无法加载测速：{err}",
+    "Couldn't load the wider range yet; retrying every {s} s.": "暂时无法加载更长的时间范围；每 {s} 秒重试一次。",
+    "Couldn't reach the router to keep it ({err}). The countdown is still running - press Keep again.": "无法连接路由器来保留修改（{err}）。倒计时仍在继续 - 请再次点击“保留”。",
+    "Couldn't reach the router to revert ({err}). The auto-revert is still armed.": "无法连接路由器来恢复（{err}）。自动恢复仍然有效。",
+    "Couldn't reach the router to see what the auto-revert did - reload once you're back online.": "无法连接路由器确认自动恢复的结果 - 恢复联网后请刷新页面。",
+    "Couldn't reach the router — retrying every {s} s.": "无法连接路由器 — 每 {s} 秒重试一次。",
+    "Couldn't read bands: {err}": "无法读取频段：{err}",
+    "Couldn't read lock state: {err}": "无法读取锁定状态：{err}",
+    "Couldn't save the schedule: {err}": "无法保存计划：{err}",
+    "Couldn't start update: {err}": "无法开始更新：{err}",
+    "Current": "电流",
+    "Current 60 s avg": "电流 60 秒平均",
+    "Current cell": "当前基站",
+    "Current · mA": "电流 · mA",
+    "Data now on SIM {slot}": "数据切换到 SIM {slot}",
+    "Decoded — field names from the library entry": "解析结果 — 字段名来自命令库条目",
+    "Detail": "详情",
+    "Device": "设备",
+    "Down": "下载",
+    "Download": "下载",
+    "Draining on power": "接电源仍在放电",
+    "Each edited band group needs at least one band": "每个修改过的频段组至少要保留一个频段",
+    "Earlier battery history didn't load — showing samples since the tab opened; retrying every {s} s.": "更早的电池历史没能加载 — 只显示打开本页以来的采样；每 {s} 秒重试一次。",
+    "Earlier history didn't load — showing live samples since the page opened; retrying every {s} s.": "更早的历史没能加载 — 只显示打开页面以来的实时采样；每 {s} 秒重试一次。",
+    "Enable higher-risk commands": "启用高风险命令",
+    "Enabled · not active · target {target} · current {cur}": "已开启 · 未生效 · 目标 {target} · 当前 {cur}",
+    "Estimating…": "正在估算…",
+    "Event": "事件",
+    "Event log": "事件日志",
+    "Every {n}": "每 {n}",
+    "Failover": "SIM 卡切换",
+    "Find every cell in range, with lockable details.": "查找范围内的所有基站，并给出可锁定的参数。",
+    "Full": "已充满",
+    "GL UI Reported Charge": "GL 界面电量",
+    "GL UI Reported Charge · %": "GL 界面电量 · %",
+    'GL reports network mode "{mode}", which this panel doesn\'t offer - it stays as it is unless you pick a mode below.': "GL 报告的网络模式是“{mode}”，本页面不提供该选项 - 除非你在下面选择其他模式，否则保持不变。",
+    "GL's AT service · addressed to the active SIM: {who}": "GL 的 AT 服务 · 发往当前 SIM 卡：{who}",
+    "GL's stored lock": "GL 保存的锁定",
+    "Handover": "基站切换",
+    "History": "历史",
+    "History across reboots": "重启后保留历史",
+    "Holding at the limit": "保持在充电上限",
+    "Holding at {pct} %": "保持在 {pct} %",
+    "IC Reported Charge": "电量芯片读数",
+    "If the auto-revert is still running it will undo this within ~60s - {keep} to make it stick, or {revert} to remove it now.": "如果自动恢复仍在运行，它会在约 60 秒内撤销此修改 - 点击{keep}使其生效，或点击{revert}立即撤销。",
+    "Invert": "反选",
+    "Keep": "保留",
+    "Keep signal & battery history across reboots": "重启后保留信号和电池历史",
+    "Keeping...": "正在保留…",
+    "Kept": "已保留",
+    "LIVE": "实时",
+    "LTE": "LTE",
+    "Latency": "延迟",
+    "Latest result": "最近结果",
+    "Library": "命令库",
+    "Library not loaded.": "命令库未加载。",
+    "Limit": "充电上限",
+    "Limit charging": "限制充电",
+    "Live charts still use RAM. When this is on, the collector appends new samples to eMMC about every {n} minutes (~6 MiB for a full day of signal + battery). Off by default.": "实时图表仍使用内存。开启后，采集器大约每 {n} 分钟把新采样追加写入 eMMC（一整天的信号 + 电池约 6 MiB）。默认关闭。",
+    "Loading battery history…": "正在加载电池历史…",
+    "Loading history from the router…": "正在从路由器加载历史…",
+    "Loading history…": "正在加载历史…",
+    "Loading the AT console…": "正在加载 AT 控制台…",
+    "Loading the battery view…": "正在加载电池页…",
+    "Loading the library…": "正在加载命令库…",
+    "Loading the signal graph…": "正在加载信号图…",
+    "Loading the speed test…": "正在加载测速…",
+    "Loading…": "正在加载…",
+    "Lock": "锁定",
+    "Lock it": "锁定",
+    "Lock to PCI {pci}? Network mode switches to 4G-preferred until unlocked.": "锁定到 PCI {pci}？解除锁定前网络模式会切换为 4G 优先。",
+    "Lock to PCI {pci}? Network mode switches to 5G-only until unlocked.": "锁定到 PCI {pci}？解除锁定前网络模式会切换为仅 5G。",
+    "Lock to this cell": "锁定到此基站",
+    "Locked": "已锁定",
+    "Locking...": "正在锁定…",
+    "Low-level: target {target}, current {cur}": "底层：目标 {target}，当前 {cur}",
+    "Mbps down": "Mbps 下载",
+    "Mbps up": "Mbps 上传",
+    "Model": "型号",
+    "Modem": "Modem",
+    "MudiModem (version unknown)": "MudiModem（版本未知）",
+    "Nearby cells": "附近基站",
+    "Network": "网络",
+    "Network mode": "网络模式",
+    "Network mode — open Bands": "网络模式 — 打开频段页",
+    "No band changes, handovers or failovers recorded yet.": "还没有记录到频段修改、基站切换或 SIM 卡切换。",
+    "No battery history yet — sampling starts within 20 s.": "还没有电池历史 — 20 秒内开始采样。",
+    "No changes": "没有修改",
+    "No matches.": "没有匹配项。",
+    "No results yet for this interface. Run a speed test above.": "这个接口还没有结果。请在上方开始测速。",
+    "No samples yet. The collector runs on the router and gathers continuously — check back in a minute, or confirm the mudimodem-collectd service is running.": "还没有采样。采集器在路由器上持续运行 — 请稍后再看，或确认 mudimodem-collectd 服务正在运行。",
+    "None": "全不选",
+    "Not charging": "未充电",
+    "Off": "关闭",
+    "Off under {mode} - 5G selections are not sent (GL clears them under 4G-only). Set the mode to {need} to use them.": "在“{mode}”模式下不生效 - 5G 的选择不会下发（仅 4G 时 GL 会清空它们）。要使用请把模式设为“{need}”。",
+    "Off under {mode} - these won't apply. Set the mode to {need} to use them.": "在“{mode}”模式下不生效 - 这些选择不会应用。要使用请把模式设为“{need}”。",
+    "Off · current {cur}": "关闭 · 当前 {cur}",
+    "On battery": "电池供电",
+    "PAUSED": "已暂停",
+    "Pin the modem to the cell it is using now - the safest lock target.": "把 Modem 固定在当前使用的基站上 - 最安全的锁定目标。",
+    "RPC helper unavailable": "RPC 不可用",
+    "RPC unavailable": "RPC 不可用",
+    "RSRP · dBm": "RSRP · dBm",
+    "RSRP · last sample {age} ago": "RSRP · 最后一次采样在 {age} 前",
+    "RSRP · last {n} min": "RSRP · 最近 {n} 分钟",
+    "RSRQ · dB": "RSRQ · dB",
+    "Range {r}": "范围 {r}",
+    "Raw AT": "AT 命令",
+    "Reading band configuration from the modem...": "正在从 Modem 读取频段配置…",
+    "Reading lock state from the modem...": "正在从 Modem 读取锁定状态…",
+    "Recovery": "恢复方法",
+    "Refresh now": "立即更新",
+    "Refreshing…": "正在更新…",
+    "Remote sessions:": "远程连接：",
+    "Reset to default": "恢复默认",
+    "Restored previous bands": "已还原之前的频段",
+    "Retry": "重试",
+    "Revert": "恢复",
+    "Revert now": "立即恢复",
+    "Reverted": "已恢复",
+    "Reverted - cell lock removed.": "已恢复 - 基站锁定已移除。",
+    "Reverted - restored your previous bands.": "已恢复 - 已还原之前的频段。",
+    "Reverting...": "正在恢复…",
+    "Run speed test": "开始测速",
+    "SCS {scs} kHz is assumed from the band.": "SCS {scs} kHz 是根据频段推定的。",
+    "SIM {slot} (active) is not registered on a network right now - {carrier}.": "SIM {slot}（当前使用）目前未注册到网络 - {carrier}。",
+    "SIM {slot} (active) is not registered on a network right now.": "SIM {slot}（当前使用）目前未注册到网络。",
+    "SINR · dB": "SINR · dB",
+    "Sampled every 10s by the MudiModem collector (pushed live), last {n} minutes": "由 MudiModem 采集器每 10 秒采样并实时推送，显示最近 {n} 分钟",
+    "Scan failed: {err}": "扫描失败：{err}",
+    "Scan for cells": "扫描基站",
+    "Scan now": "立即扫描",
+    "Scanning takes the modem OFFLINE for up to ~10 minutes. This connection will drop if it runs over cellular.": "扫描会让 Modem 离线最长约 10 分钟。如果你是通过蜂窝网络连接的，连接会中断。",
+    "Scanning... the modem is offline until this finishes (up to ~10 minutes). Watch the strip.": "正在扫描… 完成前 Modem 处于离线状态（最长约 10 分钟）。请留意状态条。",
+    "Search library": "搜索命令库",
+    "Search — band, lock, signal…": "搜索 — 频段、锁定、信号…",
+    "Send": "发送",
+    "Sending the default to the modem: band filtering off + Auto mode.": "正在向 Modem 发送默认设置：关闭频段过滤 + 自动模式。",
+    "Sending…": "正在发送…",
+    "Sharp edge.": "注意风险。",
+    "Source": "来源",
+    "Speedtest": "测速",
+    "Starting…": "正在启动…",
+    "State": "状态",
+    "Status": "状态",
+    "Target": "目标",
+    "Target must be 20–100 % GL UI Reported Charge": "目标必须在 20–100 %（GL 界面电量）之间",
+    "Target too low — the charge IC needs at least 50 % IC Reported Charge (about 50 % GL UI Reported Charge)": "目标太低 — 充电芯片至少需要 50 %（电量芯片读数，约合 GL 界面电量 50 %）",
+    "Temp": "温度",
+    "Temperature · °C": "温度 · °C",
+    "Testing download…": "正在测试下载…",
+    "Testing latency…": "正在测试延迟…",
+    "Testing upload…": "正在测试上传…",
+    "Testing…": "正在测试…",
+    "The auto-revert has not finished after 30 s - use Revert now, or the ssh panic restore.": "自动恢复 30 秒后仍未完成 - 请点击“立即恢复”，或使用 ssh 紧急恢复。",
+    "The collector has not produced a sample for {age} (modem resetting, or mudimodem-collectd stopped) - these are its last known values, not live readings.": "采集器已经 {age} 没有产生新采样（Modem 正在重置，或 mudimodem-collectd 已停止），以下是最后一次的数值，不是实时读数。",
+    "The collector's last sample is {age} old - nothing newer has been pushed": "采集器的最后一次采样已是 {age} 前，之后没有新的推送",
+    "The connection dropped while applying, and nothing is pending on the router now - the change did not take, or was already reverted.": "应用时连接中断，且路由器上现在没有待确认的修改 - 修改没有生效，或已被恢复。",
+    "The lock request was cut off by a connection drop and no lock is set - try again.": "锁定请求因连接中断而失败，目前没有设置锁定 - 请重试。",
+    "The watchdog reverted a lock, but {gl} still remembers it - GL may re-apply it later. Clear it to reconcile.": "看门狗已撤销一次锁定，但 {gl} 仍然记着它 - GL 之后可能会重新应用。请清除以保持一致。",
+    "Time": "时间",
+    "Too late to keep: the auto-revert had already restored your previous bands. Apply it again if you want it.": "来不及保留了：自动恢复已经还原了之前的频段。如需要请重新应用。",
+    "Too late to keep: the auto-revert had already restored your previous cell setting. Apply it again if you want it.": "来不及保留了：自动恢复已经还原了之前的基站设置。如需要请重新应用。",
+    "Tracking": "信号追踪",
+    "Unknown": "未知",
+    "Unknown tab.": "未知标签页。",
+    "Unlock": "解除锁定",
+    "Unlocked": "未锁定",
+    "Unlocking...": "正在解除…",
+    "Up": "上传",
+    "Up to date · rev {rev}": "已是最新 · 版本 {rev}",
+    "Update available": "有更新",
+    "Update failed: {err} — see /var/log/mudimodem-update.log": "更新失败：{err} — 详见 /var/log/mudimodem-update.log",
+    "Update is taking longer than expected — check /var/log/mudimodem-update.log, then reload the page.": "更新耗时超出预期 — 请查看 /var/log/mudimodem-update.log，然后刷新页面。",
+    "Update now": "立即更新",
+    "Updated to v{v}. The page is still running the old interface —": "已更新到 v{v}。当前页面仍在运行旧界面 —",
+    "Updated. The page is still running the old interface —": "已更新。当前页面仍在运行旧界面 —",
+    "Updating to v{v}…": "正在更新到 v{v}…",
+    "Updating…": "正在更新…",
+    "Upload": "上传",
+    "User": "用户",
+    "Vendor": "厂商",
+    "Verified on": "验证设备",
+    "Voltage": "电压",
+    "Voltage · V": "电压 · V",
+    "WRITES MODEM NV — survives factory reset": "写入 Modem NV — 恢复出厂设置后仍然存在",
+    "Waiting for the collector's first sample (mudimodem-collectd pushes every 10s)...": "正在等待采集器的第一次采样（mudimodem-collectd 每 10 秒推送一次）…",
+    "Watchdog": "看门狗",
+    "Wired WAN": "有线 WAN",
+    "Would strand your {rat} cell lock - clear the lock first": "会让 {rat} 基站锁定失效 - 请先解除锁定",
+    "Your connection dropped while applying, but the band change ({what}) most likely applied.": "应用时连接中断了，但频段修改（{what}）很可能已经生效。",
+    "Your connection dropped while applying, but the {lock} did apply.": "应用时连接中断了，但 {lock} 已经生效。",
+    "a tick marks the moment — everything to its right is the radio's answer": "竖线标记操作的时刻 — 它右侧就是无线信号的反应",
+    "allowed": "已允许",
+    "apply failed": "应用失败",
+    "band change": "频段修改",
+    "blocked by carrier policy": "被运营商策略屏蔽",
+    "blocked by policy": "被策略屏蔽",
+    "but the network mode is {mode} - the lock can't take effect. Set the mode to {need}, or clear the lock on the Cell lock tab.": "但网络模式是“{mode}” - 锁定无法生效。请把模式设为“{need}”，或在“锁定基站”页解除锁定。",
+    "carrier {plmn}": "运营商 {plmn}",
+    "changed": "已修改",
+    "changes runtime state — gone on reboot": "修改运行状态 — 重启后失效",
+    "click to confirm — briefly restarts the admin panel": "点击确认 — 管理界面会短暂重启",
+    "could not check interfaces": "无法检查网络接口",
+    "could not load history": "无法加载历史",
+    "could not load the battery view": "无法加载电池页",
+    "could not load the graph": "无法加载信号图",
+    "could not load the speed test": "无法加载测速",
+    "could not save schedule": "无法保存计划",
+    "could not start": "无法启动",
+    "couldn't reach the router": "无法连接路由器",
+    "default: band filtering off, mode Auto": "默认：关闭频段过滤，模式自动",
+    "direct port /dev/at_mdm0 (GL's AT service is down) · active SIM: {who}": "直连端口 /dev/at_mdm0（GL 的 AT 服务不可用）· 当前 SIM 卡：{who}",
+    "fill in every parameter before sending": "发送前请填写所有参数",
+    "filtering off + Auto": "关闭过滤 + 自动",
+    "from the last {n} min": "依据最近 {n} 分钟",
+    "high band, fast + short range": "高频，速度快、覆盖近",
+    "in use": "使用中",
+    "load failed": "加载失败",
+    "lock failed": "锁定失败",
+    "locked": "已锁定",
+    "low band, reaches far": "低频，覆盖远",
+    "mode -> {m}": "模式 -> {m}",
+    "mode {m}": "模式 {m}",
+    "modem": "Modem",
+    "ms latency": "ms 延迟",
+    "newest first": "最新的在前",
+    "nv": "nv",
+    "one clock, all three metrics — hover for a slice, click to pin": "同一时间轴上的三个指标 — 悬停查看某一时刻，点击固定",
+    "permitted, not active": "允许但未生效",
+    "permitted, not selected": "允许但未选择",
+    "pinned": "已固定",
+    "read": "只读",
+    "read before locking": "锁定前请先阅读",
+    "ready. Pick a command from the library, or type one.": "就绪。从命令库选择命令，或直接输入。",
+    "refresh": "刷新",
+    "refresh failed": "更新失败",
+    "refreshing...": "正在刷新…",
+    "reload now": "立即刷新",
+    "request failed": "请求失败",
+    "requires a scan": "需要扫描",
+    "resolving…": "正在识别…",
+    "rev unknown": "版本未知",
+    "rev {rev}": "版本 {rev}",
+    "ring = serving now (every carrier: PCC + SCCs)": "圆环 = 当前服务（所有载波：PCC + SCC）",
+    "safe — reads only": "安全 — 只读",
+    "scan failed": "扫描失败",
+    "scanned {n} min ago": "{n} 分钟前扫描",
+    "serving now": "当前服务",
+    "serving now ({role})": "当前服务（{role}）",
+    "set": "设置",
+    "skipped — previous step failed": "已跳过 — 上一步失败",
+    "slot {slot}": "卡槽 {slot}",
+    "target {pct}%": "目标 {pct}%",
+    "the speed test stopped without a result": "测速中途停止，没有结果",
+    "unlock failed": "解除锁定失败",
+    "updated — rev {rev}": "已更新 — 版本 {rev}",
+    "view frozen": "视图已冻结",
+    "v{v} available": "v{v} 可更新",
+    "which radios the modem may use": "Modem 可以使用的制式",
+    "{b} allowed (click to remove)": "{b} 已允许（点击移除）",
+    "{b} blocked by carrier policy; selecting has no effect": "{b} 被运营商策略屏蔽，选择也不会生效",
+    "{b} permitted (click to allow)": "{b} 运营商允许（点击启用）",
+    "{carrier} (slot {slot})": "{carrier}（卡槽 {slot}）",
+    "{label} applying a lock briefly re-registers the modem, which can drop a remote (Tailscale / VPN) connection to this router for a few seconds. It reconnects on its own - if the request seems to hang or fail, wait a moment; the lock likely applied and this page will offer to keep or revert it once you're back.": "{label}应用锁定会让 Modem 短暂重新注册，可能导致到本路由器的远程连接（Tailscale / VPN）中断几秒钟。连接会自动恢复 - 如果请求像是卡住或失败了，请稍等片刻；锁定很可能已经生效，重新连上后本页面会让你选择保留或恢复。",
+    "{locked} to {target}. The modem will not hand over.": "{locked}到 {target}。Modem 不会切换基站。",
+    "{name} (not connected)": "{name}（未连接）",
+    "{name} is not connected": "{name} 未连接",
+    "{n} commands": "{n} 条命令",
+    "{n} h ago": "{n} 小时前",
+    "{n} min": "{n} 分钟",
+    "{n} min ago": "{n} 分钟前",
+    "{n} new sample held — resume to show": "暂存了 {n} 个新采样 — 继续后显示",
+    "{n} new samples held — resume to show": "暂存了 {n} 个新采样 — 继续后显示",
+    "{n} s": "{n} 秒",
+    "{n}s ago": "{n} 秒前",
+    "{pct} % GL UI": "{pct} %（GL 界面）",
+    "{pct} % GL UI Reported Charge": "{pct} %（GL 界面电量）",
+    "{rat} cell PCI {pci} / ARFCN {freq}": "{rat} 小区 PCI {pci} / ARFCN {freq}",
+    "{rat} lock PCI {pci} / ARFCN {freq}": "{rat} 锁定 PCI {pci} / ARFCN {freq}",
+    "{s} supported / {p} permitted / {a} active": "支持 {s} / 允许 {p} / 生效 {a}",
+    "{time} remaining": "剩余 {time}",
+    "{time} to {pct} %": "{time} 充到 {pct} %",
+    "{title} (read-only)": "{title}（只读）",
+    "{what} changed; applies with a 60s revert": "已修改 {what}；应用后有 60 秒的自动恢复",
+    "~{h} h": "约 {h} 小时",
+    "~{h} h {m} m": "约 {h} 小时 {m} 分钟",
+    "~{m} m": "约 {m} 分钟",
+    "— nobody yet": "— 暂无",
+    "← Modem": "← Modem",
+    "≈ {pct} % IC Reported Charge": "约 {pct} %（电量芯片读数）",
+    "■ User": "■ 用户",
+    "▲ Watchdog": "▲ 看门狗",
+    "○ Network": "○ 网络",
+    "⚠ Modem is cell-locked to {lock}, ": "⚠ Modem 已锁定到基站 {lock}，"
+  };
+
+  // src/web/kit/i18n.js
+  var TABLES = { "zh-cn": zh_cn_default, "zh-tw": zh_cn_default };
+  function locale() {
+    var l = "";
+    if (typeof window !== "undefined") {
+      if (window.$i18n && window.$i18n.locale) l = window.$i18n.locale;
+      else if (window.MM_LOCALE) l = window.MM_LOCALE;
+      else if (typeof navigator !== "undefined" && navigator.language) l = navigator.language;
+    }
+    l = String(l || "en").toLowerCase();
+    if (l === "zh" || l.indexOf("zh-hans") === 0 || l.indexOf("zh-cn") === 0 || l.indexOf("zh-sg") === 0) return "zh-cn";
+    if (l.indexOf("zh") === 0) return "zh-tw";
+    return l;
+  }
+  function table() {
+    return TABLES[locale()] || null;
+  }
+  function tr(s) {
+    var tb = table();
+    if (!tb || typeof s !== "string") return s;
+    var core = s.trim();
+    if (!core || !Object.prototype.hasOwnProperty.call(tb, core)) return s;
+    var lead = s.slice(0, s.indexOf(core)), trail = s.slice(s.indexOf(core) + core.length);
+    return lead + tb[core] + trail;
+  }
+  function fill(tpl, vars) {
+    return tpl.replace(/\{(\w+)\}/g, function(m, k) {
+      return vars && Object.prototype.hasOwnProperty.call(vars, k) ? String(vars[k]) : m;
+    });
+  }
+  function t(en, vars) {
+    return fill(tr(en), vars);
+  }
+  function tp(en, parts) {
+    var tpl = tr(en), out = [], re = /\{(\w+)\}/g, last = 0, m;
+    while (m = re.exec(tpl)) {
+      if (m.index > last) out.push(tpl.slice(last, m.index));
+      out.push(parts && Object.prototype.hasOwnProperty.call(parts, m[1]) ? parts[m[1]] : m[0]);
+      last = m.index + m[0].length;
+    }
+    if (last < tpl.length) out.push(tpl.slice(last));
+    return out;
+  }
+  var ATTRS = ["title", "placeholder", "aria-label"];
+  function trData(data) {
+    if (!data || typeof data !== "object" || Array.isArray(data) || !data.attrs) return data;
+    var a = null;
+    ATTRS.forEach(function(k) {
+      if (typeof data.attrs[k] === "string") {
+        var v = tr(data.attrs[k]);
+        if (v !== data.attrs[k]) {
+          a = a || Object.assign({}, data.attrs);
+          a[k] = v;
+        }
+      }
+    });
+    return a ? Object.assign({}, data, { attrs: a }) : data;
+  }
+  function trKids(k) {
+    if (typeof k === "string") return tr(k);
+    if (Array.isArray(k)) return k.map(function(x) {
+      return typeof x === "string" ? tr(x) : x;
+    });
+    return k;
+  }
+  function wrapH(h, seen) {
+    return function(tag, data, children) {
+      if (typeof data === "string" || Array.isArray(data)) {
+        var k1 = trKids(data);
+        if (seen) record(seen, null, k1);
+        return h(tag, k1);
+      }
+      var d = trData(data), k = trKids(children);
+      if (seen) record(seen, d, k);
+      return h(tag, d, k);
+    };
+  }
+  function record(seen, data, children) {
+    [].concat(children == null ? [] : children).forEach(function(x) {
+      if (typeof x === "string") seen(x);
+    });
+    if (data && data.attrs) ATTRS.forEach(function(a) {
+      if (typeof data.attrs[a] === "string") seen(data.attrs[a]);
+    });
+  }
+  function localize(component) {
+    var render = component.render;
+    component.render = function(h) {
+      var seen = typeof window !== "undefined" && window.__mmI18nSeen;
+      return render.call(this, wrapH(h, seen));
+    };
+    return component;
+  }
+
   // src/web/kit/rpc.js
   function hasRpc() {
     return typeof window !== "undefined" && !!window.$rpcRequest;
@@ -145,14 +624,14 @@ var __mm = (() => {
       modeBadge() {
         if (!this.bands) return null;
         var m = this.appliedMode();
-        if (m === "LTE") return { text: "4G only", active: true };
-        if (m === "NR5G") return { text: "5G only", active: true };
-        return { text: "Auto", active: false };
+        if (m === "LTE") return { text: t("4G only"), active: true };
+        if (m === "NR5G") return { text: t("5G only"), active: true };
+        return { text: t("Auto"), active: false };
       },
       towerBadge() {
         if (!this.bands) return null;
         var lk = this.lockInfo();
-        if (!lk) return { text: "Unlocked", locked: false };
+        if (!lk) return { text: t("Unlocked"), locked: false };
         var rat = lk.rat === "4g" ? "LTE" : "5G";
         var tag = lk.band !== void 0 && lk.band !== null && lk.band !== "" ? (lk.rat === "4g" ? "B" : "n") + lk.band : lk.pci !== void 0 && lk.pci !== null ? "PCI " + lk.pci : "";
         return { text: rat + (tag ? " " + tag : ""), locked: true, title: this.lockLabel() };
@@ -173,7 +652,7 @@ var __mm = (() => {
           staticClass: "mm-lockbadge" + (tb.locked ? " lock" : ""),
           attrs: {
             type: "button",
-            title: (tb.locked ? tb.title + " — " : "") + "Cell lock — open Cell lock tab"
+            title: (tb.locked ? tb.title + " — " : "") + t("Cell lock — open Cell lock tab")
           },
           on: { click: function() {
             self.tab = "lock";
@@ -328,15 +807,15 @@ var __mm = (() => {
         var span = this.STRIP_MIN * 6e4, end = this.stripEnd(), start = end - span;
         var d = "", prev = null, prevSim = null;
         for (var i = 0; i < pts.length; i++) {
-          var t = pts[i].t, sim = pts[i].s;
-          var x = (t - start) / span * W;
+          var t2 = pts[i].t, sim = pts[i].s;
+          var x = (t2 - start) / span * W;
           if (x < 0) x = 0;
           else if (x > W) x = W;
           var cl = Math.max(FLOOR, Math.min(CEIL, pts[i].v));
           var y = ySpan ? H - (cl - FLOOR) / ySpan * H : H / 2;
           var newSim = sim != null && prevSim != null && String(sim) !== String(prevSim);
-          d += (prev === null || t - prev > this.STRIP_GAP_MS || newSim ? "M" : "L") + x.toFixed(1) + "," + y.toFixed(1);
-          prev = t;
+          d += (prev === null || t2 - prev > this.STRIP_GAP_MS || newSim ? "M" : "L") + x.toFixed(1) + "," + y.toFixed(1);
+          prev = t2;
           if (sim != null) prevSim = sim;
         }
         return d;
@@ -345,6 +824,9 @@ var __mm = (() => {
   };
 
   // src/web/main/change.js
+  function modeName(m) {
+    return t({ AUTO: "Auto", NR5G: "5G only", LTE: "4G only" }[m] || m);
+  }
   var change_default = {
     data() {
       return {
@@ -427,7 +909,7 @@ var __mm = (() => {
             return;
           }
           if (res && res.pending) {
-            self.patchPending({ reverting: false, revertError: "The auto-revert has not finished after 30 s - use Revert now, or the ssh panic restore." });
+            self.patchPending({ reverting: false, revertError: t("The auto-revert has not finished after 30 s - use Revert now, or the ssh panic restore.") });
             return;
           }
           var k = p.kind;
@@ -466,7 +948,7 @@ var __mm = (() => {
               self.pending = { kind: q.kind, applied: q.applied || {}, uncertain: true, window: 60, remaining: 60 };
           } else if (p && p.uncertain) {
             self.pending = null;
-            self.applyError = "The connection dropped while applying, and nothing is pending on the router now - the change did not take, or was already reverted.";
+            self.applyError = t("The connection dropped while applying, and nothing is pending on the router now - the change did not take, or was already reverted.");
           }
         });
       },
@@ -487,7 +969,10 @@ var __mm = (() => {
           }
           self.refetchAfterChange(k);
         }).catch(function(e) {
-          self.patchPending({ keeping: false, keepError: "Couldn't reach the router to keep it (" + (e && (e.type || e.message) || "error") + "). The countdown is still running - press Keep again." });
+          self.patchPending({ keeping: false, keepError: t(
+            "Couldn't reach the router to keep it ({err}). The countdown is still running - press Keep again.",
+            { err: e && (e.type || e.message) || "error" }
+          ) });
         });
       },
       revertBands() {
@@ -507,10 +992,13 @@ var __mm = (() => {
             if (self.pending && self.pending.done) self.pending = null;
           }, 4e3);
         }).catch(function(e) {
-          self.patchPending({ reverting: false, revertError: "Couldn't reach the router to revert (" + (e && (e.type || e.message) || "error") + "). The auto-revert is still armed." });
+          self.patchPending({ reverting: false, revertError: t(
+            "Couldn't reach the router to revert ({err}). The auto-revert is still armed.",
+            { err: e && (e.type || e.message) || "error" }
+          ) });
         });
       },
-      // Confirm-or-revert banner (design C1: inline, on the tab that caused it).
+      // Confirm-or-revert banner: page-wide, above the tab bar (render in index.js).
       revertButtons(h) {
         var self = this, p = this.pending, busy = p.keeping || p.reverting;
         return h("span", { staticStyle: { flex: "none", display: "flex", gap: "6px" } }, [
@@ -537,7 +1025,7 @@ var __mm = (() => {
       renderRevert(h) {
         var self = this, p = this.pending;
         if (p.done) {
-          var doneMsg = p.reverting ? "Reverting..." : p.tooLate ? "Too late to keep: the auto-revert had already restored your previous " + (p.kind === "cell" ? "cell setting." : "bands.") + " Apply it again if you want it." : p.unknown ? "Couldn't reach the router to see what the auto-revert did - reload once you're back online." : p.reverted ? p.kind === "cell" ? "Reverted - cell lock removed." : "Reverted - restored your previous bands." : "";
+          var doneMsg = p.reverting ? "Reverting..." : p.tooLate ? p.kind === "cell" ? "Too late to keep: the auto-revert had already restored your previous cell setting. Apply it again if you want it." : "Too late to keep: the auto-revert had already restored your previous bands. Apply it again if you want it." : p.unknown ? "Couldn't reach the router to see what the auto-revert did - reload once you're back online." : p.reverted ? p.kind === "cell" ? "Reverted - cell lock removed." : "Reverted - restored your previous bands." : "";
           return h("div", { staticClass: "mm-revert" }, [
             h("span", { staticClass: "mm-revert-row" }, doneMsg)
           ]);
@@ -553,22 +1041,21 @@ var __mm = (() => {
         }
         if (p.uncertain) {
           var ua = p.applied || {};
-          var what = p.kind === "cell" ? [" the ", h("b", (ua.rat === "4g" ? "LTE" : "5G") + " lock PCI " + ua.pci + " / ARFCN " + ua.freq), " did apply."] : [
-            " the band change (",
-            h("b", ua.reset ? "filtering off + Auto" : [ua.mode ? "mode " + ua.mode : "", ua.sa ? " SA " + ua.sa : "", ua.nsa ? " NSA " + ua.nsa : "", ua.lte ? " LTE " + ua.lte : ""].join("").trim()),
-            ") most likely applied."
-          ];
+          var what = p.kind === "cell" ? tp(
+            "Your connection dropped while applying, but the {lock} did apply.",
+            { lock: h("b", t("{rat} lock PCI {pci} / ARFCN {freq}", { rat: ua.rat === "4g" ? "LTE" : "5G", pci: ua.pci, freq: ua.freq })) }
+          ) : tp(
+            "Your connection dropped while applying, but the band change ({what}) most likely applied.",
+            { what: h("b", ua.reset ? t("filtering off + Auto") : [ua.mode ? t("mode {m}", { m: modeName(ua.mode) }) : "", ua.sa ? " SA " + ua.sa : "", ua.nsa ? " NSA " + ua.nsa : "", ua.lte ? " LTE " + ua.lte : ""].join("").trim()) }
+          );
           return h("div", { staticClass: "mm-revert" }, [
             h("div", { staticClass: "mm-revert-row" }, [
-              h("span", [
-                "Your connection dropped while applying, but"
-              ].concat(what).concat([
-                " If the auto-revert is still running it will undo this within ~60s - ",
-                h("b", "Keep"),
-                " to make it stick, or ",
-                h("b", "Revert"),
-                " to remove it now."
-              ])),
+              h("span", what.concat([" "]).concat(
+                tp(
+                  "If the auto-revert is still running it will undo this within ~60s - {keep} to make it stick, or {revert} to remove it now.",
+                  { keep: h("b", t("Keep")), revert: h("b", t("Revert")) }
+                )
+              )),
               this.revertButtons(h)
             ]),
             this.revertErrors(h)
@@ -576,11 +1063,11 @@ var __mm = (() => {
         }
         var a = p.applied || {}, bits = [];
         if (p.kind === "cell") {
-          bits.push((a.rat === "4g" ? "LTE" : "5G") + " cell PCI " + a.pci + " / ARFCN " + a.freq);
+          bits.push(t("{rat} cell PCI {pci} / ARFCN {freq}", { rat: a.rat === "4g" ? "LTE" : "5G", pci: a.pci, freq: a.freq }));
         } else if (a.reset) {
-          bits.push("default: band filtering off, mode Auto");
+          bits.push(t("default: band filtering off, mode Auto"));
         } else {
-          if (a.mode) bits.push("mode " + a.mode);
+          if (a.mode) bits.push(t("mode {m}", { m: modeName(a.mode) }));
           if (a.sa) bits.push("5G-SA " + a.sa.split(":").map(function(b) {
             return "n" + b;
           }).join(" "));
@@ -594,17 +1081,16 @@ var __mm = (() => {
         var pct = Math.max(0, Math.min(100, p.remaining / p.window * 100));
         return h("div", { staticClass: "mm-revert" }, [
           h("div", { staticClass: "mm-revert-row" }, [
-            h("span", p.expiring ? [
-              "Applied ",
-              h("b", bits.join("; ") || "band change"),
-              ". Time's up - the auto-revert is restoring your previous settings..."
-            ] : [
-              "Applied ",
-              h("b", bits.join("; ") || "band change"),
-              ". Reverting in ",
-              h("b", { staticClass: "mm-cd" }, String(p.remaining) + "s"),
-              " unless you keep it - watch the trace above."
-            ]),
+            h("span", p.expiring ? tp(
+              "Applied {what}. Time's up - the auto-revert is restoring your previous settings...",
+              { what: h("b", bits.join("; ") || t("band change")) }
+            ) : tp(
+              "Applied {what}. Reverting in {s} unless you keep it - watch the trace above.",
+              {
+                what: h("b", bits.join("; ") || t("band change")),
+                s: h("b", { staticClass: "mm-cd" }, String(p.remaining) + "s")
+              }
+            )),
             this.revertButtons(h)
           ]),
           h("div", { staticClass: "mm-bar" }, [h("i", { staticStyle: { width: pct.toFixed(1) + "%" } })]),
@@ -844,9 +1330,9 @@ var __mm = (() => {
           }
           self.startCountdown(res.window || 60, res.applied, "bands", res);
         }).catch(function(e) {
-          var t = e && (e.type || e.message);
-          if (t === "invalidParams" || t === "accessDenied") {
-            self.applyError = t;
+          var t2 = e && (e.type || e.message);
+          if (t2 === "invalidParams" || t2 === "accessDenied") {
+            self.applyError = t2;
             return;
           }
           var a = { mode: payload.mode };
@@ -897,21 +1383,21 @@ var __mm = (() => {
           if (interactive) {
             if (!self.selectable(group, b)) {
               cls = "blocked";
-              tip = pre + b + " blocked by carrier policy; selecting has no effect";
+              tip = t("{b} blocked by carrier policy; selecting has no effect", { b: pre + b });
             } else if (self.isSelected(group, b)) {
               cls = "sel";
-              tip = pre + b + " allowed (click to remove)";
+              tip = t("{b} allowed (click to remove)", { b: pre + b });
             } else {
               cls = "unsel";
-              tip = pre + b + " permitted (click to allow)";
+              tip = t("{b} permitted (click to allow)", { b: pre + b });
             }
           } else {
             var st = self.bandState(group, b);
             cls = st;
-            tip = pre + b + " " + { active: "in use", permitted: "permitted, not active", blocked: "blocked by carrier policy" }[st];
+            tip = pre + b + " " + t({ active: "in use", permitted: "permitted, not active", blocked: "blocked by carrier policy" }[st]);
           }
           var clickable = interactive && cls !== "blocked" && !self.pending;
-          if (serving) tip += " — serving now (" + servingHere[b] + ")";
+          if (serving) tip += " — " + t("serving now ({role})", { role: servingHere[b] });
           return h("span", {
             key: b,
             staticClass: "mm-band " + cls + (serving ? " serving" : "") + (clickable ? " clickable" : ""),
@@ -938,20 +1424,26 @@ var __mm = (() => {
             })
           ]);
         }
-        var counts = (d.supported[group] || []).length + " supported / " + (d.policy[group] || []).length + " permitted / " + (d.capability[group] || []).length + " active";
+        var counts = t("{s} supported / {p} permitted / {a} active", {
+          s: (d.supported[group] || []).length,
+          p: (d.policy[group] || []).length,
+          a: (d.capability[group] || []).length
+        });
         var gate = null;
         if (interactive && !this.ratActive(group)) {
-          var need = group === "nsa" ? "Auto" : group === "LTE" ? "Auto or 4G only" : "Auto or 5G only";
+          var need = t(group === "nsa" ? "Auto" : group === "LTE" ? "Auto or 4G only" : "Auto or 5G only");
+          var modeName2 = t({ AUTO: "Auto", NR5G: "5G only", LTE: "4G only" }[this.selMode] || this.selMode);
           gate = h(
             "div",
             { staticClass: "mm-gate" },
-            this.selMode === "LTE" && group !== "LTE" ? "Off under " + this.selMode + " mode - 5G selections are not sent (GL clears them under 4G-only). Set mode to " + need + " to use them." : "Off under " + this.selMode + " mode - these won't apply. Set mode to " + need + " to use them."
+            this.selMode === "LTE" && group !== "LTE" ? t("Off under {mode} - 5G selections are not sent (GL clears them under 4G-only). Set the mode to {need} to use them.", { mode: modeName2, need }) : t("Off under {mode} - these won't apply. Set the mode to {need} to use them.", { mode: modeName2, need })
           );
         }
         return h("div", { staticClass: "mm-grp" + (gate ? " mm-grp-off" : ""), key: group }, [
           h("div", { staticClass: "mm-grp-h" }, [
-            h("span", { staticClass: "mm-grp-t" }, title + (interactive ? "" : "  (read-only)")),
-            actions || h("span", { staticClass: "mm-hint" }, counts)
+            h("span", { staticClass: "mm-grp-t" }, interactive ? t(title) : t("{title} (read-only)", { title: t(title) })),
+            // interactive groups show the counts on their own line below; never twice
+            actions || (interactive ? null : h("span", { staticClass: "mm-hint" }, counts))
           ]),
           interactive ? h("div", { staticClass: "mm-hint", staticStyle: { margin: "-3px 0 6px" } }, counts) : null,
           gate,
@@ -978,7 +1470,7 @@ var __mm = (() => {
               staticClass: "mm-seg-b" + (cur === o[0] ? " on" : ""),
               attrs: {
                 disabled: !!self.pending || blocked,
-                title: blocked ? "Would strand your " + (self.lockInfo().rat === "4g" ? "LTE" : "5G") + " cell lock - clear the lock first" : void 0
+                title: blocked ? t("Would strand your {rat} cell lock - clear the lock first", { rat: self.lockInfo().rat === "4g" ? "LTE" : "5G" }) : void 0
               },
               on: { click: function() {
                 self.setMode(o[0]);
@@ -989,7 +1481,7 @@ var __mm = (() => {
       },
       renderBands(h) {
         if (this.bandsLoading) return h("div", { staticClass: "mm-empty" }, "Reading band configuration from the modem...");
-        if (this.bandsError) return h("div", { staticClass: "mm-empty" }, "Couldn't read bands: " + this.bandsError);
+        if (this.bandsError) return h("div", { staticClass: "mm-empty" }, t("Couldn't read bands: {err}", { err: this.bandsError }));
         if (!this.bands) return h("div", { staticClass: "mm-empty" }, "...");
         var d = this.bands, self = this;
         var groups = [
@@ -998,7 +1490,7 @@ var __mm = (() => {
           this.renderGroup(h, "nsa", "5G NR non-standalone"),
           this.renderGroup(h, "LTE", "LTE")
         ].filter(Boolean);
-        var op = d.meta && d.meta.plmn ? d.meta.plmn : "carrier";
+        var op = d.meta && d.meta.plmn ? d.meta.plmn : "";
         var warn = d.meta && d.meta.plmn_matched === false ? h(
           "div",
           { staticClass: "mm-hint", staticStyle: { color: "var(--warning)", marginTop: "2px" } },
@@ -1007,19 +1499,22 @@ var __mm = (() => {
         var modeWarn = d.meta && d.meta.mode_known === false ? h(
           "div",
           { staticClass: "mm-hint", staticStyle: { color: "var(--warning)", marginTop: "2px" } },
-          'GL reports network mode "' + d.meta.mode_raw + `", which this panel doesn't offer - it stays as it is unless you pick a mode below.`
+          t(`GL reports network mode "{mode}", which this panel doesn't offer - it stays as it is unless you pick a mode below.`, { mode: d.meta.mode_raw })
         ) : null;
         var lockWarn = this.lockConflict() ? h("div", { staticClass: "mm-revert" }, [
           h("div", { staticClass: "mm-revert-row", staticStyle: { display: "block", color: "var(--warning-hover)" } }, [
-            h("b", "⚠ Modem is cell-locked to " + this.lockLabel() + ", "),
-            "but network mode is " + ({ NR5G: "5G only", LTE: "4G only", AUTO: "Auto" }[this.appliedMode()] || this.appliedMode()) + " - the lock can't take effect. Set mode to " + (this.lockInfo().rat === "4g" ? "Auto or 4G only" : "Auto or 5G only") + ", or clear the lock on the Cell Lock tab."
+            h("b", t("⚠ Modem is cell-locked to {lock}, ", { lock: this.lockLabel() })),
+            t("but the network mode is {mode} - the lock can't take effect. Set the mode to {need}, or clear the lock on the Cell lock tab.", {
+              mode: t({ NR5G: "5G only", LTE: "4G only", AUTO: "Auto" }[this.appliedMode()] || this.appliedMode()),
+              need: t(this.lockInfo().rat === "4g" ? "Auto or 4G only" : "Auto or 5G only")
+            })
           ])
         ]) : null;
         var head = [
           h("div", { staticStyle: { display: "flex", justifyContent: "space-between", alignItems: "baseline" } }, [
             h("span", { staticClass: "mm-sect" }, "Bands"),
             h("span", [
-              h("span", { staticClass: "mm-hint", staticStyle: { marginRight: "10px" } }, "carrier " + op),
+              h("span", { staticClass: "mm-hint", staticStyle: { marginRight: "10px" } }, op ? t("carrier {plmn}", { plmn: op }) : ""),
               h("button", {
                 staticClass: "mm-tab",
                 staticStyle: { fontSize: "11.5px", padding: "2px 0", borderBottom: "0" },
@@ -1050,13 +1545,13 @@ var __mm = (() => {
           else if (empty) status = h("span", { staticStyle: { color: "var(--error)" } }, "Each edited band group needs at least one band");
           else if (changed) {
             var parts = [];
-            if (this.modeChanged()) parts.push("mode -> " + this.selMode);
+            if (this.modeChanged()) parts.push(t("mode -> {m}", { m: t({ AUTO: "Auto", NR5G: "5G only", LTE: "4G only" }[this.selMode] || this.selMode) }));
             if (this.selMode === "LTE" && (this.changed("sa") || this.changed("nsa")))
-              parts.push("5G selections held back under 4G-only");
+              parts.push(t("5G selections held back under 4G-only"));
             if (this.changed("sa")) parts.push(this.sel.sa.length + " SA");
             if (this.changed("nsa")) parts.push(this.sel.nsa.length + " NSA");
             if (this.changed("LTE")) parts.push(this.sel.LTE.length + " LTE");
-            status = parts.join(" + ") + " changed; applies with a 60s revert";
+            status = t("{what} changed; applies with a 60s revert", { what: parts.join(" + ") });
           } else status = "No changes";
           footer.push(h("div", { staticClass: "mm-foot" }, [
             h("span", { staticClass: "mm-hint" }, [status]),
@@ -1170,7 +1665,7 @@ var __mm = (() => {
         var s = this.lockData && this.lockData.serving;
         if (!s || s.pci == null || s.arfcn == null) return null;
         var isNR = /NR5G/.test(s.rat || "");
-        var t = {
+        var t2 = {
           rat: isNR ? "5g" : "4g",
           pci: s.pci,
           freq: s.arfcn,
@@ -1183,15 +1678,15 @@ var __mm = (() => {
             return String(tw.pci) === String(s.pci) && String(tw.freq) === String(s.arfcn);
           })[0];
           if (match && match.scs !== void 0) {
-            t.scs = Number(match.scs);
-            t.scsAssumed = false;
+            t2.scs = Number(match.scs);
+            t2.scsAssumed = false;
           } else {
-            t.scs = this.scsFor(s.band);
-            t.scsAssumed = true;
+            t2.scs = this.scsFor(s.band);
+            t2.scsAssumed = true;
           }
-          if (t.scs === void 0) return null;
+          if (t2.scs === void 0) return null;
         }
-        return t;
+        return t2;
       },
       lockCell(target) {
         var self = this;
@@ -1212,9 +1707,9 @@ var __mm = (() => {
           self.lockConfirm = null;
           self.startCountdown(res.window || 60, res.applied, "cell", res);
         }).catch(function(e) {
-          var t = e && (e.type || e.message);
-          if (t === "invalidParams" || t === "accessDenied") {
-            self.lockError = t || "lock failed";
+          var t2 = e && (e.type || e.message);
+          if (t2 === "invalidParams" || t2 === "accessDenied") {
+            self.lockError = t2 || "lock failed";
             return;
           }
           self.verifyLockAfterDrop({ rat: args.rat, pci: args.pci, freq: args.freq });
@@ -1317,7 +1812,7 @@ var __mm = (() => {
       // Lock target from a scan row: GL's own values verbatim, whole row as extra.
       scanTarget(row) {
         var isNR = /5G/.test(row.network_type || "");
-        var t = {
+        var t2 = {
           rat: isNR ? "5g" : "4g",
           pci: Number(row.pci),
           freq: Number(row.freq),
@@ -1327,10 +1822,10 @@ var __mm = (() => {
           slot: this.scan.slot != null ? this.scan.slot : this.slotOf(this.lockData)
         };
         if (isNR) {
-          t.scs = Number(row.scs);
-          t.scsAssumed = false;
+          t2.scs = Number(row.scs);
+          t2.scsAssumed = false;
         }
-        return t;
+        return t2;
       },
       // ---- cell-lock render helpers ----
       renderCurrentCell(h) {
@@ -1345,8 +1840,8 @@ var __mm = (() => {
         push("RAT", s.rat);
         push("PCI", s.pci);
         push("ARFCN", s.arfcn);
-        push("Band", s.band != null ? (/NR5G/.test(s.rat || "") ? "n" : "B") + s.band : null);
-        push("Cell ID", s.cell_id);
+        push(t("Band"), s.band != null ? (/NR5G/.test(s.rat || "") ? "n" : "B") + s.band : null);
+        push(t("Cell ID"), s.cell_id);
         push("RSRP", this.serving.rsrp != null ? this.serving.rsrp + " dBm" : null);
         push("SINR", this.serving.sinr != null ? this.serving.sinr + " dB" : null);
         var action;
@@ -1355,16 +1850,14 @@ var __mm = (() => {
           var hasPci = lk.pci !== void 0 && lk.pci !== null;
           var hasFreq = lk.freq !== void 0 && lk.freq !== null;
           var lockedDetail;
-          if (hasPci && hasFreq) lockedDetail = " to PCI " + lk.pci + " / ARFCN " + lk.freq;
-          else if (hasPci) lockedDetail = " to PCI " + lk.pci;
-          else if (hasFreq) lockedDetail = " to ARFCN " + lk.freq;
-          else lockedDetail = " (details unavailable)";
-          var lockedSuffix = (hasPci || hasFreq) && lk.band ? " (n" + lk.band + ")" : "";
+          var lkTarget = (hasPci ? "PCI " + lk.pci : "") + (hasPci && hasFreq ? " / " : "") + (hasFreq ? "ARFCN " + lk.freq : "");
+          var lkNR = l5.locked || /NR|5G/.test(String(lk.network_type || ""));
+          if (lkTarget && lk.band) lkTarget += " (" + (lkNR ? "n" : "B") + lk.band + ")";
           action = h("div", { staticClass: "mm-foot" }, [
-            h("span", { staticClass: "mm-hint" }, [
-              h("b", { staticStyle: { color: "var(--success)" } }, "Locked"),
-              lockedDetail + lockedSuffix + ". The modem will not hand over."
-            ]),
+            h("span", { staticClass: "mm-hint" }, tp("{locked} to {target}. The modem will not hand over.", {
+              locked: h("b", { staticStyle: { color: "var(--success)" } }, t("Locked")),
+              target: lkTarget || t("(details unavailable)")
+            })),
             h("button", {
               staticClass: "mm-btn danger",
               attrs: { disabled: this.lockBusy || !!this.pending },
@@ -1379,8 +1872,8 @@ var __mm = (() => {
             action = h("div", { staticClass: "mm-foot" }, [
               h(
                 "span",
-                { staticClass: "mm-hint", staticStyle: { color: "var(--warning)" } },
-                "Lock to PCI " + target.pci + "? Network mode switches to " + (target.rat === "5g" ? "5G-only" : "4G-preferred") + " until unlocked." + (target.scsAssumed ? " SCS " + target.scs + " kHz is assumed from the band." : "") + " Auto-reverts in 60s unless kept."
+                { staticClass: "mm-hint", staticStyle: { color: "var(--warning-hover)" } },
+                t(target.rat === "5g" ? "Lock to PCI {pci}? Network mode switches to 5G-only until unlocked." : "Lock to PCI {pci}? Network mode switches to 4G-preferred until unlocked.", { pci: target.pci }) + (target.scsAssumed ? " " + t("SCS {scs} kHz is assumed from the band.", { scs: target.scs }) : "") + " " + t("Auto-reverts in 60s unless kept.")
               ),
               h("span", { staticStyle: { flex: "none", display: "flex", gap: "6px" } }, [
                 h("button", { staticClass: "mm-btn", on: { click: function() {
@@ -1434,7 +1927,7 @@ var __mm = (() => {
           this.scan.ts ? h(
             "span",
             { staticClass: "mm-hint" },
-            "scanned " + Math.max(1, Math.round((Date.now() - this.scan.ts) / 6e4)) + " min ago"
+            t("scanned {n} min ago", { n: Math.max(1, Math.round((Date.now() - this.scan.ts) / 6e4)) })
           ) : h("span", { staticClass: "mm-hint" }, "requires a scan")
         ]);
         var body;
@@ -1447,15 +1940,15 @@ var __mm = (() => {
         } else if (this.scan.towers.length) {
           var servingC = this.servingCarrier;
           var simMcc = this.activeSim.mcc, simMnc = this.activeSim.mnc;
-          var isOurs = function(t) {
-            if (servingC && t.carrier && self.nameOverlap(servingC, t.carrier)) return true;
-            return !!simMcc && String(t.mcc) === String(simMcc) && String(t.mnc) === String(simMnc);
+          var isOurs = function(t2) {
+            if (servingC && t2.carrier && self.nameOverlap(servingC, t2.carrier)) return true;
+            return !!simMcc && String(t2.mcc) === String(simMcc) && String(t2.mnc) === String(simMnc);
           };
-          var ckey = function(t) {
-            return (t.carrier || (t.mcc || "") + "-" + (t.mnc || "")).toLowerCase();
+          var ckey = function(t2) {
+            return (t2.carrier || (t2.mcc || "") + "-" + (t2.mnc || "")).toLowerCase();
           };
-          var is5g = function(t) {
-            return /5G/.test(t.network_type || "") ? 0 : 1;
+          var is5g = function(t2) {
+            return /5G/.test(t2.network_type || "") ? 0 : 1;
           };
           var sorted = this.scan.towers.slice().sort(function(a, b) {
             var oa = isOurs(a) ? 0 : 1, ob = isOurs(b) ? 0 : 1;
@@ -1508,14 +2001,14 @@ var __mm = (() => {
           });
           body = h("div", rows);
         } else {
-          body = h("div", { staticClass: "mm-empty" }, this.scan.error ? "Scan failed: " + this.scan.error : "5G SA exposes no neighbour list - only the serving cell is visible without a scan, and a scan takes the modem offline for up to ~10 minutes.");
+          body = h("div", { staticClass: "mm-empty" }, this.scan.error ? t("Scan failed: {err}", { err: this.scan.error }) : "5G SA exposes no neighbour list - only the serving cell is visible without a scan, and a scan takes the modem offline for up to ~10 minutes.");
         }
         var foot;
         if (!this.scan.running) {
           foot = this.scanConfirm ? h("div", { staticClass: "mm-foot" }, [
             h(
               "span",
-              { staticClass: "mm-hint", staticStyle: { color: "var(--warning)" } },
+              { staticClass: "mm-hint", staticStyle: { color: "var(--warning-hover)" } },
               "Scanning takes the modem OFFLINE for up to ~10 minutes. This connection will drop if it runs over cellular."
             ),
             h("span", { staticStyle: { flex: "none", display: "flex", gap: "6px" } }, [
@@ -1547,7 +2040,7 @@ var __mm = (() => {
         if (this.lockLoading && !this.lockData)
           return h("div", { staticClass: "mm-card" }, [h("div", { staticClass: "mm-empty" }, "Reading lock state from the modem...")]);
         if (this.lockError && !this.lockData)
-          return h("div", { staticClass: "mm-card" }, [h("div", { staticClass: "mm-empty" }, "Couldn't read lock state: " + this.lockError)]);
+          return h("div", { staticClass: "mm-card" }, [h("div", { staticClass: "mm-empty" }, t("Couldn't read lock state: {err}", { err: this.lockError }))]);
         if (!this.lockData)
           return h("div", { staticClass: "mm-card" }, [h("div", { staticClass: "mm-empty" }, "...")]);
         var kids = [
@@ -1565,11 +2058,10 @@ var __mm = (() => {
           this.lockError && this.lockData ? h("div", { staticClass: "mm-hint", staticStyle: { color: "var(--error)" } }, this.lockError) : null,
           this.lockData.stale ? h("div", { staticClass: "mm-revert" }, [
             h("div", { staticClass: "mm-revert-row" }, [
-              h("span", [
-                "The watchdog reverted a lock, but ",
-                h("b", "GL's stored lock"),
-                " still remembers it - GL may re-apply it later. Clear it to reconcile."
-              ]),
+              h("span", tp(
+                "The watchdog reverted a lock, but {gl} still remembers it - GL may re-apply it later. Clear it to reconcile.",
+                { gl: h("b", t("GL's stored lock")) }
+              )),
               h("button", {
                 staticClass: "mm-btn keep",
                 attrs: { disabled: this.lockBusy },
@@ -1589,22 +2081,14 @@ var __mm = (() => {
             h("span", { staticClass: "mm-grp-t" }, "Recovery"),
             h("span", { staticClass: "mm-hint" }, "read before locking")
           ]),
-          h("div", { staticClass: "mm-hint", staticStyle: { lineHeight: "1.6" } }, [
-            "A kept cell lock lives in the modem's own NV (survives reboot, reflash and factory reset) ",
-            "and in GL's store. Every lock made here auto-reverts in 60s unless you keep it, and the ",
-            "watchdog fires even if this page is closed. If the router ever becomes unreachable over ",
-            "the web, the ssh way back is: ",
-            h("b", "ssh root@<router> /usr/sbin/mudimodem-revert panic"),
-            " - it clears the cell lock on both slots (GL's store and the modem), resets lock persistence ",
-            "and the network mode to Auto, and turns band filtering off."
-          ]),
-          h("div", { staticClass: "mm-hint", staticStyle: { lineHeight: "1.6", marginTop: "8px", color: "var(--warning-hover)" } }, [
-            h("b", "Remote sessions: "),
-            "applying a lock briefly re-registers the modem, which can drop a remote (Tailscale / VPN) ",
-            "connection to this router for a few seconds. It reconnects on its own - if the request ",
-            "seems to hang or fail, wait a moment; the lock likely applied and this page will offer to ",
-            "keep or revert it once you're back."
-          ])
+          h("div", { staticClass: "mm-hint", staticStyle: { lineHeight: "1.6" } }, tp(
+            "A kept cell lock lives in the modem's own NV (survives reboot, reflash and factory reset) and in GL's store. Every lock made here auto-reverts in 60s unless you keep it, and the watchdog fires even if this page is closed. If the router ever becomes unreachable over the web, the ssh way back is: {cmd} - it clears the cell lock on both slots (GL's store and the modem), resets lock persistence and the network mode to Auto, and turns band filtering off.",
+            { cmd: h("b", "ssh root@<router> /usr/sbin/mudimodem-revert panic") }
+          )),
+          h("div", { staticClass: "mm-hint", staticStyle: { lineHeight: "1.6", marginTop: "8px", color: "var(--warning-hover)" } }, tp(
+            "{label} applying a lock briefly re-registers the modem, which can drop a remote (Tailscale / VPN) connection to this router for a few seconds. It reconnects on its own - if the request seems to hang or fail, wait a moment; the lock likely applied and this page will offer to keep or revert it once you're back.",
+            { label: h("b", t("Remote sessions:")) }
+          ))
         ]);
       }
     }
@@ -1745,14 +2229,14 @@ var __mm = (() => {
         if (!hasRpc()) return Promise.resolve();
         var target = this.appVer && this.appVer.latest || "";
         this.updating = true;
-        this.updateMsg = "Updating" + (target ? " to v" + target : "") + "…";
+        this.updateMsg = target ? t("Updating to v{v}…", { v: target }) : t("Updating…");
         this.pollStopped = false;
         this.pollAttempts = 0;
         return rpc("self_update", {}, { timeout: 12e3 }).then(function() {
           self.pollUpdate();
         }).catch(function(e) {
           self.updating = false;
-          self.updateMsg = "Couldn't start update: " + (e && (e.message || e.type) || "error");
+          self.updateMsg = t("Couldn't start update: {err}", { err: e && (e.message || e.type) || "error" });
         });
       },
       // Polls update_status every 3s until a terminal result, a give-up cap
@@ -1774,10 +2258,10 @@ var __mm = (() => {
               if (s.result.ok) {
                 var v = self.appVer && self.appVer.latest || "";
                 self.updateDone = true;
-                self.updateMsg = "Updated" + (v ? " to v" + v : "") + ". The page is still running the old interface —";
+                self.updateMsg = v ? t("Updated to v{v}. The page is still running the old interface —", { v }) : t("Updated. The page is still running the old interface —");
                 self.refreshVersionAfterUpdate(v, 4);
               } else {
-                self.updateMsg = "Update failed: " + (s.result.error || "unknown") + " — see /var/log/mudimodem-update.log";
+                self.updateMsg = t("Update failed: {err} — see /var/log/mudimodem-update.log", { err: s.result.error || "unknown" });
               }
             } else if (self.pollAttempts >= self.POLL_MAX) {
               self.updating = false;
@@ -1813,10 +2297,10 @@ var __mm = (() => {
         ]);
         var av = this.appVer || {};
         var installed = av.installed || "unknown";
-        var verNodes = [h("span", {}, "MudiModem " + (installed === "unknown" ? "(version unknown)" : "v" + installed))];
+        var verNodes = [h("span", {}, installed === "unknown" ? t("MudiModem (version unknown)") : "MudiModem v" + installed)];
         if (av.checked && av.update_available && av.latest && !this.updating && !this.updateDone) {
           verNodes.push(h("span", { staticClass: "mm-upd" }, [
-            " (v" + av.latest + " available — ",
+            " (" + t("v{v} available", { v: av.latest }) + " — ",
             this.updateConfirm ? h(
               "a",
               {
@@ -1887,7 +2371,10 @@ var __mm = (() => {
           histKids.push(h(
             "div",
             { staticClass: "mm-note" },
-            "Live charts still use RAM. When this is on, the collector appends new samples to eMMC about every " + (hp.flush_interval_s && Math.round(hp.flush_interval_s / 60) || 10) + " minutes (~6 MiB for a full day of signal + battery). Off by default."
+            t(
+              "Live charts still use RAM. When this is on, the collector appends new samples to eMMC about every {n} minutes (~6 MiB for a full day of signal + battery). Off by default.",
+              { n: hp.flush_interval_s && Math.round(hp.flush_interval_s / 60) || 10 }
+            )
           ));
           if (hp.enabled || hp.size_bytes && hp.size_bytes > 0) {
             histKids.push(row("Backup size", self.fmtHistSize(hp.size_bytes)));
@@ -2184,8 +2671,8 @@ var __mm = (() => {
         return !!x && !!y && (x.indexOf(y) !== -1 || y.indexOf(x) !== -1);
       },
       freqOf(group, b) {
-        var t = group === "LTE" ? this.freq.B : this.freq.n;
-        return t[b];
+        var t2 = group === "LTE" ? this.freq.B : this.freq.n;
+        return t2[b];
       },
       prefixOf(group) {
         return group === "LTE" ? "B" : "n";
@@ -2256,7 +2743,7 @@ var __mm = (() => {
   };
 
   // src/web/main/index.js
-  var index_default = compose({
+  var index_default = localize(compose({
     name: "mudimodem",
     data() {
       return {
@@ -2410,7 +2897,7 @@ var __mm = (() => {
       // — the same record get_history would return, minus the round-trip.
       "serving.t": {
         immediate: true,
-        handler(t) {
+        handler(t2) {
           this.onSamplePush(this.serving);
         }
       },
@@ -2430,11 +2917,11 @@ var __mm = (() => {
           if (prev && prev !== s) this.onSlotChange();
         }
       },
-      tab(t) {
-        if (t === "bands" && !this.bands && !this.bandsLoading) this.fetchBands();
-        if (t === "lock" && !this.lockData && !this.lockLoading) this.fetchLock();
-        if (t === "at" && !this.consoleComp && !this.consoleLoading) this.loadConsole();
-        if (t === "config") {
+      tab(t2) {
+        if (t2 === "bands" && !this.bands && !this.bandsLoading) this.fetchBands();
+        if (t2 === "lock" && !this.lockData && !this.lockLoading) this.fetchLock();
+        if (t2 === "at" && !this.consoleComp && !this.consoleLoading) this.loadConsole();
+        if (t2 === "config") {
           if (!this.deviceInfo) this.fetchDeviceInfo();
           this.checkAppVersion();
           this.fetchHistoryPersist();
@@ -2473,8 +2960,8 @@ var __mm = (() => {
           h("div", { staticClass: "mm-trace" }, [
             h("div", { staticStyle: { display: "flex", justifyContent: "space-between", alignItems: "center" } }, [
               h("span", { staticClass: "mm-eyebrow", style: this.staleFor ? { color: "var(--warning)" } : {}, attrs: {
-                title: this.staleFor ? "The collector's last sample is " + this.fmtAge(this.staleFor) + " old - nothing newer has been pushed" : "Sampled every 10s by the MudiModem collector (pushed live), last " + this.STRIP_MIN + " minutes"
-              } }, this.staleFor ? "RSRP · last sample " + this.fmtAge(this.staleFor) + " ago" : "RSRP · last " + this.STRIP_MIN + " min"),
+                title: this.staleFor ? t("The collector's last sample is {age} old - nothing newer has been pushed", { age: this.fmtAge(this.staleFor) }) : t("Sampled every 10s by the MudiModem collector (pushed live), last {n} minutes", { n: this.STRIP_MIN })
+              } }, this.staleFor ? t("RSRP · last sample {age} ago", { age: this.fmtAge(this.staleFor) }) : t("RSRP · last {n} min", { n: this.STRIP_MIN })),
               this.renderLockBadges(h)
             ]),
             h("div", { staticClass: "mm-plot" }, [
@@ -2521,7 +3008,10 @@ var __mm = (() => {
           this.staleFor ? h(
             "div",
             { staticClass: "mm-hint mm-stale", staticStyle: { color: "var(--warning)", flexBasis: "100%" } },
-            "The collector has not produced a sample for " + this.fmtAge(this.staleFor) + " (modem resetting, or mudimodem-collectd stopped) - these are its last known values, not live readings."
+            t(
+              "The collector has not produced a sample for {age} (modem resetting, or mudimodem-collectd stopped) - these are its last known values, not live readings.",
+              { age: this.fmtAge(this.staleFor) }
+            )
           ) : null
         ];
       } else {
@@ -2529,7 +3019,7 @@ var __mm = (() => {
         stripKids = [h(
           "div",
           { staticClass: "mm-empty" },
-          slot && this.anyNetwork ? "SIM " + slot + " (active) is not registered on a network right now" + (this.servingCarrier ? " - " + this.servingCarrier : "") + "." : "Waiting for the collector's first sample (mudimodem-collectd pushes every 10s)..."
+          slot && this.anyNetwork ? this.servingCarrier ? t("SIM {slot} (active) is not registered on a network right now - {carrier}.", { slot, carrier: this.servingCarrier }) : t("SIM {slot} (active) is not registered on a network right now.", { slot }) : "Waiting for the collector's first sample (mudimodem-collectd pushes every 10s)..."
         )];
       }
       var strip = h("div", { staticClass: "mm-strip" }, stripKids);
@@ -2542,17 +3032,17 @@ var __mm = (() => {
         ["battery", "Battery"],
         ["config", "Config"]
       ];
-      var tabs = h("div", { staticClass: "mm-tabs" }, TABS.map(function(t) {
+      var tabs = h("div", { staticClass: "mm-tabs" }, TABS.map(function(t2) {
         return h("button", {
-          key: t[0],
-          staticClass: "mm-tab" + (self.tab === t[0] ? " on" : ""),
+          key: t2[0],
+          staticClass: "mm-tab" + (self.tab === t2[0] ? " on" : ""),
           on: { click: function() {
-            if (t[0] === "tracking") self.openTracking();
-            else if (t[0] === "speedtest") self.openSpeedtest();
-            else if (t[0] === "battery") self.openBattery();
-            else self.tab = t[0];
+            if (t2[0] === "tracking") self.openTracking();
+            else if (t2[0] === "speedtest") self.openSpeedtest();
+            else if (t2[0] === "battery") self.openBattery();
+            else self.tab = t2[0];
           } }
-        }, t[1]);
+        }, t2[1]);
       }));
       var panel;
       if (this.tab === "bands") {
@@ -2566,7 +3056,7 @@ var __mm = (() => {
           panel = h("div", { staticClass: "mm-card" }, [h(
             "div",
             { staticClass: "mm-soon" },
-            this.trackingErr ? "Couldn't load the graph: " + this.trackingErr : "Loading the signal graph…"
+            this.trackingErr ? t("Couldn't load the graph: {err}", { err: this.trackingErr }) : "Loading the signal graph…"
           )]);
         }
       } else if (this.tab === "at") {
@@ -2576,7 +3066,7 @@ var __mm = (() => {
           panel = h("div", { staticClass: "mm-card" }, [h(
             "div",
             { staticClass: "mm-soon" },
-            this.consoleErr ? "Couldn't load the AT console: " + this.consoleErr : "Loading the AT console…"
+            this.consoleErr ? t("Couldn't load the AT console: {err}", { err: this.consoleErr }) : "Loading the AT console…"
           )]);
         }
       } else if (this.tab === "config") {
@@ -2588,7 +3078,7 @@ var __mm = (() => {
           panel = h("div", { staticClass: "mm-card" }, [h(
             "div",
             { staticClass: "mm-soon" },
-            this.speedtestErr ? "Couldn't load the speed test: " + this.speedtestErr : "Loading the speed test…"
+            this.speedtestErr ? t("Couldn't load the speed test: {err}", { err: this.speedtestErr }) : "Loading the speed test…"
           )]);
         }
       } else if (this.tab === "battery") {
@@ -2598,7 +3088,7 @@ var __mm = (() => {
           panel = h("div", { staticClass: "mm-card" }, [h(
             "div",
             { staticClass: "mm-soon" },
-            this.batteryErr ? "Couldn't load the battery view: " + this.batteryErr : "Loading the battery view…"
+            this.batteryErr ? t("Couldn't load the battery view: {err}", { err: this.batteryErr }) : "Loading the battery view…"
           )]);
         }
       } else {
@@ -2606,7 +3096,7 @@ var __mm = (() => {
       }
       return h("div", { staticClass: "mm" }, [strip, this.pending ? this.renderRevert(h) : null, tabs, panel]);
     }
-  }, [strip_default, change_default, bands_default, lock_default, config_default, tabs_default, serving_default, styles_default]);
+  }, [strip_default, change_default, bands_default, lock_default, config_default, tabs_default, serving_default, styles_default]));
   return __toCommonJS(index_exports);
 })();
 return __mm.default;

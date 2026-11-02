@@ -19,7 +19,9 @@
 // buckets drive the GL quality ramp. All colour is GL theme tokens.
 import { rpcSilent } from "../kit/rpc.js";
 import { hhmm } from "../kit/fmt.js";
-export default (function () {
+import { localize } from "../kit/i18n.js";
+import { t as T } from "../kit/i18n.js";
+export default localize((function () {
   "use strict";
 
   // Three metrics OVERLAID in one plot. Each keeps its own domain (`dom`) but
@@ -408,7 +410,7 @@ export default (function () {
           if (last && !recentUser(s.t)) {
             if (String(s.slot) !== String(last.slot)) {
               out.push({ t: s.t, kind: "net", label: "Failover",
-                detail: "Data now on SIM " + s.slot + (s.carrier ? " · " + s.carrier : "") });
+                detail: T("Data now on SIM {slot}", { slot: s.slot }) + (s.carrier ? " · " + s.carrier : "") });
               // The slot changed: this sample is the new baseline, registered
               // or not. Keeping the old slot's cell as `last` would re-compare
               // every not-yet-registered sample on the new slot against it and
@@ -425,8 +427,8 @@ export default (function () {
                   return (c.band != null ? ((/NR5G/.test(self.carrierRat(x)) ? " n" : " B") + c.band) : "");
                 };
                 out.push({ t: s.t, kind: "net", label: "Handover",
-                  detail: "Cell " + last.id + " → " + s.id + fmt(s) +
-                          (b.split(":")[0] === a.split(":")[0] ? " (carrier change)" : "") });
+                  detail: T("Cell {from} → {to}", { from: last.id, to: s.id }) + fmt(s) +
+                          (b.split(":")[0] === a.split(":")[0] ? " " + T("(carrier change)") : "") });
               }
             }
           }
@@ -860,7 +862,7 @@ export default (function () {
           row("SIM", (s.carrier || "SIM") + " · " + s.slot, "", null)
         ];
         var kids = [h("div", { staticClass: "t" },
-          this.clock(s.t) + (this.pinnedT != null ? " · pinned" : ""))];
+          this.clock(s.t) + (this.pinnedT != null ? " · " + T("pinned") : ""))];
         if (near) kids.push(h("div", { staticClass: "e",
           staticStyle: { color: near.kind === "user" ? "var(--primary)"
             : near.kind === "dog" ? "var(--warning-hover,#c4851c)" : "var(--text-weak)" } },
@@ -913,7 +915,8 @@ export default (function () {
           // being collected underneath and appear on resume.
           self.live ? null : h("span", { staticClass: "mmt-held" }, (function () {
             var n = self.heldCount();
-            return n ? n + " new sample" + (n === 1 ? "" : "s") + " held — resume to show" : "view frozen";
+            return n ? T(n === 1 ? "{n} new sample held — resume to show" : "{n} new samples held — resume to show", { n: n })
+                     : T("view frozen");
           })()),
           h("button", { staticClass: "mmt-live" + (self.live ? "" : " off"),
             on: { click: function () { self.togglePause(); } } },
@@ -929,16 +932,14 @@ export default (function () {
           // Pushes are drawing, but the window before them never loaded: say
           // so, instead of passing off "since the page opened" as the history.
           if (this.loadFails > 0)
-            note = h("div", { staticClass: "mmt-note" }, (this.preloaded
-              ? "Couldn't load the wider range yet"
-              : "Earlier history didn't load — showing live samples since the page opened")
-              + "; retrying every " + every + " s.");
+            note = h("div", { staticClass: "mmt-note" }, T(this.preloaded
+              ? "Couldn't load the wider range yet; retrying every {s} s."
+              : "Earlier history didn't load — showing live samples since the page opened; retrying every {s} s.", { s: every }));
         } else {
           var msg = (this.loadFails > 0 && this.err)
-              ? "Couldn't load history: " + this.err + " — retrying every " + every + " s."
+              ? T("Couldn't load history: {err} — retrying every {s} s.", { err: this.err, s: every })
             : this.loading ? "Loading history from the router…"
-            : "No samples yet. The collector runs on the router and gathers continuously — "
-              + "check back in a minute, or confirm the mudimodem-collectd service is running.";
+            : "No samples yet. The collector runs on the router and gathers continuously — check back in a minute, or confirm the mudimodem-collectd service is running.";
           body = h("div", { staticClass: "mmt-empty" }, msg);
         }
         var foot = h("div", { staticClass: "mmt-foot" }, [
@@ -998,4 +999,4 @@ export default (function () {
     render: function (h) { return this.renderPage(h); }
   };
   return component;
-})();
+})());

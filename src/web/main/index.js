@@ -21,6 +21,7 @@
 // place raw socket shapes are read; every tab reads its output. Writes (set_bands /
 // set_cell_lock) are confirm-or-revert through the backend + watchdog.
 import { compose } from "../kit/compose.js";
+import { localize, t } from "../kit/i18n.js";
 import strip from "./strip.js";
 import change from "./change.js";
 import bands from "./bands.js";
@@ -30,7 +31,7 @@ import tabs from "./tabs.js";
 import serving from "./serving.js";
 import styles from "./styles.js";
 
-export default compose({
+export default localize(compose({
   name: "mudimodem",
 
   data() {
@@ -213,9 +214,10 @@ export default compose({
           h("div", { staticStyle: { display: "flex", justifyContent: "space-between", alignItems: "center" } }, [
             h("span", { staticClass: "mm-eyebrow", style: this.staleFor ? { color: "var(--warning)" } : {}, attrs: {
               title: this.staleFor
-                ? "The collector's last sample is " + this.fmtAge(this.staleFor) + " old - nothing newer has been pushed"
-                : "Sampled every 10s by the MudiModem collector (pushed live), last " + this.STRIP_MIN + " minutes"
-            } }, this.staleFor ? "RSRP · last sample " + this.fmtAge(this.staleFor) + " ago" : "RSRP · last " + this.STRIP_MIN + " min"),
+                ? t("The collector's last sample is {age} old - nothing newer has been pushed", { age: this.fmtAge(this.staleFor) })
+                : t("Sampled every 10s by the MudiModem collector (pushed live), last {n} minutes", { n: this.STRIP_MIN })
+            } }, this.staleFor ? t("RSRP · last sample {age} ago", { age: this.fmtAge(this.staleFor) })
+                               : t("RSRP · last {n} min", { n: this.STRIP_MIN })),
             this.renderLockBadges(h)
           ]),
           h("div", { staticClass: "mm-plot" }, [
@@ -253,16 +255,17 @@ export default compose({
         ]),
         this.staleFor
           ? h("div", { staticClass: "mm-hint mm-stale", staticStyle: { color: "var(--warning)", flexBasis: "100%" } },
-              "The collector has not produced a sample for " + this.fmtAge(this.staleFor) +
-              " (modem resetting, or mudimodem-collectd stopped) - these are its last known values, not live readings.")
+              t("The collector has not produced a sample for {age} (modem resetting, or mudimodem-collectd stopped) - these are its last known values, not live readings.",
+                { age: this.fmtAge(this.staleFor) }))
           : null
       ];
     } else {
       var slot = this.activeSlot;
       stripKids = [h("div", { staticClass: "mm-empty" },
         (slot && this.anyNetwork)
-          ? "SIM " + slot + " (active) is not registered on a network right now" +
-            (this.servingCarrier ? " - " + this.servingCarrier : "") + "."
+          ? (this.servingCarrier
+              ? t("SIM {slot} (active) is not registered on a network right now - {carrier}.", { slot: slot, carrier: this.servingCarrier })
+              : t("SIM {slot} (active) is not registered on a network right now.", { slot: slot }))
           : "Waiting for the collector's first sample (mudimodem-collectd pushes every 10s)...")];
     }
     var strip = h("div", { staticClass: "mm-strip" }, stripKids);
@@ -298,7 +301,7 @@ export default compose({
         panel = h(this.trackingComp, { props: { embedded: true } });
       } else {
         panel = h("div", { staticClass: "mm-card" }, [h("div", { staticClass: "mm-soon" },
-          this.trackingErr ? "Couldn't load the graph: " + this.trackingErr
+          this.trackingErr ? t("Couldn't load the graph: {err}", { err: this.trackingErr })
             : "Loading the signal graph…")]);
       }
     } else if (this.tab === "at") {
@@ -306,7 +309,7 @@ export default compose({
         panel = h(this.consoleComp, { props: { cell: { slot: this.activeSlot, carrier: this.servingCarrier, modem: this.modemName() } } });
       } else {
         panel = h("div", { staticClass: "mm-card" }, [h("div", { staticClass: "mm-soon" },
-          this.consoleErr ? "Couldn't load the AT console: " + this.consoleErr
+          this.consoleErr ? t("Couldn't load the AT console: {err}", { err: this.consoleErr })
             : "Loading the AT console…")]);
       }
     } else if (this.tab === "config") {
@@ -316,7 +319,7 @@ export default compose({
         panel = h(this.speedtestComp, { props: { embedded: true } });
       } else {
         panel = h("div", { staticClass: "mm-card" }, [h("div", { staticClass: "mm-soon" },
-          this.speedtestErr ? "Couldn't load the speed test: " + this.speedtestErr
+          this.speedtestErr ? t("Couldn't load the speed test: {err}", { err: this.speedtestErr })
             : "Loading the speed test…")]);
       }
     } else if (this.tab === "battery") {
@@ -324,7 +327,7 @@ export default compose({
         panel = h(this.batteryComp, { props: { embedded: true } });
       } else {
         panel = h("div", { staticClass: "mm-card" }, [h("div", { staticClass: "mm-soon" },
-          this.batteryErr ? "Couldn't load the battery view: " + this.batteryErr
+          this.batteryErr ? t("Couldn't load the battery view: {err}", { err: this.batteryErr })
             : "Loading the battery view…")]);
       }
     } else {
@@ -335,4 +338,4 @@ export default compose({
     // page) must never hide the only Keep button while the watchdog counts down.
     return h("div", { staticClass: "mm" }, [strip, this.pending ? this.renderRevert(h) : null, tabs, panel]);
   }
-}, [strip, change, bands, lock, config, tabs, serving, styles]);
+}, [strip, change, bands, lock, config, tabs, serving, styles]));

@@ -1,5 +1,6 @@
 // The status strip: RSRP trace (collector preload + pushes + backfill) and the mode / tower lock badges.
 import { rpcSilent } from "../kit/rpc.js";
+import { t } from "../kit/i18n.js";
 export default {
   data() {
     return {
@@ -51,15 +52,15 @@ export default {
     modeBadge() {
       if (!this.bands) return null;
       var m = this.appliedMode();
-      if (m === "LTE") return { text: "4G only", active: true };
-      if (m === "NR5G") return { text: "5G only", active: true };
-      return { text: "Auto", active: false };
+      if (m === "LTE") return { text: t("4G only"), active: true };
+      if (m === "NR5G") return { text: t("5G only"), active: true };
+      return { text: t("Auto"), active: false };
     },
 
     towerBadge() {
       if (!this.bands) return null;
       var lk = this.lockInfo();
-      if (!lk) return { text: "Unlocked", locked: false };
+      if (!lk) return { text: t("Unlocked"), locked: false };
       var rat = lk.rat === "4g" ? "LTE" : "5G";
       var tag = (lk.band !== undefined && lk.band !== null && lk.band !== "")
         ? (lk.rat === "4g" ? "B" : "n") + lk.band
@@ -80,7 +81,7 @@ export default {
       if (tb) kids.push(h("button", {
         staticClass: "mm-lockbadge" + (tb.locked ? " lock" : ""),
         attrs: { type: "button",
-                 title: (tb.locked ? tb.title + " — " : "") + "Cell lock — open Cell lock tab" },
+                 title: (tb.locked ? tb.title + " — " : "") + t("Cell lock — open Cell lock tab") },
         on: { click: function () { self.tab = "lock"; } }
       }, (tb.locked ? "🔒 " : "🔓 ") + tb.text));
       return h("div", { staticClass: "mm-lockbadges" }, kids);

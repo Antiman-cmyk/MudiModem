@@ -22,7 +22,9 @@
 // the command history, the once-per-page library status) lives in STORE,
 // bounded, not in the instance.
 import { hasRpc, rpc, rpcSilent } from "../kit/rpc.js";
-export default (function () {
+import { localize } from "../kit/i18n.js";
+import { t as T } from "../kit/i18n.js";
+export default localize((function () {
   var HISTORY_MAX = 100;
   var STORE = {
     // Shared BY REFERENCE with every instance's `lines` / `history` (data()
@@ -78,11 +80,11 @@ export default (function () {
     // (only while GL's stack is down) answers for whatever it is on.
     truthLine() {
       var who = this.activeCarrier
-        ? this.activeCarrier + " (slot " + this.activeSlot + ")"
-        : (this.activeSlot ? "slot " + this.activeSlot : "resolving…");
+        ? T("{carrier} (slot {slot})", { carrier: this.activeCarrier, slot: this.activeSlot })
+        : (this.activeSlot ? T("slot {slot}", { slot: this.activeSlot }) : T("resolving…"));
       return this.transport === "direct"
-        ? "direct port /dev/at_mdm0 (GL's AT service is down) · active SIM: " + who
-        : "GL's AT service · addressed to the active SIM: " + who;
+        ? T("direct port /dev/at_mdm0 (GL's AT service is down) · active SIM: {who}", { who: who })
+        : T("GL's AT service · addressed to the active SIM: {who}", { who: who });
     },
     entries() {
       var lib = this.lib || [];
@@ -192,7 +194,7 @@ export default (function () {
         .then(function (r) {
           self.refreshing = false;
           if (r && r.ok) {
-            self.refreshMsg = "updated — rev " + (r.revision || "");
+            self.refreshMsg = T("updated — rev {rev}", { rev: r.revision || "" });
             self.fetchLib();
             return self.checkLibraryStatus();
           }
@@ -476,8 +478,8 @@ export default (function () {
     // ---- caution banner + risk gate ----
     var banner = h("div", { staticClass: "mmc-caution" }, [
       h("b", "Sharp edge."),
-      h("span", "Commands go straight to the " + ((this.cell && this.cell.modem) || "modem") + ". Nothing is validated. " +
-        "Entries marked nv write modem memory that survives a factory reset."),
+      h("span", T("Commands go straight to the {modem}. Nothing is validated. Entries marked nv write modem memory that survives a factory reset.",
+        { modem: (this.cell && this.cell.modem) || T("modem") })),
       h("label", { staticClass: "mmc-gate" }, [
         h("input", {
           attrs: { type: "checkbox", checked: this.riskOK },
@@ -493,7 +495,7 @@ export default (function () {
       h("div", { staticClass: "mmc-row" }, [
         h("span", { staticClass: "mmc-sect" }, "Library"),
         h("span", { staticClass: "mmc-hint" },
-          this.lib ? String(this.entries.length) + " commands" : "")
+          this.lib ? T("{n} commands", { n: this.entries.length }) : "")
       ]),
       (function () {
         var st = self.libStatus, kids = [];
@@ -507,9 +509,9 @@ export default (function () {
               on: { click: function () { self.refreshLibrary(); } }
             }, self.refreshing ? "Refreshing…" : "Refresh now"));
           } else if (st.checked) {
-            kids.push(h("span", { staticClass: "mmc-hint" }, "Up to date · rev " + rev));
+            kids.push(h("span", { staticClass: "mmc-hint" }, T("Up to date · rev {rev}", { rev: rev })));
           } else {
-            kids.push(h("span", { staticClass: "mmc-hint" }, "rev " + rev));
+            kids.push(h("span", { staticClass: "mmc-hint" }, T("rev {rev}", { rev: rev })));
           }
         }
         if (self.refreshMsg) kids.push(h("span", { staticClass: "mmc-hint" }, self.refreshMsg));
@@ -527,7 +529,7 @@ export default (function () {
       body = h("div", { staticClass: "mmc-hint", staticStyle: { padding: "10px 0" } }, "Loading the library…");
     } else if (this.libErr) {
       body = h("div", { staticStyle: { padding: "10px 0" } }, [
-        h("div", { staticClass: "mmc-hint" }, "Couldn't load the library: " + this.libErr + " "),
+        h("div", { staticClass: "mmc-hint" }, T("Couldn't load the library: {err}", { err: this.libErr }) + " "),
         h("button", { staticClass: "mmc-send", staticStyle: { marginTop: "6px" },
           on: { click: function () { self.fetchLib(); } } }, "Retry")
       ]);
@@ -690,4 +692,4 @@ export default (function () {
     ].filter(Boolean));
   }
   };
-})();
+})());
