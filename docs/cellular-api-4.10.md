@@ -3,12 +3,12 @@
 Every shape below was verified in the official `e5800-4.10.0_release5-1092` image
 (plain-source Lua/JS quoted where it exists; `strings`/`nm` on binaries otherwise) and is
 the ONLY firmware contract the code knows. Marks: 🟢 read in source · 🟡 binary strings ·
-🔴 pin on a live box (listed at the end). Reference copies of the GL files live in
-`reference/4.10/`.
+🔴 pin on a live box (listed at the end). Reference copies of the GL files live in mudi-emu
+(`tools/mudi-emu/reference/e5800-4.10.0/`, checked against the image by `mudi-emu reference check`).
 
 ## 1. Websocket (`/ws`) — status, never RF
 
-`oui-ws.lua` (🟢 `reference/4.10/oui-ws.lua`): on `{"cmd":"subscribe","name":"<mod>.<ev>"}`
+`oui-ws.lua` (🟢 mudi-emu `reference/e5800-4.10.0/oui-ws.lua`): on `{"cmd":"subscribe","name":"<mod>.<ev>"}`
 it sends ONE seed frame from `dofile('/usr/share/gl-ngx/websocket/<mod>.lua')[<ev>]()`, then
 forwards every later frame that `gl-ngx-session` broadcasts under that `name`. Frames are
 `{name, data}` and land in the SPA's Vuex `statusMap`; components read them with

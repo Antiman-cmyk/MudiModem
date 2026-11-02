@@ -79,7 +79,8 @@ tools/mudi-emu/         SUBMODULE: firmware fetch/extract, router userland, fake
 test/                   every suite; tools/test-local.sh runs them all (host + router userland via
                         mudi-emu); test/mudiemu.py = how the Python suites reach it; test/emu/ = our
                         drivers + the gl-real scenario
-reference/4.10/         GL files copied from the image (integration evidence; theme-vars.txt)
+reference/              quectel-at-reference.md (AT evidence); GL file copies are in
+                        tools/mudi-emu/reference/e5800-4.10.0/ (theme-vars.txt feeds the CSS lint)
 docs/                   architecture.md · cellular-api-4.10.md · knowledge.md · audit · design/ (history)
 ```
 
@@ -105,9 +106,10 @@ suite) also needs root.
 - `docs/architecture.md` — current structure and the 3.0 refactor plan (phases R0–R4).
 - `docs/cellular-api-4.10.md` — every GL shape/RPC we depend on, with evidence.
 - `docs/knowledge.md` — platform + domain knowledge (band model, sub_id, AT, persistence, gotchas).
-- `reference/quectel-at-reference.md` — AT evidence; `reference/4.10/` — GL source copies.
+- `reference/quectel-at-reference.md` — AT evidence.
 - mudi-emu: `docs/gl-behaviour.md` (GL measured by running it), `docs/re-notes-4.10.md` (read from
-  its binaries), `modem/README.md` (the model, its evidence and scenarios).
+  its binaries), `reference/e5800-4.10.0/` (GL file copies, checked against the image),
+  `modem/README.md` (the model, its evidence and scenarios).
 - `docs/audit-2026-11-02.md` — open improvement list; `CHANGELOG.md` — what each release changed.
   `docs/design/` and `docs/history/` are background only (4.8-era unless dated later), not
   instructions.

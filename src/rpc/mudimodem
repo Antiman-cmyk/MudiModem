@@ -402,7 +402,7 @@ local function slot_changed(args, slot)
 end
 
 -- Call one of GL's C rpc plugins (modem.so) exactly as oui.rpc's glc_call does
--- (reference/oui-lib-rpc.lua:126): nginx-internal POST to /cgi-bin/glc, response
+-- (mudi-emu reference/e5800-4.10.0/oui-lib-rpc.lua `glc_call`): nginx-internal POST to /cgi-bin/glc, response
 -- body is "<code> <json>". Returns (table|nil, err). NOT pcall-wrapped: capture
 -- is a cosocket-style nginx API and must be allowed to yield.
 local function glc(object, method, args)

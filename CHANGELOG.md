@@ -92,7 +92,8 @@ R4 features built on it, plus the fixes they surfaced.
     [mudi-emu](https://github.com/Antiman-cmyk/mudi-emu), pinned as the `tools/mudi-emu`
     submodule. It fetches and unpacks the pinned 4.10.0 image, and runs the router's own Lua,
     eco, busybox and binaries under qemu. It also runs a fake GL bus, and GL's own cellular stack
-    against an RG650V model that tags each reply with its evidence.
+    against an RG650V model that tags each reply with its evidence. The GL file copies the docs
+    cite live there too, checked against the image.
   - Every shell suite now also runs under the router's busybox.
   - `tools/preview.js` renders every tab in headless Chromium with GL's theme, at phone and
     desktop width, light and dark.
