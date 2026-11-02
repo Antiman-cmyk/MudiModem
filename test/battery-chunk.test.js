@@ -26,7 +26,7 @@ function seed(now, n, step, fn) {
     out.push(Object.assign({ t, cap: 70, volt: 4010, cur: -363, temp: 31.6,
       online: 0, status: 'Discharging', ctype: 'N/A', cycles: 4, health: 'Good',
       // glbattlimit's watcher exits on unplug, so an unplugged sample carries
-      // lim: 0. See read_limiter in src/sbin/mudimodem-collectd.
+      // lim: 0. See read_limiter in src/lib/mudimodemd/battery.lua.
       lim: 0, lim_gauge: null },
       fn ? fn(n - 1 - i, t) : {}));
   }
@@ -250,7 +250,7 @@ test('voltage lane is fixed to the Li-ion range but expands rather than clipping
 // cell (a full cell here reads ~86 gauge). Keying "full" off `status` inverts
 // the label exactly when the feature has something to show, which is why the
 // discriminator is the limiter's own per-sample state (lim / lim_gauge).
-// test/collectd.test.py asserts the same fixture from the collector's side.
+// test/collectd-emu.test.py asserts the same fixture from the collector's side.
 // ---------------------------------------------------------------------------
 test('chargeState reads current and online for the unambiguous states', () => {
   const c = loadChunk();

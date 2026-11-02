@@ -7,7 +7,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 code() { grep -hv '^[[:space:]]*#' "$@"; }   # shell sources without comment lines
 
 # busybox on 4.10 has neither pkill nor setsid (mudimodem-detach probes for setsid and falls back).
-code src/rpc/mudimodem src/sbin/* src/lib/mudimodem-deps src/etc/init.d/* src/installer/* install.sh uninstall.sh \
+code src/rpc/mudimodem src/sbin/* src/etc/init.d/* src/installer/* install.sh uninstall.sh \
   | grep -qE '(^|[^a-z])(pkill|setsid)[[:space:]]' && fail "pkill/setsid are absent from the router's busybox"
 # The one firmware/model gate is the installer's; the dev tools run it on the box instead of copying it.
 for f in tools/deploy.sh tools/verify.sh install.sh; do
@@ -15,8 +15,8 @@ for f in tools/deploy.sh tools/verify.sh install.sh; do
 done
 grep -q "sh -s preflight' < src/installer/mudimodem-install" tools/deploy.sh || fail "deploy.sh must run the installer's preflight on the box"
 grep -q "sh -s preflight' < src/installer/mudimodem-install" tools/verify.sh || fail "verify.sh must run the installer's preflight on the box"
-# opkg goes through mudimodem-deps only (one recipe, flock-serialized).
-code src/installer/mudimodem-install install.sh tools/deploy.sh | grep -q 'opkg' && fail "use mudimodem-deps, not opkg directly"
+# No package installs at all: MudiModem needs nothing beyond the image.
+code src/installer/mudimodem-install install.sh tools/deploy.sh | grep -q 'opkg' && fail "no opkg: MudiModem needs nothing beyond the image"
 # keep.d is the E5800's only upgrade-preserve list; sysupgrade.conf is never read there.
 code src/installer/mudimodem-install install.sh tools/deploy.sh | grep -q '>>[[:space:]]*.*sysupgrade.conf' \
   && fail "never register files in /etc/sysupgrade.conf (abfota_update never reads it)"
@@ -33,12 +33,12 @@ grep -q 'mudimodem-detach' src/sbin/glbattlimit || fail "glbattlimit must launch
 # Self-update follows the recorded install source.
 grep -q 'MUDIMODEM_BASE=' src/sbin/mudimodem-selfupdate || fail "self-update must pass the recorded base to install.sh"
 
-# python3 (opkg; wiped by a firmware upgrade) is healed at boot for exactly the python services.
-py_svcs=$(grep -l '/usr/bin/python3' src/etc/init.d/* | xargs -n1 basename | sort | tr '\n' ' ')
-deps_svcs=$(sed -n 's/^SERVICES="\(.*\)"/\1/p' src/lib/mudimodem-deps | tr ' ' '\n' | sort | tr '\n' ' ')
-[ "$py_svcs" = "$deps_svcs" ] || fail "mudimodem-deps SERVICES ($deps_svcs) must be the python services ($py_svcs)"
-for n in $py_svcs; do
-  grep -q '"$DEPS" check' "src/etc/init.d/$n" && grep -q '"$DEPS" heal' "src/etc/init.d/$n" \
-    || fail "$n must defer to mudimodem-deps heal when python3 is missing"
+# Nothing on the box needs python3 (R3 ⑤): an opkg package a firmware upgrade wipes. Everything
+# runs on what the 4.10 image ships (busybox sh, Lua 5.1, lua-eco, curl, jsonfilter).
+for f in $(git ls-files --cached --others --exclude-standard src install.sh uninstall.sh 2>/dev/null || find src -type f); do
+  head -n1 "$f" 2>/dev/null | grep -q '^#!.*python' && fail "$f is a python script (nothing on the box may need python3)"
 done
+grep -rnIE '/usr/bin/python|(^|[^-a-z_./])python3?[[:space:]]' src manifest.txt install.sh uninstall.sh \
+  | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(--|#|//|\*)' | grep -q . \
+  && fail "a python invocation on the box again (everything runs on the image's sh, Lua and eco)"
 echo "static OK"

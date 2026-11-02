@@ -174,7 +174,7 @@ comma-separated reply. Nothing auto-runs; `{{params}}` must be filled; set/nv ne
 - Every E5800 upgrade ends in `abfota_update start-fota`; with Keep Settings it keeps exactly the
   paths in `/lib/upgrade/keep.d/*` (one literal path per line, no globs; a directory keeps its
   tree; only under `/etc /usr /lib /bin /sbin /data /var`). **`/etc/sysupgrade.conf` is never
-  read; `/www` is never restored; opkg packages are gone** (python3 included). procd enable links
+  read; `/www` is never restored; opkg packages are gone** (MudiModem 3.0 needs none). procd enable links
   (`/etc/rc.d/S<START>name`, `K<STOP>name`) must be listed or services come back disabled.
 - **`oui.ubus.call(obj, m, params, timeout_ms)` from the nginx plugin is non-blocking**: a cosocket to
   `/var/run/ngx-ubus-proxy.sock`, served by `gl-ngx-session` (`handle_ubus_proxy`), which relays

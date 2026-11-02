@@ -1,12 +1,12 @@
 -- cellular_compat.lua — GL 4.10's cellular ubus shapes -> MudiModem's normalized sample, in Lua.
 --
--- A line-for-line port of src/lib/cellular_compat.py (which stays the reference while the Python
--- collector runs): test/compat-parity.test.py feeds both the same payloads and requires identical
--- JSON. Written in the Lua 5.1 / 5.4 common subset so the eco daemon (5.4) and the nginx plugin
--- (OpenWrt 5.1, 32-bit LNUM integers — no value here exceeds that) can share it.
+-- A line-for-line port of the python collector's src/lib/cellular_compat.py (retired in R3 ⑤):
+-- test/compat-golden.test.py holds it to that module's answers (test/golden/compat.json, frozen
+-- before the removal). Written in the Lua 5.1 / 5.4 common subset so the eco daemon (5.4) and the
+-- nginx plugin (OpenWrt 5.1, 32-bit LNUM integers — no value here exceeds that) can share it.
 --
 -- `null` is the JSON null the caller's cjson uses (cjson.null): the normalized sample keeps
--- every key, with null for "unknown", exactly as the Python version emits None.
+-- every key, with null for "unknown".
 -- Contract: docs/cellular-api-4.10.md §2/§3.
 local M = {}
 

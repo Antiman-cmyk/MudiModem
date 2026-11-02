@@ -87,11 +87,6 @@ object/method/key strings a stretch of code uses).
 - ⚠️ `-L` redirects every path that EXISTS under the rootfs. The image ships an empty `/proc`
   mount point, so LISTING `/proc` (pgrep, a /proc scan) silently sees nothing while
   `/proc/<pid>/…` falls through to the host. `rmdir firmware/rootfs/proc` before relying on it.
-- Python: `python3-light` / `python3-base` / `libpython3-3.11` from the feed in
-  `etc/opkg/distfeeds.conf` (`…/packages/aarch64_cortex-a53/packages/Packages.gz`), each `.ipk`
-  is a tar.gz whose `data.tar.gz` unpacks into the rootfs. The test suites additionally need
-  `python3-unittest`, and `test/speedtest.test.py`'s fake HTTP server `python3-email` +
-  `python3-codecs` (idna) — test-only; the shipped code needs none of them.
 - `re-tools/xref.py <elf> find <text>` lists code that references a string or a GOT import
   (`got:kill`); `xref.py <elf> dis <start> <end>` disassembles a range annotated with both —
   how the 2026-10-28 facts in `docs/cellular-api-4.10.md` §2.1/§5 were read.
@@ -114,6 +109,5 @@ object/method/key strings a stretch of code uses).
   `readfile`, `decode`) — no check that a view's chunk exists in `/www/views`.
 - The image's `nginx` runs under qemu with a throw-away config (`-p <dir> -c <conf>`, `user root;`
   so the worker can read the scratch tree); that is how the gl-conf.d alias was checked.
-- The image ships no Python: no `/usr/bin/python3`, no `python3*` in `usr/lib/opkg/info`.
-  `python3-light` (3.11.7-1, GL's `glinet_gli_packages` feed) carries every module our tools
-  import (`fcntl gzip json select signal subprocess tempfile`).
+- The image ships no Python: no `/usr/bin/python3`, no `python3*` in `usr/lib/opkg/info` — which
+  is why MudiModem 3.0 runs on lua-eco only (Python on the dev box is test tooling).

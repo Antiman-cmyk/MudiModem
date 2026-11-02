@@ -1,4 +1,4 @@
--- Runs src/lib/cellular_compat.lua over the cases test/compat-parity.test.py writes, prints JSON.
+-- Runs src/lib/cellular_compat.lua over the cases test/compat-golden.test.py writes, prints JSON.
 -- Works under the host's lua5.1, the router's lua (5.1, LNUM) and the router's eco (5.4).
 local dir = (arg[0]:match("^(.*)/[^/]*$") or ".") .. "/../src/lib/"
 package.path = dir .. "?.lua;" .. package.path

@@ -79,7 +79,6 @@ ok "keep.d: generated, abfota-parsable, covers every placed file and every enabl
 
 [ "$(cat "$R/etc/mudimodem/version.json")" = "{\"version\":\"$VER\",\"base\":\"$REPO\"}" ] || fail "version.json: $(cat "$R/etc/mudimodem/version.json")"
 [ "$(tail -n1 "$R/.mm-actions")" = "place /etc/mudimodem/version.json" ] || fail "version.json must be the very last write"
-must_before "$R" "sys deps install" "svc mudimodem-collectd restart"
 must_before "$R" "place /usr/lib/oui-httpd/rpc/mudimodem" "svc nginx restart"
 must_before "$R" "place /usr/share/gl-validator.d/mudimodem.lua" "place /usr/lib/oui-httpd/rpc/mudimodem"
 must_before "$R" "place /usr/sbin/mudimodem-revert" "place /usr/lib/oui-httpd/rpc/mudimodem"
@@ -87,7 +86,7 @@ must_before "$R" "sys kill glbattlimit watchers" "svc nginx restart"
 must_before "$R" "place /usr/bin/glbattlimit" "svc glbattlimit start"
 must_before "$R" "svc mudimodem-revert enable" "svc mudimodem-collectd enable"
 grep -qxF "sys glbattlimit off" "$R/.mm-actions" && fail "fresh install ran 'glbattlimit off' with no glbattlimit present"
-ok "version.json last; deps before services; validator + watchdog before the plugin; nginx after"
+ok "version.json last; validator + watchdog before the plugin; nginx after"
 
 # ---- 2. update in place: settings, cache, ordering of the battery-limit swap --------------------
 echo '{"enabled":true,"limit_gui":70}' > "$R/etc/mudimodem/battlimit.json"
@@ -128,6 +127,38 @@ done
 gzip -dc "$R/usr/share/mudimodem/www/mudimodem/at-library.json.gz" | grep -q from-200 || fail "2.0.0's refreshed library cache was not carried over"
 for a in "svc mudi stop" "svc mudi disable" "svc gl_screen start"; do grep -qxF "$a" "$R/.mm-actions" || fail "not recorded: $a"; done
 ok "1.x LCD + 2.0.0 /www + sysupgrade.conf leftovers removed; GL's files kept; old cache migrated"
+
+# ---- 3b. what an older install shipped and this one does not: retired before the new files land -----
+# A 2.x box (python3 era, no installed manifest): the scheduler service + the python files.
+R="$T/r3b"; mkroot "$R"
+mkdir -p "$R/etc/init.d" "$R/usr/sbin" "$R/usr/lib/mudimodem" "$R/etc/mudimodem"
+printf '#!/bin/sh\n' > "$R/etc/init.d/mudimodem-speedtestd"; chmod +x "$R/etc/init.d/mudimodem-speedtestd"
+for f in /usr/sbin/mudimodem-speedtestd /usr/sbin/mudimodem-collectd /usr/lib/mudimodem/mudimodem-speedtest.py \
+         /usr/lib/mudimodem/mudimodem-at.py /usr/lib/mudimodem/mudimodem-lib /usr/lib/mudimodem/cellular_compat.py \
+         /usr/lib/mudimodem/mudimodem-deps /etc/mudimodem/collector; do echo old > "$R$f"; done
+echo '{"enabled":true,"limit":70}' > "$R/etc/mudimodem/battlimit.json"
+install_into "$R" || fail "install over 2.x python leftovers failed"
+for f in /etc/init.d/mudimodem-speedtestd /usr/sbin/mudimodem-speedtestd /usr/sbin/mudimodem-collectd \
+         /usr/lib/mudimodem/mudimodem-speedtest.py /usr/lib/mudimodem/mudimodem-at.py /usr/lib/mudimodem/mudimodem-lib \
+         /usr/lib/mudimodem/cellular_compat.py /usr/lib/mudimodem/mudimodem-deps /etc/mudimodem/collector; do
+  [ -e "$R$f" ] && fail "2.x leftover not retired: $f"
+done
+must_before "$R" "svc mudimodem-speedtestd stop" "svc mudimodem-speedtestd disable"
+must_before "$R" "svc mudimodem-speedtestd disable" "remove /etc/init.d/mudimodem-speedtestd"
+must_before "$R" "remove /usr/lib/mudimodem/mudimodem-deps" "place /usr/sbin/mudimodemd"
+[ "$(cat "$R/etc/mudimodem/battlimit.json")" = '{"enabled":true,"limit":70}' ] || fail "the user's battlimit settings were touched"
+[ -x "$R/etc/init.d/mudimodem-collectd" ] || fail "the kept service's init script must stay"
+# A newer box whose installed manifest names a file + a service this payload dropped.
+R="$T/r3c"; mkroot "$R"; install_into "$R" || fail "base install for 3c failed"
+printf '#!/bin/sh\n' > "$R/etc/init.d/old-svc"; chmod +x "$R/etc/init.d/old-svc"; echo old > "$R/usr/lib/mudimodem/old-thing"
+{ cat manifest.txt; printf 'file src/x /usr/lib/mudimodem/old-thing 0644\nfile src/y /etc/init.d/old-svc 0755\nservice old-svc enable\n'; } \
+  > "$R/usr/lib/mudimodem/manifest.txt"
+install_into "$R" || fail "update over a manifest with dropped entries failed"
+[ -e "$R/usr/lib/mudimodem/old-thing" ] && fail "a file the new manifest dropped was kept"
+[ -e "$R/etc/init.d/old-svc" ] && fail "a dropped service's init script was kept"
+must_before "$R" "svc old-svc stop" "remove /etc/init.d/old-svc"
+grep -qxF "remove /usr/sbin/mudimodemd" "$R/.mm-actions" && fail "a file still shipped was removed"
+ok "retired: 2.x python leftovers and whatever an older manifest shipped that this one does not; settings kept"
 
 # ---- 4. refusals touch nothing ------------------------------------------------------------------
 for v in 4.10.0:ok 4.10:ok 4.11.2:ok 5.0:ok 4.8.5:refuse 4.9.0:refuse 4.8-rc1:refuse 4.x:refuse 3.215:refuse :refuse; do

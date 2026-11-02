@@ -1,11 +1,11 @@
 -- mudimodemd/collector.lua — RF + battery sampling, history files, live push. Runs inside eco.
 --
--- Replaces src/sbin/mudimodem-collectd (Python) with the same contract, so nothing downstream
--- changes: /tmp/mudimodem/{samples,battery}.jsonl + latest.json / battery-latest.json (schema:
--- cellular_compat.build_sample / battery.read_battery), the eMMC backup segments, and
--- `gl-session notify {name:"mudimodem.collect"|"mudimodem.battery", data}` pushes.
--- test/collectd-emu.test.py runs this and the Python collector on the same emulated GL bus and
--- requires the same calls, samples and frames.
+-- Replaced the python collector (src/sbin/mudimodem-collectd, retired in R3 ⑤) with the same
+-- contract, so nothing downstream changed: /tmp/mudimodem/{samples,battery}.jsonl + latest.json /
+-- battery-latest.json (schema: cellular_compat.build_sample / battery.read_battery), the eMMC
+-- backup segments, and `gl-session notify {name:"mudimodem.collect"|"mudimodem.battery", data}`.
+-- test/collectd-emu.test.py runs it on an emulated GL bus and holds its samples to the python
+-- collector's (test/golden/compat.json).
 --
 -- What differs is only HOW: the RF tick, the battery cadence and the eMMC flush are three
 -- coroutines sleeping on eco's timers (libev: monotonic, so a wall-clock step cannot stall or
@@ -224,7 +224,7 @@ function M.new(conn, cfg, log)
         cursors.samples, cursors.battery = c.samples, c.battery
       end)
     end
-    -- battery first (no ubus), then RF, as the Python loop did; each on its own cadence
+    -- battery first (no ubus), then RF, as the python collector's loop did; each on its own cadence
     eco.run(function() while self.running do guarded("battery", self.battery_tick); sleep(cfg.batt_interval) end end)
     eco.run(function() while self.running do guarded("collect", self.rf_tick); sleep(cfg.poll) end end)
     eco.run(function() while self.running do guarded("flush", self.flush); sleep(cfg.flush_interval) end end)

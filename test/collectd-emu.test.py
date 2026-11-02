@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""The collector end to end against an emulated GL 4.10 bus: the image's own ubusd + ubus CLI and a
+"""mudimodemd end to end against an emulated GL 4.10 bus: the image's own ubusd + ubus CLI and a
 fake cellular stack (test/emu/fake-gl.lua under the image's eco), all via qemu. Nothing is mocked
-inside the collectors: the Python one forks the real `ubus` CLI, mudimodemd talks eco.ubus.
+inside the daemon: it talks eco.ubus to the real ubusd.
 
-Every scenario runs on BOTH engines — src/sbin/mudimodem-collectd (Python) and src/sbin/mudimodemd
-(eco) — and they must agree (the R3 shadow comparison, done here rather than doubling the
-AT-backed cell_info on a box). The contract:
+The collector's samples must be the ones in test/golden/compat.json (frozen from the python
+collector it replaced: the R3 shadow comparison, kept). The contract:
   * one `cellular.network cell_info {bus:"cpu", slot:<active>}` per tick, never anything else;
   * a FAILED read skips the tick (no line, no push), "no service" is an honest sample;
   * samples.jsonl / latest.json / the `mudimodem.collect` push carry cellular_compat's sample
@@ -14,21 +13,30 @@ AT-backed cell_info on a box). The contract:
   * no browser attached (has_ws false) -> no push at all;
   * battery from sysfs (+ glbattlimit state), eMMC backup flush and boot restore.
 Skips when the firmware rootfs or qemu is absent (tools/emu.sh check)."""
-import http.server, importlib.util, json, os, shutil, signal, subprocess, sys, tempfile, threading, time, unittest
+import http.server, json, os, shutil, signal, subprocess, sys, tempfile, threading, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
-sys.path.insert(0, os.path.join(ROOT, "src", "lib"))
-import cellular_compat as cc  # noqa: E402
-spec = importlib.util.spec_from_file_location("ct", os.path.join(HERE, "collectd.test.py"))
-ct = importlib.util.module_from_spec(spec); spec.loader.exec_module(ct)
+sys.path.insert(0, HERE)
+import fixtures410 as ct  # noqa: E402  (GL 4.10 payloads)
 
 EMU = os.path.join(ROOT, "tools", "emu.sh")
 BUS_SH = os.path.join(HERE, "emu", "gl-bus.sh")
-ENGINES = {
-    "python": [sys.executable, os.path.join(ROOT, "src", "sbin", "mudimodem-collectd")],
-    "eco": [EMU, "eco", os.path.join(ROOT, "src", "sbin", "mudimodemd")],
-}
+ENGINES = {"eco": [EMU, "eco", os.path.join(ROOT, "src", "sbin", "mudimodemd")]}
+with open(os.path.join(HERE, "golden", "compat.json")) as _f:
+    _G = json.load(_f)
+
+
+def golden_sample(status, cell, networks):
+    """The sample the python collector built for these payloads (test/golden/compat.json), minus t."""
+    for c, w in zip(_G["cases"], _G["want"]):
+        if c["fn"] == "build_sample" and c["args"][:3] == [status, cell, networks] and len(c["args"]) == 4:
+            w = dict(w)
+            w.pop("t", None)
+            if w.get("signals") == "[]":
+                w["signals"] = []
+            return w
+    raise KeyError("no golden build_sample case for these payloads")
 CELLS = [ct.CELL_INFO_410_SA, ct.CELL_INFO_410_NSA_CA, {"fail": True}, ct.CELL_INFO_410_NO_SERVICE]
 SYSFS = {"cw221X-bat/capacity": "87", "cw221X-bat/voltage_now": "4012345", "cw221X-bat/temp": "312",
          "cw221X-bat/current_now": "-363", "cw221X-bat/cycle_count": "12", "cw221X-bat/health": "Good",
@@ -143,7 +151,7 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         for i in range(len(cells)):
             cell = CELLS[i % len(CELLS)]
             if not cell.get("fail"):
-                want.append(strip_t(cc.build_sample(ct.MODEM_STATUS_410_TWO, cell, ct.NETWORK_INFO_410, t=0)))
+                want.append(golden_sample(ct.MODEM_STATUS_410_TWO, cell, ct.NETWORK_INFO_410))
         got = [strip_t(s) for s in r["samples"]]
         self.assertEqual(got, want[:len(got)])
         self.assertGreaterEqual(len(got), 3)
@@ -158,9 +166,6 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         self.assertEqual(len(r["notify"]), len(frames), "no battery frames without a fuel gauge")
         self.assertEqual(r["battery"], [])
 
-    def test_ticks_samples_and_pushes_python(self):
-        self.check_ticks("python")
-
     def test_ticks_samples_and_pushes_eco(self):
         self.check_ticks("eco")
 
@@ -173,15 +178,12 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         self.assertGreaterEqual(len(r["battery"]), 1)
         self.assertEqual(r["notify"], [])
 
-    def test_no_browser_no_push_python(self):
-        self.check_no_browser("python")
-
     def test_no_browser_no_push_eco(self):
         self.check_no_browser("eco")
 
-    def test_engines_agree_battery_backup_restore(self):
-        """Same scenario, battery on, eMMC backup on with a backup from a previous boot: both
-        engines restore it, sample, push and flush the same things."""
+    def test_battery_backup_restore(self):
+        """Battery on, eMMC backup on with a backup from a previous boot: the daemon restores it,
+        samples (the python collector's samples), pushes and flushes."""
         now = int(time.time() * 1000)
         old = {"t": now - 60000, "slot": 1, "registered": True, "rsrp": -88}
         stale = {"t": now - 25 * 3600 * 1000, "slot": 1, "registered": True}
@@ -210,14 +212,16 @@ class CollectorOnEmulatedBus(unittest.TestCase):
             self.assertGreaterEqual(len(backed), 2, e)
             self.assertEqual(backed, r["samples"][1:1 + len(backed)], e)
             self.assertTrue(r["persist"].get("battery.jsonl"), e)
-        py, eco = runs["python"], runs["eco"]
-        n = min(len(py["samples"]), len(eco["samples"]))
-        self.assertGreaterEqual(n, 3)
-        self.assertEqual([strip_t(s) for s in py["samples"][:n]], [strip_t(s) for s in eco["samples"][:n]])
-        self.assertEqual(strip_t(py["battery"][0]), strip_t(eco["battery"][0]))
-        seq = lambda r: [(c["object"], c["method"], c["args"]) for c in r["calls"]]
-        k = min(len(seq(py)), len(seq(eco)))
-        self.assertEqual(seq(py)[:k], seq(eco)[:k], "same ubus calls in the same order")
+        eco = runs["eco"]
+        live = [strip_t(x) for x in eco["samples"][1:]]       # [0] is the restored backup line
+        self.assertGreaterEqual(len(live), 3)
+        cells = [ct.CELL_INFO_410_NSA, ct.CELL_INFO_410_SA]
+        self.assertEqual(live, [golden_sample(ct.MODEM_STATUS_410, cells[i % 2], ct.NETWORK_INFO_410)
+                                for i in range(len(live))], "the python collector's samples")
+        seq = [(c["object"], c["method"], c["args"]) for c in eco["calls"]]
+        self.assertEqual(seq[:3], [("cellular.modem", "status", {}),
+                                   ("cellular.network", "cell_info", {"bus": "cpu", "slot": 1}),
+                                   ("cellular.network", "info", {})], "the python collector's call order")
 
     def test_eco_shared_trim_loses_no_line(self):
         """events.jsonl is appended to by the plugin and the watchdog while the daemon trims it:

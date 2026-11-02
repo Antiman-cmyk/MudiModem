@@ -20,11 +20,13 @@ part of R2 and the first step of R3), plus the fixes it surfaced.
   theme does not define, so they rendered without colour or background. They now use GL's own
   tokens, and a test enforces this. "Good" signal is now `--secondary`, as on GL's own pages;
   before, it was the same grey as "no data" in the dark theme.
-- **The collector runs on GL's own Lua (eco), not Python.** `mudimodemd` writes the same history
-  files and pushes as before, so live data works right after a firmware upgrade, without waiting
-  for python3 to be reinstalled, and nothing is forked per sample. The Python collector is still
-  installed as the fallback; writing `python` to `/etc/mudimodem/collector` selects it.
-  `ubus call mudimodem health` shows the collector's counters and last error.
+- **No Python on the router any more.** Everything runs in `mudimodemd` on the firmware's own
+  lua-eco: the collector (same history files and pushes as before), the speed test and its
+  schedule, the AT console's direct-port fallback and the AT-library sync. Live data works right
+  after a firmware upgrade (there is nothing to reinstall), and nothing is forked per sample.
+  `ubus call mudimodem health` shows the daemon's counters and last error. Updating removes the
+  old Python files and the `mudimodem-speedtestd` service; the `python3-light` package an older
+  version installed is left alone (`opkg remove python3-light` if nothing else of yours uses it).
 - **The AT console no longer freezes GL's admin.** Commands used to run inside GL's web server,
   which on 4.10 has one worker: every other page waited until the modem answered. They now run in
   `mudimodemd`'s AT queue, one sequence at a time; a long sequence shows its finished steps

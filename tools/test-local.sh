@@ -31,7 +31,7 @@ run() { local name="$1"; shift
   rm -rf "$T/pending" "$T/armed" "$T/latest.json" "$T/hist" "$T/mmtmp"; mkdir -p "$T/hist" "$T/mmtmp"
   if "$@" > "$T/out.txt" 2>&1; then echo "PASS  $name"; else echo "FAIL  $name"; tail -n 12 "$T/out.txt" | sed 's/^/      /'; rc=1; fi; }
 echo "== python =="
-for f in test/*.test.py test/test_collectd.py; do run "$f" env -u MUDIMODEM_CURL python3 "$f"; done
+for f in test/*.test.py; do run "$f" env -u MUDIMODEM_CURL python3 "$f"; done
 echo "== page build (src/web -> dist/views, esbuild) =="
 [ -x node_modules/.bin/esbuild ] || npm ci --no-audit --no-fund >/dev/null 2>&1 || echo "npm ci failed (needs the npm registry once)"
 run "dist/views matches a fresh build of src/web" node tools/build-web.mjs --check
@@ -66,7 +66,7 @@ if [ -n "${MM_ROOTFS:-}" ] && command -v qemu-aarch64-static >/dev/null && [ -x 
 else
   echo "== lua (ROUTER lua) SKIPPED: set MM_ROOTFS=<extracted 4.10 rootfs> and install qemu-user-static =="
 fi
-SH_SUITES="revert.test.sh:src/sbin/mudimodem-revert selfupdate.test.sh:src/sbin/mudimodem-selfupdate deps.test.sh:src/lib/mudimodem-deps battlimit-hotplug.test.sh: manifest.test.sh: static.test.sh: installer.test.sh:"
+SH_SUITES="revert.test.sh:src/sbin/mudimodem-revert selfupdate.test.sh:src/sbin/mudimodem-selfupdate battlimit-hotplug.test.sh: manifest.test.sh: static.test.sh: installer.test.sh:"
 echo "== sh (dash + busybox ash) =="
 for shell in sh "busybox sh"; do
   for s in $SH_SUITES; do run "$shell test/${s%%:*}" $shell "test/${s%%:*}" ${s#*:}; done
@@ -79,7 +79,7 @@ else
 fi
 command -v shellcheck >/dev/null && run "shellcheck" shellcheck -s sh -S warning -e SC2086,SC2034,SC1090,SC2016,SC3043 \
   src/sbin/mudimodem-revert src/sbin/mudimodem-selfupdate install.sh uninstall.sh src/lib/mudimodem-detach \
-  src/sbin/glbattlimit src/hotplug/20-glbattlimit src/etc/init.d/* src/lib/mudimodem-deps \
+  src/sbin/glbattlimit src/hotplug/20-glbattlimit src/etc/init.d/* \
   src/installer/mudimodem-install tools/deploy.sh tools/build.sh tools/firmware.sh tools/emu.sh \
-  test/installer.test.sh test/manifest.test.sh test/static.test.sh test/emu/gl-bus.sh
+  test/installer.test.sh test/manifest.test.sh test/static.test.sh test/emu/gl-bus.sh test/onbox/rpc-login.sh
 exit $rc

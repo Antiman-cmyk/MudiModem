@@ -2,7 +2,7 @@
 -- mudimodemd — MudiModem's daemon on GL 4.10's own lua-eco (/usr/bin/eco, Lua 5.4).
 --
 -- R3 plan (docs/architecture.md §6): ① the collector — RF + battery sampling, the history files,
--- the eMMC backup and the live pushes — with the contract of the Python collector it replaces
+-- the eMMC backup and the live pushes — with the contract of the python collector it replaced
 -- (src/lib/mudimodemd/collector.lua); ③ the AT console's queue, so a console command no longer
 -- holds GL's one nginx worker (the plugin forwards over oui.ubus, a non-blocking cosocket).
 -- ② jobs — the version check, the AT-library check/refresh and the cell scan (tasks.lua); ④ the
@@ -47,14 +47,14 @@ end
 
 local conn, err = ubus.connect(os.getenv("MUDIMODEM_UBUS_SOCK"))
 if not conn then log("ubus connect failed: " .. tostring(err)); os.exit(1) end
--- per call, as the Python collector's subprocess timeout (a wedged modem stack must not stall a tick)
+-- per call, as the python collector's was (a wedged modem stack must not stall a tick)
 conn:settimeout(tonumber(os.getenv("MUDIMODEM_UBUS_TIMEOUT") or "") or 8)
 -- ubusd restarting would otherwise leave us alive and deaf: every call answers "not found" for
 -- good and our object is gone. auto_reconnect re-dials and re-registers it (test/collectd-emu).
 conn:auto_reconnect()
 
--- The collector is optional: with the Python collector pinned (/etc/mudimodem/collector), the
--- init script runs us with MUDIMODEMD_COLLECTOR=0 for the AT queue alone.
+-- MUDIMODEMD_COLLECTOR=0 runs everything but the collector (the tests use it to look at one
+-- part of the daemon at a time).
 local c = os.getenv("MUDIMODEMD_COLLECTOR") ~= "0" and collector.new(conn, collector.config(), log) or nil
 
 -- AT requests get their own connection: its timeout is set per step, and a 65 s AT wait must

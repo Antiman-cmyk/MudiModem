@@ -1,10 +1,13 @@
 -- mudimodemd/battery.lua — one battery sample from sysfs (no ubus, no AT: nothing that can
--- contend with the modem channel). A port of read_battery / read_limiter in
--- src/sbin/mudimodem-collectd, whose comments carry the evidence for every unit below;
--- test/jsonl-parity.test.py compares both on the same fake sysfs trees. Lua 5.1/5.4 subset.
+-- contend with the modem channel). A port of the python collector's read_battery / read_limiter
+-- (retired in R3 ⑤); test/jsonl-golden.test.py holds it to their answers on fake sysfs trees.
+-- Lua 5.1/5.4 subset.
 --
 -- UNITS ARE PER NODE: voltage_now uV -> mV, temp deci-C -> C, current_now is ALREADY mA (signed:
--- + charging, - discharging, 0 = charging blocked). `cap` is the RAW gauge %. `lim`/`lim_gauge`
+-- + charging, - discharging, 0 = charging blocked) — the power_supply class normally says uA,
+-- but glbattlimit documents mA and the physics agree (-363 at 4.0 V = 1.45 W; as uA it would be
+-- 1.5 mW). `cap` is the RAW gauge %, never GL's "GUI" scale (that conversion is a provisional
+-- linear fit; raw readings keep retained history valid if the fit changes). `lim`/`lim_gauge`
 -- record glbattlimit's state per sample: the charger reports Full/Trickle both when the cell is
 -- full and when the limiter holds charge off, so only the limiter's own pid/limit files tell
 -- the two apart.

@@ -172,6 +172,36 @@ purge_200() {
   fi
 }
 
+# Files and services an earlier MudiModem shipped and this payload does not: stop and disable the
+# services, then remove the files, BEFORE the new ones are placed. A 3.x box names them in the
+# manifest it installed; a 2.x box (no manifest) gets the list of what 3.0 retired with python3.
+# `default` entries (the user's settings) are never touched.
+RETIRED_SVCS="mudimodem-speedtestd"
+RETIRED_FILES="/usr/sbin/mudimodem-speedtestd /etc/init.d/mudimodem-speedtestd /usr/sbin/mudimodem-collectd
+  /usr/lib/mudimodem/mudimodem-speedtest.py /usr/lib/mudimodem/mudimodem-at.py /usr/lib/mudimodem/mudimodem-lib
+  /usr/lib/mudimodem/cellular_compat.py /usr/lib/mudimodem/mudimodem-deps /etc/mudimodem/collector"
+in_list() { x=$1; shift; for y; do [ "$x" = "$y" ] && return 0; done; return 1; }
+retire_old() {  # $1 = the new manifest
+  old="$ROOT/usr/lib/mudimodem/manifest.txt"
+  svcs=$RETIRED_SVCS; files=$RETIRED_FILES
+  if [ -f "$old" ]; then
+    svcs="$svcs $(records "$old" | awk '$1 == "service" { print $2 }')"
+    files="$files $(records "$old" | awk '$1 == "file" || $1 == "gz" { print $3 }')"
+  fi
+  keep_svcs=$(records "$1" | awk '$1 == "service" { print $2 }')
+  keep_files=$(records "$1" | awk '$1 == "file" || $1 == "gz" || $1 == "cache" || $1 == "default" { print $3 }')
+  for s in $svcs; do
+    in_list "$s" $keep_svcs && continue
+    [ -x "$ROOT/etc/init.d/$s" ] || continue
+    svc "$s" stop; svc "$s" disable; say "  retired service $s"
+  done
+  for f in $files; do
+    in_list "$f" $keep_files && continue
+    [ -e "$ROOT$f" ] || continue
+    rm -f "$ROOT$f"; say "  removed $f (no longer shipped)"; log "remove $f"
+  done
+}
+
 # A charge-limit watcher started by an older glbattlimit from the web panel inherited nginx's
 # listening sockets (the new nginx could not bind 80/443 while it lives), and replacing the binary
 # under a running watcher is racy: release the limit and kill any survivor ([t]: never match us).
@@ -194,15 +224,12 @@ do_install() {
   [ -n "$ROOT" ] && : > "$ACTIONS"
 
   stop_battlimit
+  retire_old "$M"
 
   say "installing files:"
   records "$M" | while read -r t a b c; do
     case "$t" in file|gz|cache|default) put "$t" "$a" "$b" "$c" ;; esac
   done
-
-  # python3 for the daemons (opkg; a firmware upgrade wipes it) BEFORE any service starts — their
-  # init scripts would otherwise spawn a heal that races this opkg run. Offline-tolerant.
-  sys "deps install" "$ROOT/usr/lib/mudimodem/mudimodem-deps" install
 
   # RESTART, not reload: nginx caches the plugin per worker. ~1 s admin blip, no link touch.
   svc nginx restart

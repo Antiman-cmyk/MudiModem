@@ -1,8 +1,8 @@
 -- mudimodemd/jsonl.lua — the history files: append-ordered JSON lines, each with an epoch-ms `t`.
 --
--- A port of the file helpers in src/sbin/mudimodem-collectd (trim, the two-segment eMMC backup,
--- boot restore); test/jsonl-parity.test.py runs both on the same fixture files and requires the
--- same bytes. Lua 5.1/5.4 common subset, plain io/os only, so host Lua, the router's Lua and eco
+-- A port of the python collector's file helpers (trim, the two-segment eMMC backup, boot restore;
+-- retired in R3 ⑤): test/jsonl-golden.test.py holds it to their answers and the bytes they left
+-- on disk (test/golden/jsonl.json). Lua 5.1/5.4 common subset, plain io/os only, so host Lua, the router's Lua and eco
 -- can all run it. Two hooks the daemon fills in (defaults work without them):
 --   M.sleep(s)    yields during a shared trim's grace window (eco.time.sleep); nil = no grace wait
 --   M.mkdir(p)    one directory level (eco.file.mkdir); nil = `mkdir -p` via os.execute
@@ -82,10 +82,15 @@ end
 
 -- Drop lines older than max_age_ms and cap the count, atomically; no rewrite when nothing goes.
 -- Only the head is parsed (the file is append-ordered by t); a torn tail line is scrubbed.
--- shared=true is for events.jsonl, which other processes append to while we trim (see the
--- Python docstring): bytes after the last newline are an append in flight, lines appended while
--- we write are carried into the new file, and a writer that opened the OLD inode just before the
--- rename is carried over for TRIM_GRACE_S after it.
+-- shared=true is for events.jsonl, which OTHER processes append to while we trim: the plugin's
+-- io.open(.., "a") and the watchdog's `echo >>`, one whole line per O_APPEND write, with no lock
+-- we could take. A plain read -> rewrite -> rename would lose every line appended between the
+-- read and the rename, so: bytes after the last newline are an append still in flight (never
+-- scrubbed as torn, never kept from the first read); whatever is appended while the kept lines
+-- are written is copied into the new file before the rename (carry, until the size is stable);
+-- and a writer that opened the OLD inode just before the rename gets its line carried over for
+-- TRIM_GRACE_S after it (appended O_APPEND, so after anything newer already in the new file).
+-- test/collectd-emu.test.py races a real writer against this under eco.
 function M.trim(path, max_age_ms, max_lines, ref_ms, shared)
   local src = io.open(path, "rb")
   if not src then return end

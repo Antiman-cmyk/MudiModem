@@ -1,5 +1,5 @@
--- Runs src/lib/mudimodemd/{jsonl,battery}.lua over the cases test/jsonl-parity.test.py writes:
---   lua jsonl-parity.lua <cases.json> <base dir>     (case i works in <base dir>/<i>, "{D}" in args)
+-- Runs src/lib/mudimodemd/{jsonl,battery}.lua over the cases test/jsonl-golden.test.py writes:
+--   lua jsonl-golden.lua <cases.json> <base dir>     (case i works in <base dir>/<i>, "{D}" in args)
 -- Prints one JSON array of each case's return values. Host lua5.1, router lua and router eco.
 local dir = (arg[0]:match("^(.*)/[^/]*$") or ".") .. "/../src/lib/"
 package.path = dir .. "?.lua;" .. package.path

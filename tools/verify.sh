@@ -10,36 +10,9 @@ fail() { echo "FAIL: $1" >&2; exit 1; }
 
 # Authenticate to /rpc on the box; print the sid on stdout. Fails if login fails.
 rpc_login() {
-  # Password is exported into the remote env so shell-metacharacters in MM_PW
-  # cannot break the remote python string (still keep MM_PW free of newlines).
-  ssh -o BatchMode=yes "root@$HOST" "MM_PW=$(printf %s "$MM_PW" | sed "s/'/'\\\\''/g")" \
-    'python3 - <<'"'"'PY'"'"'
-import hashlib, json, os, subprocess, urllib.request, ssl
-ctx = ssl._create_unverified_context()
-def post(obj):
-    req = urllib.request.Request(
-        "https://127.0.0.1/rpc",
-        data=json.dumps(obj).encode(),
-        headers={"Content-Type": "application/json"},
-    )
-    return json.loads(urllib.request.urlopen(req, context=ctx, timeout=30).read())
-pw = os.environ["MM_PW"]
-user = "root"
-chal = post({"jsonrpc":"2.0","id":1,"method":"challenge","params":{"username":user}})
-r = chal.get("result") or {}
-if not r.get("salt") or not r.get("nonce"):
-    raise SystemExit("challenge failed: " + json.dumps(chal))
-alg = int(r.get("alg") or 5)
-crypt = subprocess.check_output(
-    ["openssl", "passwd", "-%d" % alg, "-salt", r["salt"], pw], text=True
-).strip()
-h = hashlib.sha256(("%s:%s:%s" % (user, crypt, r["nonce"])).encode()).hexdigest()
-res = post({"jsonrpc":"2.0","id":1,"method":"login","params":{"username":user,"hash":h}})
-sid = (res.get("result") or {}).get("sid")
-if not sid:
-    raise SystemExit("login failed: " + json.dumps(res))
-print(sid)
-PY'
+  # GL's challenge/login, done on the box with what the image ships (test/onbox/rpc-login.sh).
+  # The password goes in the remote env, quoted, so its metacharacters cannot break the command.
+  ssh -o BatchMode=yes "root@$HOST" "MM_PW='$(printf %s "$MM_PW" | sed "s/'/'\\\\''/g")' sh -s" < test/onbox/rpc-login.sh
 }
 
 # Run one of test/onbox/*.lua ON the box with the given args. Scripts are shipped
@@ -71,7 +44,7 @@ ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/mudimodem/www/views/gl-sdk
 ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/oui/menu.d/mudimodem.json' \
   || fail "menu json missing"
 
-echo "1b. survives a firmware upgrade (keep.d, nginx alias, python3 runtime)"
+echo "1b. survives a firmware upgrade (keep.d, nginx alias, the image's eco)"
 KEEP_WANT=$(mktemp); sh src/installer/mudimodem-install keepd --from . > "$KEEP_WANT"
 ssh -o BatchMode=yes "root@$HOST" 'cat /lib/upgrade/keep.d/mudimodem' | cmp -s - "$KEEP_WANT" \
   || { rm -f "$KEEP_WANT"; fail "/lib/upgrade/keep.d/mudimodem missing or stale (run ./tools/deploy.sh)"; }
@@ -82,8 +55,8 @@ MISSING=$(ssh -o BatchMode=yes "root@$HOST" 'grep "^/" /lib/upgrade/keep.d/mudim
 [ -z "$MISSING" ] || fail "keep.d lists paths missing on the box: $MISSING"
 ssh -o BatchMode=yes "root@$HOST" 'test -s /etc/nginx/gl-conf.d/mudimodem.conf' \
   || fail "nginx alias /etc/nginx/gl-conf.d/mudimodem.conf missing (step 3 would 404)"
-ssh -o BatchMode=yes "root@$HOST" '/usr/lib/mudimodem/mudimodem-deps check' \
-  || fail "python3 runtime missing (mudimodem-deps check): collector/speedtest/AT tool cannot run"
+ssh -o BatchMode=yes "root@$HOST" 'test -x /usr/bin/eco' \
+  || fail "/usr/bin/eco missing: mudimodemd (collector, AT queue, jobs) cannot run"
 LEFT=$(ssh -o BatchMode=yes "root@$HOST" 'ls -d /www/views/gl-sdk4-ui-mudimodem* /www/mudimodem 2>/dev/null; grep -e mudimodem -e glbattlimit /etc/sysupgrade.conf 2>/dev/null' || true)
 [ -z "$LEFT" ] || fail "2.0.0 leftovers still on the box (install.sh removes them): $LEFT"
 
@@ -187,29 +160,24 @@ ssh -o BatchMode=yes "root@$HOST" '
   || fail "clear_cell_lock must unlock per locked family and re-apply GL's stored band config; panic must reset mode_pref=AUTO"
 
 # 7. History collector: service running + get_history parses telemetry.
-if [ -f src/sbin/mudimodem-collectd ]; then
+if [ -f src/sbin/mudimodemd ]; then
   echo "7. history collector running + get_history"
-  ssh -o BatchMode=yes "root@$HOST" 'test -x /usr/sbin/mudimodem-collectd && test -x /usr/sbin/mudimodemd' \
+  ssh -o BatchMode=yes "root@$HOST" 'test -x /usr/sbin/mudimodemd' \
     || fail "collector not installed (run ./tools/deploy.sh)"
   ssh -o BatchMode=yes "root@$HOST" 'pgrep -f "mudimodemd" >/dev/null' \
     || fail "collector process not running (/etc/init.d/mudimodem-collectd start)"
-  # Engine: mudimodemd on eco unless /etc/mudimodem/collector pins python (or there is no eco).
-  ENGINE=$(ssh -o BatchMode=yes "root@$HOST" '[ "$(cat /etc/mudimodem/collector 2>/dev/null)" != python ] && [ -x /usr/bin/eco ] && echo eco || echo python')
-  # mudimodemd always runs (it also queues the console's AT); `collector` says who samples.
-  WANT=true; [ "$ENGINE" = eco ] || WANT=false
-  ssh -o BatchMode=yes "root@$HOST" 'for i in 1 2 3 4 5 6; do ubus call mudimodem health 2>/dev/null | grep -q "\"collector\": '"$WANT"'" && exit 0; sleep 2; done; exit 1' \
-    || fail "mudimodemd is not answering ubus call mudimodem health with collector=$WANT (logread -e mudimodemd)"
-  echo "   collector engine: $ENGINE (mudimodemd answering)"
+  ssh -o BatchMode=yes "root@$HOST" 'for i in 1 2 3 4 5 6; do ubus call mudimodem health 2>/dev/null | grep -q "\"collector\": true" && exit 0; sleep 2; done; exit 1' \
+    || fail "mudimodemd is not answering ubus call mudimodem health with its collector on (logread -e mudimodemd)"
   # It should be writing samples within a couple of poll intervals.
   ssh -o BatchMode=yes "root@$HOST" 'for i in 1 2 3 4 5 6; do [ -s /tmp/mudimodem/samples.jsonl ] && exit 0; sleep 5; done; exit 1' \
     || fail "no samples.jsonl written after ~30s"
   echo "   collector is sampling ($(ssh -o BatchMode=yes "root@$HOST" 'wc -l < /tmp/mudimodem/samples.jsonl' | tr -d " ") lines)"
   # AT budget: cell_info executes QENG/QCAINFO per call, so the cadence must be
   # the 4.10 default (10 s => <=6 reads/min), never the 1.x 4 s.
-  ssh -o BatchMode=yes "root@$HOST" 'grep -q "MUDIMODEM_POLL\", \"10\"" /usr/sbin/mudimodem-collectd && grep -q "envnum(\"MUDIMODEM_POLL\", 10)" /usr/lib/mudimodem/mudimodemd/collector.lua && ! pgrep -f "MUDIMODEM_POLL=[0-9]" >/dev/null' \
+  ssh -o BatchMode=yes "root@$HOST" 'grep -q "envnum(\"MUDIMODEM_POLL\", 10)" /usr/lib/mudimodem/mudimodemd/collector.lua && ! pgrep -f "MUDIMODEM_POLL=[0-9]" >/dev/null' \
     || fail "collector cadence is not the 10 s default (AT budget)"
   # The newest sample must be 4.10-normalized: signals[] + PCC aliases (checked with the box's
-  # own lua + cjson: no python3 needed). A JSON null decodes to cjson.null, so `~= nil` = key present.
+  # own lua + cjson). A JSON null decodes to cjson.null, so `~= nil` = key present.
   ssh -o BatchMode=yes "root@$HOST" 'lua -e "local c=require\"cjson\"; local f=assert(io.open(\"/tmp/mudimodem/latest.json\")); local d=c.decode(f:read(\"*a\")); assert(type(d.signals)==\"table\" and d.rat~=nil and d.cell_id~=nil and d.rsrp~=nil)"' \
     || fail "latest.json is not the 4.10 normalized sample (signals[] / rat / cell_id)"
   # get_history parses the jsonl (fixtures under a temp HIST dir; ngx-stubbed).
@@ -234,7 +202,7 @@ printf '%s' "$BBODY" | node -e '
     console.log("   battery eval + render-only OK ->", c.name);
   })' || fail "battery chunk eval failed"
 
-if [ -f src/sbin/mudimodem-collectd ]; then
+if [ -f src/sbin/mudimodemd ]; then
   # The newest battery sample must be FRESH (within 60 s of box now). Checking
   # freshness rather than watching the file grow avoids a 25 s sleep here.
   ssh -o BatchMode=yes "root@$HOST" 'for i in 1 2 3 4 5 6; do [ -s /tmp/mudimodem/battery.jsonl ] && exit 0; sleep 5; done; exit 1' \

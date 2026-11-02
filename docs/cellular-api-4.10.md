@@ -181,8 +181,6 @@ awareness. Written to `/tmp/mudimodem/samples.jsonl` + `latest.json` and pushed 
   mudimodemd's AT queue, `src/lib/mudimodemd/atq.lua`; the plugin's `at_console` forwards to it).
 - `cell_info` failure reply: `{"ret": <code>, "resp": "<text>"}` and no `network_type`
   (handler @0x85dc–0x8624) — what `cellular_compat.cell_info_failed` keys on.
-- GL's opkg feed (`/etc/opkg/distfeeds.conf`) carries `python3-light 3.11.7-1`; every module
-  MudiModem's Python imports is in it (checked by importing them with that interpreter).
 - `quec_battery` (START=04) actively manages `vreg/charge_en/hiz_mode` on the same sysfs
   nodes `glbattlimit` writes. Read in the binary: `thermal_battery_state_change →
   set_sgm41542s_func` writes `vreg = full_volt_mv*1000` — **4180 mV when warm, charge
