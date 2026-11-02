@@ -19,6 +19,7 @@ local jsonl = require "mudimodemd.jsonl"
 local battery = require "mudimodemd.battery"
 local net = require "mudimodemd.net"
 local link = require "mudimodemd.link"
+local summary = require "mudimodemd.summary"
 
 local M = {}
 
@@ -57,6 +58,10 @@ function M.config()
     link_retry = envnum("MUDIMODEM_LINK_RETRY", 10),
     link_fail_after = envnum("MUDIMODEM_LINK_FAIL_AFTER", 2),
     link_wait = envnum("MUDIMODEM_LINK_WAIT", 2),           -- ping -W, per target
+    -- the long-term record (summary.lua): one line per hour per cell, on flash, 30 days
+    summary = os.getenv("MUDIMODEM_SUMMARY") or "/etc/mudimodem/summary.jsonl",
+    summary_period = envnum("MUDIMODEM_SUMMARY_PERIOD", 3600),
+    summary_days = envnum("MUDIMODEM_SUMMARY_DAYS", 30),
     crash_dir = os.getenv("MUDIMODEM_CRASH_DIR") or "/data/vendor/modem_crash_log",
     crash_interval = envnum("MUDIMODEM_CRASH_INTERVAL", 60),
     battlimit_pidf = os.getenv("MUDIMODEM_BATTLIMIT_PIDF") or "/tmp/glbattlimit.pid",
@@ -106,7 +111,7 @@ function M.new(conn, cfg, log, event)
   local st = {                                             -- also the `health` reply
     started = os.time(), rf_ticks = 0, rf_samples = 0, rf_failed = 0, rf_last_t = 0,
     batt_samples = 0, push_failures = 0, attached = true, flushed = false, last_error = "",
-    link = "unknown", link_probes = 0, link_lost = 0, outages = 0, modem_crashes = 0,
+    link = "unknown", link_probes = 0, link_lost = 0, outages = 0, modem_crashes = 0, summary_lines = 0,
   }
   self.state = st
 
@@ -241,6 +246,30 @@ function M.new(conn, cfg, log, event)
     end
   end
 
+  -- ---- the long-term record: every sample feeds the hour's per-cell aggregate; a finished hour
+  -- is appended to flash (one write an hour) and the file trimmed to SUMMARY_DAYS.
+  local acc = summary.new(cfg.summary_period, cfg.poll)
+  local function write_summary(lines)
+    if #lines == 0 then return end
+    local parts = {}
+    for i, l in ipairs(lines) do parts[i] = cjson.encode(l) end
+    if not jsonl.append_line(cfg.summary, table.concat(parts, "\n")) then
+      jsonl.mkdir_p(cfg.summary:match("^(.*)/[^/]*$") or ".")
+      if not jsonl.append_line(cfg.summary, table.concat(parts, "\n")) then
+        st.last_error = "summary: cannot write " .. cfg.summary
+        return
+      end
+    end
+    st.summary_lines = st.summary_lines + #lines
+    jsonl.trim(cfg.summary, cfg.summary_days * DAY_MS, cfg.summary_days * 24 * 24)
+  end
+  local SANE_T = 1700000000000                             -- before NTP the clock can read 1970
+  function self.summarize(s)
+    if type(s.t) ~= "number" or s.t < SANE_T then return end
+    local done = acc.add(s)
+    if done then write_summary(done) end
+  end
+
   function self.collect_sample()
     local modem = call("cellular.modem", "status")
     local slot = cc.active_slot(modem, cfg.bus)
@@ -303,6 +332,7 @@ function M.new(conn, cfg, log, event)
       -- kbit/s on the cellular device since the previous tick (absent across a reconnect)
       s.rx_kbps, s.tx_kbps = down, up
       take_probe(s)
+      self.summarize(s)
       local line = cjson.encode(s)
       jsonl.append_line(cfg.samples, line)
       jsonl.write_atomic(cfg.latest, line)
@@ -366,6 +396,7 @@ function M.new(conn, cfg, log, event)
   -- left only in RAM.
   function self.stop()
     self.running = false
+    guarded("summary", function() write_summary(acc.drain()) end)   -- the open hour, as far as it got
     if jsonl.read_history_config(cfg.history_cfg).enabled then guarded("final flush", self.flush) end
   end
 

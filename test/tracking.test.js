@@ -98,7 +98,7 @@ test('default range is the 15 m view (state + active segment)', () => {
   const c = loadChunk();
   const vm = makeVm(c);
   assert.strictEqual(vm.winW, 15, 'data() default winW is 15');
-  const on = walk(c.render.call(makeVm(c, { samples: seedSamples(), events: [] }), h))
+  const on = walk(c.render.call(makeVm(c, { samples: seedSamples(), events: [] }), h).children[0])   // the chart card
     .filter((n) => n.tag === 'button' && n.data.staticClass === 'on');
   assert.strictEqual(on.length, 1, 'exactly one active range segment');
   assert.strictEqual(textOf(on[0]), '15 m', 'the 15 m segment is the active one');
@@ -1030,4 +1030,55 @@ test('the last bus run ends at the last sample once data has stopped, like the l
     serverNow: now, serverNowAt: Date.now(), winW: 15 });
   const last = vm.busRuns('band').slice(-1)[0];
   assert.ok(Math.abs(last.m1 + 5) < 0.05, 'ends at the last sample (-5 min), got ' + last.m1);
+});
+
+// ---- the long-term card (longterm.js; mudimodem.get_summary) ----
+function ltLines() {
+  const H = 3600000, t0 = Date.UTC(2026, 10, 1, 0);
+  return [
+    { t: t0, secs: 1800, slot: 1, carrier: 'T-Mobile', rat: 'NR5G-SA', band: 71, cell: 'A', rsrp: [-110, -100, -95], sinr: [0, 4, 8], ping_n: 60, ping_lost: 3 },
+    { t: t0, secs: 1800, slot: 1, carrier: 'T-Mobile', rat: 'LTE', band: 2, cell: 'B', rsrp: [-90, -85, -80], sinr: [10, 12, 14] },
+    { t: t0 + H, secs: 1200, slot: 1, carrier: 'T-Mobile', rat: 'NR5G-SA', band: 71, cell: 'A', rsrp: [-105, -102, -99], ping_n: 40, ping_lost: 1 },
+    { t: t0 + H, secs: 600, slot: 1, no_service: true },
+    { t: t0 + H, secs: 300, slot: 1, carrier: 'T-Mobile', rat: 'NR5G-SA', band: 71, cell: 'A', rsrp: [-104, -101, -98] },  // a restart mid-hour
+    { t: t0 + 2 * H, secs: 3600, slot: 2, carrier: 'AT&T', rat: 'LTE', band: 66, cell: 'Z', rsrp: [-80, -78, -75] },
+  ];
+}
+
+test('long term: hours merge across cells and restarts, time-weighted; no-service time kept apart', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { samples: seedSamples(), events: [], winW: 60 });
+  vm.lt = { days: 7, lines: ltLines(), loading: false, err: '', now: Date.UTC(2026, 10, 2, 0) };
+  const card = c.render.call(vm, h).children[2];
+  const txt = textOf(card);
+  assert.match(txt, /Long term/);
+  assert.match(txt, /SIM 2/, 'the chart follows the SIM of the newest radio line');
+  // the cells table: most time first, averages weighted by time, loss from the probes
+  const rows = walk(card).filter((n) => n.tag === 'tr').slice(1).map(textOf);
+  assert.match(rows[0], /AT&T · B66 Z · SIM 2.*1 h.*-78 dBm/);
+  assert.match(rows[1], /T-Mobile · n71 A · SIM 1.*55 min.*-100\.8 dBm.*4 dB.*4 %/);
+  assert.match(rows[2], /T-Mobile · B2 B.*30 min.*-85 dBm.*12 dB.*—/);
+});
+
+test('long term: empty, loading and failed states; the range buttons refetch', async () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { samples: seedSamples(), events: [] });
+  vm.lt = { days: 7, lines: [], loading: false, err: '', now: 0 };
+  assert.match(textOf(c.render.call(vm, h).children[2]), /No long-term record yet/);
+  vm.lt = { days: 7, lines: [], loading: false, err: 'no answer', now: 0 };
+  assert.match(textOf(c.render.call(vm, h).children[2]), /Couldn't load the long-term record: no answer/);
+  const calls = [];
+  global.window = { $getCookie: () => 'tok', $axios: { post(url, body) {
+    calls.push(body.params[2], body.params[3]);
+    return Promise.resolve({ data: { result: { lines: ltLines(), now: 5, days: 30 } } });
+  } } };
+  try {
+    const btn = walk(c.render.call(vm, h).children[2]).filter((n) => n.tag === 'button' && textOf(n) === '30 d')[0];
+    btn.data.on.click();
+    assert.strictEqual(vm.lt.loading, true);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    assert.deepStrictEqual(calls, ['get_summary', { days: 30 }]);
+    assert.strictEqual(vm.lt.days, 30);
+    assert.strictEqual(vm.lt.lines.length, 6);
+  } finally { delete global.window; }
 });

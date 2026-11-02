@@ -23,6 +23,8 @@ export MUDIMODEM_VERSION_FILE=$T/mmtmp/local.json
 export MUDIMODEM_HISTORY_CFG=$T/history.json MUDIMODEM_HISTORY_PERSIST=$T/persist
 export MUDIMODEM_BATTLIMIT_FILE=$T/mmtmp/battlimit.json MUDIMODEM_BATTLIMIT_BIN=$T/mmtmp/glbattlimit
 export MUDIMODEM_SPEEDTEST_STATUS=$T/st-status.json MUDIMODEM_ST_SCHEDULE=$T/st-sched.json MUDIMODEM_SPEEDTEST_HIST=$T/st-hist.jsonl
+# never the real /etc/mudimodem: the long-term record and the speed test settings live there
+export MUDIMODEM_SUMMARY=$T/mmtmp/summary.jsonl MUDIMODEM_ST_SETTINGS=$T/st-settings.json
 # host lua has no oui.ubus; the tests that don't stub it only need it to load.
 mkdir -p "$T/lua/oui"; printf 'return { call = function() return {} end }\n' > "$T/lua/oui/ubus.lua"
 export LUA_PATH="$T/lua/?.lua;;"

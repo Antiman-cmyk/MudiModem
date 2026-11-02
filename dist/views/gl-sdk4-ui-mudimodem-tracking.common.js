@@ -139,6 +139,7 @@ var __mm = (() => {
     "Couldn't load the battery view: {err}": "无法加载电池页：{err}",
     "Couldn't load the graph: {err}": "无法加载信号图：{err}",
     "Couldn't load the library: {err}": "无法加载命令库：{err}",
+    "Couldn't load the long-term record: {err}": "无法加载长期记录：{err}",
     "Couldn't load the speed test: {err}": "无法加载测速：{err}",
     "Couldn't load the wider range yet; retrying every {s} s.": "暂时无法加载更长的时间范围；每 {s} 秒重试一次。",
     "Couldn't reach the router to keep it ({err}). The countdown is still running - press Keep again.": "无法连接路由器来保留修改（{err}）。倒计时仍在继续 - 请再次点击“保留”。",
@@ -196,6 +197,7 @@ var __mm = (() => {
     "Kept": "已保留",
     "LIVE": "实时",
     "LTE": "LTE",
+    "Last seen": "最近一次",
     "Latency": "延迟",
     "Latest result": "最近结果",
     "Library": "命令库",
@@ -220,6 +222,7 @@ var __mm = (() => {
     "Lock to this cell": "锁定到此基站",
     "Locked": "已锁定",
     "Locking...": "正在锁定…",
+    "Long term": "长期",
     "Low-level: target {target}, current {cur}": "底层：目标 {target}，当前 {cur}",
     "Mbps down": "Mbps 下载",
     "Mbps up": "Mbps 上传",
@@ -227,11 +230,13 @@ var __mm = (() => {
     "Modem": "Modem",
     "Modem crash": "Modem 崩溃",
     "MudiModem (version unknown)": "MudiModem（版本未知）",
+    "NO SVC": "无服务",
     "Nearby cells": "附近基站",
     "Neighbour cells": "邻区",
     "Network": "网络",
     "Network mode": "网络模式",
     "Network mode — open Bands": "网络模式 — 打开频段页",
+    "No long-term record yet. The router writes one line per hour, so the first appears after the first full hour.": "还没有长期记录。路由器每小时写一条，第一个完整小时之后才会出现。",
     "No scan yet. A scan lists every cell in range, on every carrier, but takes the modem offline for up to ~10 minutes.": "还没有扫描。扫描能列出范围内所有运营商的所有小区，但会让 Modem 离线最长约 10 分钟。",
     "No band changes, handovers or failovers recorded yet.": "还没有记录到频段修改、基站切换或 SIM 卡切换。",
     "No battery history yet — sampling starts within 20 s.": "还没有电池历史 — 20 秒内开始采样。",
@@ -251,10 +256,12 @@ var __mm = (() => {
     "PAUSED": "已暂停",
     "Pin the modem to the cell it is using now - the safest lock target.": "把 Modem 固定在当前使用的基站上 - 最安全的锁定目标。",
     "Ping": "Ping",
+    "Ping loss": "Ping 丢包",
     "Quick": "快速",
     "RPC helper unavailable": "RPC 不可用",
     "RPC unavailable": "RPC 不可用",
     "RSRP · dBm": "RSRP · dBm",
+    "RSRP · hourly min / avg / max · SIM {slot}": "RSRP · 每小时最小 / 平均 / 最大 · SIM {slot}",
     "RSRP · last sample {age} ago": "RSRP · 最后一次采样在 {age} 前",
     "RSRP · last {n} min": "RSRP · 最近 {n} 分钟",
     "RSRQ · dB": "RSRQ · dB",
@@ -386,6 +393,7 @@ var __mm = (() => {
     "filtering off + Auto": "关闭过滤 + 自动",
     "from the last {n} min": "依据最近 {n} 分钟",
     "high band, fast + short range": "高频，速度快、覆盖近",
+    "hourly, kept 30 days": "按小时，保留 30 天",
     "in use": "使用中",
     "load failed": "加载失败",
     "lock failed": "锁定失败",
@@ -396,6 +404,7 @@ var __mm = (() => {
     "modem": "Modem",
     "ms latency": "ms 延迟",
     "newest first": "最新的在前",
+    "no answer": "没有应答",
     "no reply": "无应答",
     "no scan, the link stays up": "无需扫描，连接不中断",
     "nv": "nv",
@@ -562,10 +571,10 @@ var __mm = (() => {
     });
   }
   function localize(component) {
-    var render = component.render;
+    var render2 = component.render;
     component.render = function(h) {
       var seen = typeof window !== "undefined" && window.__mmI18nSeen;
-      return render.call(this, wrapH(h, seen));
+      return render2.call(this, wrapH(h, seen));
     };
     return component;
   }
@@ -578,6 +587,10 @@ var __mm = (() => {
     var d = new Date(t2);
     return p2(d.getHours()) + ":" + p2(d.getMinutes());
   }
+  function mdhm(t2) {
+    var d = new Date(t2);
+    return p2(d.getMonth() + 1) + "/" + p2(d.getDate()) + " " + hhmm(t2);
+  }
   function dur(secs) {
     secs = Math.max(0, Math.round(Number(secs) || 0));
     if (secs < 60) return t("{n} s", { n: secs });
@@ -586,6 +599,249 @@ var __mm = (() => {
     var h = Math.floor(m / 60);
     m %= 60;
     return m ? t("{n} h", { n: h }) + " " + t("{n} min", { n: m }) : t("{n} h", { n: h });
+  }
+
+  // src/web/tabs/longterm.js
+  var HOUR = 36e5;
+  function wavg(acc, v, w) {
+    if (v == null || !isFinite(v) || !(w > 0)) return;
+    acc.s += v * w;
+    acc.w += w;
+  }
+  function avgOf(acc) {
+    return acc.w > 0 ? Math.round(acc.s / acc.w * 10) / 10 : null;
+  }
+  function hourly(lines, slot) {
+    var by = {};
+    (lines || []).forEach(function(l) {
+      if (!l || typeof l.t !== "number" || String(l.slot) !== String(slot)) return;
+      var b = by[l.t] || (by[l.t] = { t: l.t, secs: 0, ns: 0, min: null, max: null, avg: { s: 0, w: 0 } });
+      if (l.no_service) {
+        b.ns += l.secs || 0;
+        return;
+      }
+      b.secs += l.secs || 0;
+      var r = Array.isArray(l.rsrp) ? l.rsrp : null;
+      if (r) {
+        if (b.min == null || r[0] < b.min) b.min = r[0];
+        if (b.max == null || r[2] > b.max) b.max = r[2];
+        wavg(b.avg, r[1], l.secs || 1);
+      }
+    });
+    return Object.keys(by).map(function(k) {
+      var b = by[k];
+      return { t: b.t, secs: b.secs, ns: b.ns, min: b.min, max: b.max, avg: avgOf(b.avg) };
+    }).sort(function(a, b) {
+      return a.t - b.t;
+    });
+  }
+  function cells(lines) {
+    var by = {};
+    (lines || []).forEach(function(l) {
+      if (!l || l.no_service || l.cell == null) return;
+      var k = [l.slot, l.carrier, l.rat, l.band, l.cell].join("|");
+      var c = by[k] || (by[k] = {
+        slot: l.slot,
+        carrier: l.carrier,
+        rat: l.rat,
+        band: l.band,
+        cell: l.cell,
+        secs: 0,
+        rsrp: { s: 0, w: 0 },
+        sinr: { s: 0, w: 0 },
+        ping_n: 0,
+        ping_lost: 0,
+        last: 0
+      });
+      var w = l.secs || 0;
+      c.secs += w;
+      wavg(c.rsrp, Array.isArray(l.rsrp) ? l.rsrp[1] : null, w);
+      wavg(c.sinr, Array.isArray(l.sinr) ? l.sinr[1] : null, w);
+      c.ping_n += l.ping_n || 0;
+      c.ping_lost += l.ping_lost || 0;
+      if (l.t > c.last) c.last = l.t;
+    });
+    return Object.keys(by).map(function(k) {
+      var c = by[k];
+      return {
+        slot: c.slot,
+        carrier: c.carrier,
+        rat: c.rat,
+        band: c.band,
+        cell: c.cell,
+        secs: c.secs,
+        rsrp: avgOf(c.rsrp),
+        sinr: avgOf(c.sinr),
+        last: c.last,
+        loss: c.ping_n ? Math.round(c.ping_lost / c.ping_n * 1e3) / 10 : null
+      };
+    }).sort(function(a, b) {
+      return b.secs - a.secs;
+    });
+  }
+  function chartSlot(lines) {
+    var best = null;
+    (lines || []).forEach(function(l) {
+      if (l && !l.no_service && l.slot != null && (!best || l.t >= best.t)) best = l;
+    });
+    return best ? best.slot : null;
+  }
+  function bandLabel(c) {
+    if (c.band == null) return "";
+    return (/NR5G/.test(c.rat || "") ? "n" : "B") + c.band;
+  }
+  function render(h, vm) {
+    var lt = vm.lt, W = vm.width || 900;
+    var seg = h("span", { staticClass: "mmt-seg" }, [[7, "7 d"], [30, "30 d"]].map(function(d) {
+      return h("button", {
+        key: d[0],
+        staticClass: lt.days === d[0] ? "on" : "",
+        on: { click: function() {
+          vm.fetchLongTerm(d[0]);
+        } }
+      }, d[1]);
+    }));
+    var head = h("div", { staticClass: "mmt-head" }, [
+      h("span", { staticClass: "mmt-title" }, "Long term"),
+      h("span", { staticClass: "mmt-hint" }, "hourly, kept 30 days"),
+      h("span", { staticStyle: { flex: "1" } }),
+      seg
+    ]);
+    var body;
+    if (lt.loading && !lt.lines.length) body = h("div", { staticClass: "mmt-empty" }, "Loading…");
+    else if (lt.err) body = h("div", { staticClass: "mmt-empty" }, t("Couldn't load the long-term record: {err}", { err: lt.err }));
+    else if (!lt.lines.length)
+      body = h(
+        "div",
+        { staticClass: "mmt-empty" },
+        "No long-term record yet. The router writes one line per hour, so the first appears after the first full hour."
+      );
+    else body = [renderChart(h, vm, W), renderCells(h, vm)];
+    return h("div", { staticClass: "mmt-card" }, [head].concat(body));
+  }
+  function renderChart(h, vm, W) {
+    var lt = vm.lt, slot = chartSlot(lt.lines), pts = hourly(lt.lines, slot);
+    var PADL = 42, PADR = 36, TOP = 16, PH = 120, NS_H = 10;
+    var t1 = lt.now || Date.now(), t0 = t1 - lt.days * 24 * HOUR;
+    var xOf = function(t2) {
+      return PADL + (t2 - t0) / (t1 - t0) * (W - PADL - PADR);
+    };
+    var lo = -125, hi = -65;
+    pts.forEach(function(p) {
+      if (p.min != null && p.min < lo + 5) lo = Math.floor(p.min / 5) * 5 - 5;
+      if (p.max != null && p.max > hi - 5) hi = Math.ceil(p.max / 5) * 5 + 5;
+    });
+    var yOf = function(v) {
+      return TOP + (hi - Math.max(lo, Math.min(hi, v))) / (hi - lo) * PH;
+    };
+    var bot = TOP + PH, nsTop = bot + 6, kids = [];
+    var bw = Math.max(1, (W - PADL - PADR) / (lt.days * 24) - 0.5);
+    kids.push(h(
+      "text",
+      { attrs: { x: PADL, y: 10, "font-size": 9.5, fill: "var(--text-badge)" } },
+      t("RSRP · hourly min / avg / max · SIM {slot}", { slot: slot == null ? "—" : slot })
+    ));
+    [hi, lo].forEach(function(v) {
+      kids.push(h("text", { attrs: {
+        x: PADL - 4,
+        y: yOf(v) + 3,
+        "text-anchor": "end",
+        "font-size": 9,
+        fill: "var(--text-badge)",
+        "font-family": "ui-monospace,monospace"
+      } }, String(v)));
+      kids.push(h("line", { attrs: { x1: PADL, x2: W - PADR, y1: yOf(v), y2: yOf(v), stroke: "var(--divider)", "stroke-width": 1 } }));
+    });
+    var d = new Date(t0);
+    d.setHours(24, 0, 0, 0);
+    var every = lt.days > 10 ? 5 : 1, i = 0;
+    for (var m = d.getTime(); m < t1; m += 24 * HOUR, i++) {
+      var x = xOf(m);
+      kids.push(h("line", { attrs: {
+        x1: x.toFixed(1),
+        x2: x.toFixed(1),
+        y1: TOP,
+        y2: nsTop + NS_H,
+        stroke: "var(--divider)",
+        "stroke-width": 1,
+        "stroke-dasharray": "2 3"
+      } }));
+      if (i % every === 0) kids.push(h("text", { attrs: {
+        x: x.toFixed(1),
+        y: nsTop + NS_H + 12,
+        "text-anchor": "middle",
+        "font-size": 9,
+        fill: "var(--text-badge)",
+        "font-family": "ui-monospace,monospace"
+      } }, mdhm(m).slice(0, 5)));
+    }
+    var range = "", avg = "", ns = "", pen = false, prev = null;
+    pts.forEach(function(p) {
+      var x2 = xOf(p.t + HOUR / 2);
+      if (p.min != null && p.max != null)
+        range += "M" + x2.toFixed(1) + " " + yOf(p.max).toFixed(1) + "V" + yOf(p.min).toFixed(1) + " ";
+      if (p.avg != null) {
+        if (prev != null && p.t - prev > HOUR) pen = false;
+        avg += (pen ? "L" : "M") + x2.toFixed(1) + " " + yOf(p.avg).toFixed(1) + " ";
+        pen = true;
+        prev = p.t;
+      } else pen = false;
+      if (p.ns > 0) {
+        var nh = Math.max(1.5, Math.min(1, p.ns / 3600) * NS_H);
+        ns += "M" + x2.toFixed(1) + " " + (nsTop + NS_H).toFixed(1) + "v" + (-nh).toFixed(1) + " ";
+      }
+    });
+    if (range) kids.push(h("path", { attrs: {
+      fill: "none",
+      stroke: "var(--primary)",
+      "stroke-opacity": 0.3,
+      "stroke-width": bw.toFixed(1),
+      d: range.trim()
+    } }));
+    if (avg) kids.push(h("path", { attrs: {
+      fill: "none",
+      stroke: "var(--primary)",
+      "stroke-width": 1.5,
+      "stroke-linejoin": "round",
+      d: avg.trim()
+    } }));
+    kids.push(h("text", { attrs: { x: 6, y: nsTop + NS_H - 1, "font-size": 9, fill: "var(--text-badge)" } }, "NO SVC"));
+    if (ns) kids.push(h("path", { attrs: {
+      fill: "none",
+      stroke: "var(--error)",
+      "stroke-width": Math.max(1.5, bw).toFixed(1),
+      d: ns.trim()
+    } }));
+    var H = nsTop + NS_H + 16;
+    return h("svg", {
+      attrs: { viewBox: "0 0 " + W + " " + H, width: W, height: H, preserveAspectRatio: "none" },
+      staticStyle: { display: "block", width: "100%" }
+    }, kids);
+  }
+  function renderCells(h, vm) {
+    var list = cells(vm.lt.lines).slice(0, 12);
+    if (!list.length) return null;
+    var rows = list.map(function(c, i) {
+      return h("tr", { key: i }, [
+        h("td", [h("b", (c.carrier || "—") + " · " + bandLabel(c)), " " + c.cell + (c.slot != null ? " · SIM " + c.slot : "")]),
+        h("td", { staticClass: "mmt-nw" }, dur(c.secs)),
+        h("td", { staticClass: "mmt-nw" }, c.rsrp == null ? "—" : c.rsrp + " dBm"),
+        h("td", { staticClass: "mmt-nw mmt-opt" }, c.sinr == null ? "—" : c.sinr + " dB"),
+        h("td", { staticClass: "mmt-nw" }, c.loss == null ? "—" : c.loss + " %"),
+        h("td", { staticClass: "mmt-opt tm" }, mdhm(c.last))
+      ]);
+    });
+    return h("div", { staticClass: "mmt-cellswrap" }, [h("table", { staticClass: "mmt-log mmt-cells" }, [
+      h("thead", [h("tr", [
+        h("th", "Cell"),
+        h("th", "Time"),
+        h("th", "RSRP"),
+        h("th", { staticClass: "mmt-opt" }, "SINR"),
+        h("th", "Ping loss"),
+        h("th", { staticClass: "mmt-opt" }, "Last seen")
+      ])]),
+      h("tbody", rows)
+    ])]);
   }
 
   // src/web/tabs/tracking.js
@@ -671,7 +927,9 @@ var __mm = (() => {
           preloaded: false,
           loadFails: 0,
           retryMs: 0,
-          missingSince: null
+          missingSince: null,
+          // the long-term card (longterm.js): get_summary's lines for the last `days`
+          lt: { days: 7, lines: [], loading: false, err: "", now: 0 }
         };
       },
       computed: {
@@ -724,6 +982,7 @@ var __mm = (() => {
         window.addEventListener("resize", this._onResize);
         this._alive = true;
         this.fetchHistory();
+        this.fetchLongTerm(7);
         this.pushSeenAt = Date.now();
         this.poll = setInterval(function() {
           if (Date.now() - self.pushSeenAt > STALL_MS) self.fetchHistory({ since: self.lastT, merge: true });
@@ -1756,12 +2015,26 @@ var __mm = (() => {
           ]);
           return h("div", { staticClass: "mmt" }, [
             h("div", { staticClass: "mmt-card" }, [head, note, body, foot]),
-            this.renderLog(h)
+            this.renderLog(h),
+            render(h, this)
           ]);
+        },
+        // The long-term record (get_summary), background and silent: the card says what failed.
+        fetchLongTerm: function(days) {
+          var self = this, seq = this._ltSeq = (this._ltSeq || 0) + 1;
+          this.lt = Object.assign({}, this.lt, { days, loading: true, err: "" });
+          return rpcSilent("get_summary", { days }, 2e4).then(function(r) {
+            if (seq !== self._ltSeq || self._alive === false) return;
+            if (!r || r.error) {
+              self.lt = Object.assign({}, self.lt, { loading: false, err: r && r.error || "no answer" });
+              return;
+            }
+            self.lt = { days, lines: Array.isArray(r.lines) ? r.lines : [], loading: false, err: "", now: r.now || Date.now() };
+          });
         },
         injectStyle: function() {
           if (typeof document === "undefined" || document.getElementById(this.styleId)) return;
-          var css = ".mmt{color:var(--text-regular);font-variant-numeric:tabular-nums}.mmt-card{background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);margin-bottom:11px}.mmt-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 14px 10px}.mmt-title{font-size:14px;font-weight:600;color:var(--text-title)}.mmt-hint{font-size:11.5px;color:var(--text-badge)}.mmt-sp{flex:1}.mmt-crumb{background:none;border:0;font:inherit;font-size:12px;color:var(--primary);cursor:pointer;padding:0}.mmt-seg{display:inline-flex;border:1px solid var(--border);border-radius:3px;overflow:hidden}.mmt-seg button{font:inherit;font-size:11.5px;background:transparent;border:0;padding:5px 12px;cursor:pointer;color:var(--text-weak);border-right:1px solid var(--border)}.mmt-seg button:last-child{border-right:0}.mmt-seg button.on{background:var(--primary);color:#fff;font-weight:600}.mmt-live{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--success);cursor:pointer;background:none;border:1px solid var(--border);border-radius:3px;padding:5px 10px}.mmt-live .d{width:7px;height:7px;border-radius:50%;background:var(--success)}.mmt-live.off{color:var(--text-badge)}.mmt-live.off .d{background:var(--text-hint)}.mmt-held{font-size:11px;color:var(--text-badge)}.mmt-note{font-size:11.5px;color:var(--warning-hover,#c4851c);padding:0 14px 8px}.mmt-lanes{position:relative;padding:2px 0 6px;cursor:crosshair}.mmt-lanes svg{display:block;width:100%;overflow:visible}.mmt-foot{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:8px 14px 11px;border-top:1px solid var(--divider);font-size:11px;color:var(--text-badge)}.mmt-lg{display:inline-flex;align-items:center;gap:5px}.mmt-tip{position:absolute;top:26px;left:8px;pointer-events:none;z-index:5;background:var(--background-card);border:1px solid var(--border);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.12);padding:8px 10px;width:184px;height:184px;overflow:hidden}.mmt-tip .t{font-size:10.5px;color:var(--text-badge);margin-bottom:5px}.mmt-tip .e{font-size:11px;font-weight:600;margin:-1px 0 5px;padding-bottom:5px;border-bottom:1px solid var(--divider);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mmt-tip table{border-collapse:collapse;width:100%}.mmt-tip td{padding:1px 0;font-size:11.5px}.mmt-tip td.k{color:var(--text-badge);font-size:10px;text-transform:uppercase;letter-spacing:.04em;padding-right:10px}.mmt-tip td.v{font-weight:600;color:var(--text-title);text-align:right;white-space:nowrap}.mmt-empty{padding:30px 14px;text-align:center;color:var(--text-hint);font-size:12.5px;line-height:1.6}.mmt-log{width:100%;border-collapse:collapse}.mmt-log th{font-size:10px;font-weight:500;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge);text-align:left;padding:7px 14px 6px;border-bottom:1px solid var(--divider)}.mmt-log td{font-size:12px;padding:6px 14px;border-bottom:1px solid var(--divider);color:var(--text-regular)}.mmt-log td.tm{font-family:var(--mono,ui-monospace,monospace);font-size:11px;color:var(--text-weak);white-space:nowrap}.mmt-chip{display:inline-block;font-size:10px;font-weight:600;border-radius:2px;padding:1px 6px}.mmt-chip.user{background:var(--primary-background,#eef1fe);color:var(--primary)}.mmt-chip.dog{background:var(--warning-background,#fef6e9);color:var(--warning-hover,#c4851c)}.mmt-chip.net{background:var(--background-title,#f2f2f7);color:var(--text-badge)}.mmt-chip.link,.mmt-chip.modem{background:var(--error-background);color:var(--error-hover)}@media(max-width:720px){.mmt-hint{display:none}}";
+          var css = ".mmt{color:var(--text-regular);font-variant-numeric:tabular-nums}.mmt-card{background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);margin-bottom:11px}.mmt-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 14px 10px}.mmt-title{font-size:14px;font-weight:600;color:var(--text-title)}.mmt-hint{font-size:11.5px;color:var(--text-badge)}.mmt-sp{flex:1}.mmt-crumb{background:none;border:0;font:inherit;font-size:12px;color:var(--primary);cursor:pointer;padding:0}.mmt-seg{display:inline-flex;border:1px solid var(--border);border-radius:3px;overflow:hidden}.mmt-seg button{font:inherit;font-size:11.5px;background:transparent;border:0;padding:5px 12px;cursor:pointer;color:var(--text-weak);border-right:1px solid var(--border)}.mmt-seg button:last-child{border-right:0}.mmt-seg button.on{background:var(--primary);color:#fff;font-weight:600}.mmt-live{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--success);cursor:pointer;background:none;border:1px solid var(--border);border-radius:3px;padding:5px 10px}.mmt-live .d{width:7px;height:7px;border-radius:50%;background:var(--success)}.mmt-live.off{color:var(--text-badge)}.mmt-live.off .d{background:var(--text-hint)}.mmt-held{font-size:11px;color:var(--text-badge)}.mmt-note{font-size:11.5px;color:var(--warning-hover,#c4851c);padding:0 14px 8px}.mmt-lanes{position:relative;padding:2px 0 6px;cursor:crosshair}.mmt-lanes svg{display:block;width:100%;overflow:visible}.mmt-foot{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:8px 14px 11px;border-top:1px solid var(--divider);font-size:11px;color:var(--text-badge)}.mmt-lg{display:inline-flex;align-items:center;gap:5px}.mmt-tip{position:absolute;top:26px;left:8px;pointer-events:none;z-index:5;background:var(--background-card);border:1px solid var(--border);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.12);padding:8px 10px;width:184px;height:184px;overflow:hidden}.mmt-tip .t{font-size:10.5px;color:var(--text-badge);margin-bottom:5px}.mmt-tip .e{font-size:11px;font-weight:600;margin:-1px 0 5px;padding-bottom:5px;border-bottom:1px solid var(--divider);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mmt-tip table{border-collapse:collapse;width:100%}.mmt-tip td{padding:1px 0;font-size:11.5px}.mmt-tip td.k{color:var(--text-badge);font-size:10px;text-transform:uppercase;letter-spacing:.04em;padding-right:10px}.mmt-tip td.v{font-weight:600;color:var(--text-title);text-align:right;white-space:nowrap}.mmt-empty{padding:30px 14px;text-align:center;color:var(--text-hint);font-size:12.5px;line-height:1.6}.mmt-log{width:100%;border-collapse:collapse}.mmt-cells td b{font-weight:600;color:var(--text-title)}.mmt-cells td.mmt-nw{white-space:nowrap}.mmt-cellswrap{overflow-x:auto;margin-top:8px}@media (max-width:560px){.mmt-cells .mmt-opt{display:none}.mmt-cells td,.mmt-cells th{padding:6px 8px}}.mmt-log th{font-size:10px;font-weight:500;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge);text-align:left;padding:7px 14px 6px;border-bottom:1px solid var(--divider)}.mmt-log td{font-size:12px;padding:6px 14px;border-bottom:1px solid var(--divider);color:var(--text-regular)}.mmt-log td.tm{font-family:var(--mono,ui-monospace,monospace);font-size:11px;color:var(--text-weak);white-space:nowrap}.mmt-chip{display:inline-block;font-size:10px;font-weight:600;border-radius:2px;padding:1px 6px}.mmt-chip.user{background:var(--primary-background,#eef1fe);color:var(--primary)}.mmt-chip.dog{background:var(--warning-background,#fef6e9);color:var(--warning-hover,#c4851c)}.mmt-chip.net{background:var(--background-title,#f2f2f7);color:var(--text-badge)}.mmt-chip.link,.mmt-chip.modem{background:var(--error-background);color:var(--error-hover)}@media(max-width:720px){.mmt-hint{display:none}}";
           var el = document.createElement("style");
           el.id = this.styleId;
           el.textContent = css;

@@ -19,6 +19,7 @@
 // buckets drive the GL quality ramp. All colour is GL theme tokens.
 import { rpcSilent } from "../kit/rpc.js";
 import { hhmm, dur } from "../kit/fmt.js";
+import { render as renderLongTerm } from "./longterm.js";
 import { localize } from "../kit/i18n.js";
 import { t as T } from "../kit/i18n.js";
 export default localize((function () {
@@ -104,7 +105,9 @@ export default localize((function () {
         // loadFails/retryMs drive the backoff and the honest message.
         // missingSince: the start of a tail (hole backfill) that failed or
         // was dropped mid-flight; the next push asks for it again.
-        preloaded: false, loadFails: 0, retryMs: 0, missingSince: null };
+        preloaded: false, loadFails: 0, retryMs: 0, missingSince: null,
+        // the long-term card (longterm.js): get_summary's lines for the last `days`
+        lt: { days: 7, lines: [], loading: false, err: "", now: 0 } };
     },
 
     computed: {
@@ -150,6 +153,7 @@ export default localize((function () {
       // late reply after beforeDestroy changes nothing.
       this._alive = true;
       this.fetchHistory();                        // initial: just the visible window
+      this.fetchLongTerm(7);                      // background: the long-term card
       // No polling: samples and events arrive as pushes. The timer is only a
       // stall guard — when no push has landed for a while (collector restart,
       // websocket reconnect) it fetches the tail once. It runs while PAUSED
@@ -1049,8 +1053,19 @@ export default localize((function () {
         ]);
         return h("div", { staticClass: "mmt" }, [
           h("div", { staticClass: "mmt-card" }, [head, note, body, foot]),
-          this.renderLog(h)
+          this.renderLog(h),
+          renderLongTerm(h, this)
         ]);
+      },
+      // The long-term record (get_summary), background and silent: the card says what failed.
+      fetchLongTerm: function (days) {
+        var self = this, seq = (this._ltSeq = (this._ltSeq || 0) + 1);
+        this.lt = Object.assign({}, this.lt, { days: days, loading: true, err: "" });
+        return rpcSilent("get_summary", { days: days }, 20000).then(function (r) {
+          if (seq !== self._ltSeq || self._alive === false) return;
+          if (!r || r.error) { self.lt = Object.assign({}, self.lt, { loading: false, err: (r && r.error) || "no answer" }); return; }
+          self.lt = { days: days, lines: Array.isArray(r.lines) ? r.lines : [], loading: false, err: "", now: r.now || Date.now() };
+        });
       },
 
       injectStyle: function () {
@@ -1081,6 +1096,9 @@ export default localize((function () {
           '.mmt-tip td.v{font-weight:600;color:var(--text-title);text-align:right;white-space:nowrap}' +
           '.mmt-empty{padding:30px 14px;text-align:center;color:var(--text-hint);font-size:12.5px;line-height:1.6}' +
           '.mmt-log{width:100%;border-collapse:collapse}' +
+          '.mmt-cells td b{font-weight:600;color:var(--text-title)}.mmt-cells td.mmt-nw{white-space:nowrap}' +
+          '.mmt-cellswrap{overflow-x:auto;margin-top:8px}' +
+          '@media (max-width:560px){.mmt-cells .mmt-opt{display:none}.mmt-cells td,.mmt-cells th{padding:6px 8px}}' +
           '.mmt-log th{font-size:10px;font-weight:500;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge);text-align:left;padding:7px 14px 6px;border-bottom:1px solid var(--divider)}' +
           '.mmt-log td{font-size:12px;padding:6px 14px;border-bottom:1px solid var(--divider);color:var(--text-regular)}' +
           '.mmt-log td.tm{font-family:var(--mono,ui-monospace,monospace);font-size:11px;color:var(--text-weak);white-space:nowrap}' +

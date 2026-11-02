@@ -23,7 +23,11 @@ purpose: GL 4.10's own Internet page covers them completely. Everything live on 
 Watch the radio over time. RSRP, SINR, and RSRQ share one time axis so you can see them move together,
 with lanes below showing exactly when the **band**, **cell**, or **SIM** changed — and an **event log**
 that records every change with a timestamp and who caused it (*you*, the *network*, or the safety
-watchdog). Pick a window from 15 minutes to 24 hours. Two badges on the signal strip show at a glance
+watchdog). Under the signal, a **throughput** lane (down / up) and a **ping** lane: the router pings
+out of the cellular interface every 30 s, so "signal fine but no internet" shows up, and losing and
+regaining the internet is logged with how long it lasted (as are modem crashes). Pick a window from
+15 minutes to 24 hours; the **Long term** card below keeps 30 days of hourly summaries per cell.
+Two badges on the signal strip show at a glance
 whether a **mode lock** (Auto / 4G-only / 5G-only) or a **tower lock** is in force; click either to jump
 to its tab.
 
@@ -46,7 +50,9 @@ administering over.
 
 Pin the modem to a specific cell so it won't hand over. The tab shows your current serving cell and can
 **scan for nearby lockable cells**, listed with your **serving carrier's cells first** and **5G above
-LTE**, each with a one-click Lock. Same confirm-or-revert safety as Bands.
+LTE**, each with a one-click Lock. Same confirm-or-revert safety as Bands. A scan takes the modem
+offline for minutes; **Read neighbours** instead asks the modem once which other cells it measures
+(LTE and 5G NSA; 5G SA has no such list) and keeps the connection up.
 
 ⚠️ A kept cell lock lives in the modem's own memory and survives reboot, reflash, *and* factory reset 
 

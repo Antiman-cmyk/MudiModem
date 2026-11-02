@@ -1,8 +1,8 @@
 # Changelog
 
 ## Unreleased (toward 3.0)
-Groundwork from the 3.0 refactor plan (`docs/architecture.md`: R0, R1, the change-transaction
-part of R2 and the first step of R3), plus the fixes it surfaced.
+The 3.0 refactor (`docs/architecture.md`: R0, R1, the change-transaction part of R2, R3) and the
+R4 features built on it, plus the fixes they surfaced.
 - **One manifest, one installer.** `manifest.txt` lists what ships where. `install.sh`,
   `uninstall.sh`, `tools/deploy.sh` and the self-updater all run `src/installer/mudimodem-install`.
   install.sh downloads everything before touching the router. The firmware-upgrade keep list
@@ -58,6 +58,10 @@ part of R2 and the first step of R3), plus the fixes it surfaced.
   now one round trip (no connection setup in it). Choose **Quick** (at most ~29 MB) or
   **Thorough** (at most ~290 MB), and Cloudflare or your own **LibreSpeed** server. Each result
   says what it cost; the history chart has a scale and dates.
+- **A long-term record:** the router keeps 30 days of hourly summaries per serving cell (signal
+  min / average / max, ping loss, throughput, time without service; one small write an hour to
+  flash). Tracking's new **Long term** card shows 7 or 30 days of hourly RSRP and the cells you
+  spent your time on, with how they performed — "was it like this last week, and where?".
 - **Modem crashes are logged.** When GL saves a modem crash dump (the modem restarted on its own),
   Tracking records a "Modem crash" event at that time.
 - **Chinese:** the whole Modem page is available in Simplified Chinese and follows GL's language

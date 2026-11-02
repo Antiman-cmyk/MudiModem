@@ -94,6 +94,14 @@ const RPC = {
     { t: NOW - 350000, kind: "link", label: "Offline", detail: "No reply to ping" },
     { t: NOW - 290000, kind: "link", label: "Back online", detail: "after 70 s", secs: 70 }] },
   get_battery_history: { now: NOW, samples: [] },
+  get_summary: { now: NOW, days: 7, lines: Array.from({ length: 7 * 24 }, (_, i) => {
+    const t = Math.floor((NOW - 7 * 86400000) / 3600000) * 3600000 + i * 3600000, w = Math.sin(i / 9) * 7;
+    const out = [{ t, secs: i % 24 === 3 ? 2400 : 3600, slot: 1, carrier: "T-Mobile", rat: i % 30 < 20 ? "NR5G-SA" : "LTE",
+      band: i % 30 < 20 ? 71 : 2, cell: i % 30 < 20 ? "187461035" : "310260-2201", rsrp: [Math.round(-108 + w), Math.round(-101 + w), Math.round(-95 + w)],
+      sinr: [0, Math.round(5 + w / 2), 12], ping_n: 120, ping_lost: i % 24 === 3 ? 9 : 0, ping_ms: 38 }];
+    if (i % 24 === 3) out.push({ t, secs: 1200, slot: 1, no_service: true });
+    return out;
+  }).flat() },
   change_status: flag("pending")
     ? { now: nowS, pending: { kind: "bands", slot: 1, deadline: nowS + 42, window: 60, applied: { sa: "41:71", mode: "AUTO" } } }
     : { now: nowS },

@@ -108,7 +108,8 @@ class CollectorOnEmulatedBus(unittest.TestCase):
                    MUDIMODEM_BATT_SYSFS=os.path.join(d, "sysfs"),
                    MUDIMODEM_BATTLIMIT_PIDF=os.path.join(d, "glbattlimit.pid"),
                    MUDIMODEM_BATTLIMIT_LIMF=os.path.join(d, "glbattlimit.limit"),
-                   MUDIMODEM_LINK_INTERVAL="0", MUDIMODEM_CRASH_INTERVAL="0")   # their own drills
+                   MUDIMODEM_LINK_INTERVAL="0", MUDIMODEM_CRASH_INTERVAL="0",   # their own drills
+                   MUDIMODEM_SUMMARY=os.path.join(d, "summary.jsonl"))
         env.update(extra_env or {})
         env.pop("MUDIMODEM_NO_WS_PUSH", None)
         p = subprocess.Popen(ENGINES[engine], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -125,6 +126,7 @@ class CollectorOnEmulatedBus(unittest.TestCase):
                 "samples": jsonl(os.path.join(hist, "samples.jsonl")),
                 "battery": jsonl(os.path.join(hist, "battery.jsonl")),
                 "events": jsonl(os.path.join(hist, "events.jsonl")),
+                "summary": jsonl(os.path.join(d, "summary.jsonl")),
                 "latest": jsonl(os.path.join(hist, "latest.json")),
                 "batt_latest": jsonl(os.path.join(hist, "battery-latest.json")),
                 "persist": {n: jsonl(os.path.join(persist, n)) for n in
@@ -335,6 +337,32 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         self.assertEqual(sorted(pushed), sorted(e["label"] for e in r["events"]))
         self.assertIn("link: offline", r["stderr"])
 
+    def test_eco_hourly_summary_per_cell(self):
+        """The long-term record: every sample lands in its hour's per-cell aggregate (1 s "hours"
+        here), a finished hour is appended to the summary file, the open one on a clean stop; no
+        service is time too; the time covered adds up to the samples taken."""
+        scen = {"modem_status": ct.MODEM_STATUS_410_TWO, "network_info": ct.NETWORK_INFO_410,
+                "cell_info": CELLS, "has_ws": True}
+        r = self.run_collector("eco", scen, ticks=16, extra_env={"MUDIMODEM_SUMMARY_PERIOD": "1"})
+        self.assertEqual(r["rc"], 0, r["stderr"])
+        lines = r["summary"]
+        self.assertGreaterEqual(len(lines), 3, lines)
+        ts = [x["t"] for x in lines]
+        self.assertEqual(ts, sorted(ts), "append order is time order")
+        self.assertTrue(all(t % 1000 == 0 for t in ts), "bucket starts")
+        self.assertAlmostEqual(sum(x["secs"] for x in lines), 0.2 * len(r["samples"]), delta=0.05,
+                               msg="every sample is in exactly one line")
+        cells = [x for x in lines if not x.get("no_service")]
+        self.assertTrue(any(x.get("no_service") for x in lines), "no service is recorded time")
+        self.assertEqual({x["cell"] for x in cells}, {s["id"] for s in r["samples"] if s.get("id")})
+        for x in cells:
+            lo, avg, hi = x["rsrp"]
+            self.assertTrue(lo <= avg <= hi, x)
+            self.assertEqual(x["slot"], 1)
+        # one key per (hour, cell): no duplicate within a bucket from one run
+        keys = [(x["t"], x.get("cell"), x.get("no_service")) for x in lines]
+        self.assertEqual(len(keys), len(set(keys)))
+
     def test_eco_shared_trim_loses_no_line(self):
         """events.jsonl is appended to by the plugin and the watchdog while the daemon trims it:
         a line appended during a trim (before the rename, or into the old inode after it) must
@@ -376,7 +404,8 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         env = dict(os.environ, MUDIMODEM_UBUS_SOCK=os.path.join(bus, "ubus.sock"),
                    MUDIMODEM_LIB=os.path.join(ROOT, "src", "lib"), MUDIMODEM_POLL="0.2",
                    MUDIMODEM_HIST=os.path.join(d, "hist"), MUDIMODEM_HISTORY_CFG=os.path.join(d, "none"),
-                   MUDIMODEM_BATT_SYSFS=os.path.join(d, "none"))
+                   MUDIMODEM_BATT_SYSFS=os.path.join(d, "none"), MUDIMODEM_SUMMARY=os.path.join(d, "summary.jsonl"),
+                   MUDIMODEM_LINK_INTERVAL="0", MUDIMODEM_CRASH_INTERVAL="0")
         return d, bus, env
 
     def spawn_eco(self, env):
@@ -687,7 +716,8 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         env = dict(os.environ, MUDIMODEM_UBUS_SOCK=os.path.join(bus, "ubus.sock"),
                    MUDIMODEM_LIB=os.path.join(ROOT, "src", "lib"), MUDIMODEM_POLL="0.2",
                    MUDIMODEM_HIST=os.path.join(d, "hist"), MUDIMODEM_HISTORY_CFG=os.path.join(d, "none"),
-                   MUDIMODEM_BATT_SYSFS=os.path.join(d, "none"))
+                   MUDIMODEM_BATT_SYSFS=os.path.join(d, "none"), MUDIMODEM_SUMMARY=os.path.join(d, "summary.jsonl"),
+                   MUDIMODEM_LINK_INTERVAL="0", MUDIMODEM_CRASH_INTERVAL="0")
         p = subprocess.Popen(ENGINES["eco"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: (p.poll() is None and p.kill(), p.stdout.close(), p.stderr.close()))
         h = None

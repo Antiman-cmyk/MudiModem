@@ -1542,6 +1542,31 @@ function M.set_speedtest_settings(args)
   return { ok = true, profile = profile, server = server, librespeed_url = url or "" }
 end
 
+-- ======================= The long-term record (hourly) =======================
+-- mudimodemd's collector appends one line per hour per serving cell (src/lib/mudimodemd/summary.lua)
+-- to SUMMARY on flash and keeps 30 days (a few hundred KB). args = { days = 1..30 } (default 7).
+-- -> { lines = [...oldest first], now }. Lines of one hour/cell may repeat across a daemon
+-- restart; the page merges them.
+local SUMMARY = os.getenv("MUDIMODEM_SUMMARY") or "/etc/mudimodem/summary.jsonl"
+
+function M.get_summary(args)
+  local days = math.floor(tonumber(args and args.days) or 7)
+  if days < 1 then days = 1 elseif days > 30 then days = 30 end
+  local since = (os.time() - days * 86400) * 1000
+  local out = {}
+  local fh = io.open(SUMMARY, "r")
+  if fh then
+    for line in fh:lines() do
+      if #line > 1 then
+        local ok, obj = pcall(cjson.decode, line)   -- cjson.decode can't yield; pcall is safe here
+        if ok and type(obj) == "table" and tonumber(obj.t) and obj.t >= since then out[#out + 1] = obj end
+      end
+    end
+    fh:close()
+  end
+  return { lines = arr(out), now = os.time() * 1000, days = days }
+end
+
 -- ======================= Phase 5: MudiModem version check ====================
 -- app_version reads the installed version from a local file and the latest from
 -- version.json at the recorded install source, fetched by a mudimodemd job (no RPC arg
