@@ -335,6 +335,9 @@ GL 4.10.0 的机制（在 `app.*.js` 和 `/www/i18n` 里读到）：
   - §2 说只有我们调用 `cell_info`，实际 GL 自己的采集器和详情页都在调（§4.1）。
   - `getNetworkType` 的错误不止 5 / 51 对调，2 / 3 也错了一位 🟢。
 - CLAUDE.md：
+  - §5 和 §7 的"nginx runs 4 workers"是 4.8 的情况。4.10.0 镜像的 `etc/nginx/nginx.conf:3` 是
+    `worker_processes 1`，`gl_util.sh set_nginx_thread` 对 e5800 不做修改 🟢（🔴 需上机用 `ps` 确认）。
+    所以插件里的阻塞调用会让整个后台一起卡住，详见 `2026-11-02-refactor-architecture.md` 的 S1。
   - §8 还在说"复用 modemsignallog 的配色"，但 modemsignallog 在 4.10 上已经失效；cellular-detail 用的是
     good → `--secondary`。
   - §6 的 GL 方法列表还是 4.8 的：4.10 去掉了 `set_3gpp_rel`，新增了 `get_cell_info`、`get_signals`、
