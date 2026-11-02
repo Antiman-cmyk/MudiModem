@@ -152,7 +152,7 @@ fi
 
 echo "6c. clear_cell_lock: family-named GL unlock + GL re-applies its stored mode (static — never call it on the live link)"
 ssh -o BatchMode=yes "root@$HOST" '
-  f=/usr/lib/oui-httpd/rpc/mudimodem
+  f=/usr/lib/mudimodem/rpc/lock.lua
   grep -q "function M.clear_cell_lock" "$f" || exit 1
   grep -q "gl_unlock(slot, fam)" "$f" || exit 1
   grep -q "band_cfg_set(band_cfg_payload(slot, prev.mode_raw or prev.mode" "$f" || exit 1
@@ -308,7 +308,7 @@ ssh -o BatchMode=yes "root@$HOST" \
   'id=$(ubus call mudimodem job_start "{\"kind\":\"lib_check\",\"args\":{}}" | jsonfilter -e "@.id") && [ -n "$id" ] && ubus -t 30 call mudimodem job_wait "{\"id\":$id,\"wait\":20}" | jsonfilter -e "@.local_revision" | grep -q .' \
   || fail "the library check job did not answer with a local revision"
 # Backend exposes both methods (dofile under the ngx stub is overkill here; grep the source is enough).
-ssh -o BatchMode=yes "root@$HOST" 'grep -q "function M.library_status" /usr/lib/oui-httpd/rpc/mudimodem && grep -q "function M.refresh_library" /usr/lib/oui-httpd/rpc/mudimodem' \
+ssh -o BatchMode=yes "root@$HOST" 'grep -q "function M.library_status" /usr/lib/mudimodem/rpc/console.lua && grep -q "function M.refresh_library" /usr/lib/mudimodem/rpc/console.lua' \
   || fail "backend missing library_status/refresh_library"
 
 # 9. Arg validator: the AT console's /rpc gate. Without this, oui's default
@@ -348,7 +348,7 @@ ssh -o BatchMode=yes "root@$HOST" 'test -s /etc/mudimodem/version.json' \
   || fail "version.json not installed (run ./tools/deploy.sh)"
 ssh -o BatchMode=yes "root@$HOST" 'test -x /usr/sbin/mudimodem-selfupdate' \
   || fail "self-update script not installed"
-ssh -o BatchMode=yes "root@$HOST" 'grep -q "function M.app_version" /usr/lib/oui-httpd/rpc/mudimodem && grep -q "function M.device_info" /usr/lib/oui-httpd/rpc/mudimodem && grep -q "function M.self_update" /usr/lib/oui-httpd/rpc/mudimodem && grep -q "function M.update_status" /usr/lib/oui-httpd/rpc/mudimodem' \
+ssh -o BatchMode=yes "root@$HOST" 'f=/usr/lib/mudimodem/rpc/config.lua; grep -q "function M.app_version" $f && grep -q "function M.device_info" $f && grep -q "function M.self_update" $f && grep -q "function M.update_status" $f' \
   || fail "backend missing app_version/device_info/self_update/update_status"
 
 echo "10a. app_version isolation test (offline, fake curl)"
@@ -429,7 +429,7 @@ if [ -f src/sbin/glbattlimit ]; then
     || fail "init glbattlimit missing"
   ssh -o BatchMode=yes "root@$HOST" 'test -f /etc/mudimodem/battlimit.json' \
     || fail "battlimit.json missing"
-  ssh -o BatchMode=yes "root@$HOST" 'grep -q "function M.get_battlimit" /usr/lib/oui-httpd/rpc/mudimodem && grep -q "function M.set_battlimit" /usr/lib/oui-httpd/rpc/mudimodem' \
+  ssh -o BatchMode=yes "root@$HOST" 'grep -q "function M.get_battlimit" /usr/lib/mudimodem/rpc/config.lua && grep -q "function M.set_battlimit" /usr/lib/mudimodem/rpc/config.lua' \
     || fail "backend missing get_battlimit/set_battlimit"
   # Live status (read-only; does not change charge path).
   ssh -o BatchMode=yes "root@$HOST" '/usr/bin/glbattlimit status >/dev/null' \

@@ -82,6 +82,8 @@ ok "keep.d: generated, abfota-parsable, covers every placed file and every enabl
 must_before "$R" "place /usr/lib/oui-httpd/rpc/mudimodem" "svc nginx restart"
 must_before "$R" "place /usr/share/gl-validator.d/mudimodem.lua" "place /usr/lib/oui-httpd/rpc/mudimodem"
 must_before "$R" "place /usr/sbin/mudimodem-revert" "place /usr/lib/oui-httpd/rpc/mudimodem"
+must_before "$R" "place /usr/lib/mudimodem/rpc/core.lua" "place /usr/lib/oui-httpd/rpc/mudimodem"
+must_before "$R" "place /usr/lib/mudimodem/rpc/config.lua" "place /usr/lib/oui-httpd/rpc/mudimodem"
 must_before "$R" "sys kill glbattlimit watchers" "svc nginx restart"
 must_before "$R" "place /usr/bin/glbattlimit" "svc glbattlimit start"
 must_before "$R" "svc mudimodem-revert enable" "svc mudimodem-collectd enable"

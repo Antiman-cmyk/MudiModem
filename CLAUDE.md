@@ -69,7 +69,8 @@ src/web/main/          the main chunk: index.js (shell) + strip/change/bands/loc
 src/web/tabs/          lazy tab chunks (tracking, console, speedtest, battery)
 src/web/kit/           shared: rpc, i18n, compose, chunks, fmt     src/web/locales/  zh-cn table
 dist/views/            BUILT chunks (committed, shipped)           src/menu/*.json   menu entries
-src/rpc/mudimodem       nginx Lua plugin (object "mudimodem"); src/validator/ its arg validator
+src/rpc/mudimodem       nginx Lua plugin loader (object "mudimodem"); its code is src/lib/rpc/ (core.lua
+                        shared helpers + one file per concern); src/validator/ its arg validator
 src/sbin/ src/lib/      daemons + helpers: mudimodemd (eco; src/lib/mudimodemd/: collector, AT queue +
                         direct port, jobs, speed test, change arming), revert watchdog, battery limit
 src/ws/mudimodem.lua    /ws seed module; src/nginx/ the gl-conf.d alias

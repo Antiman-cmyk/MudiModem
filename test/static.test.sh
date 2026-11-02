@@ -7,7 +7,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 code() { grep -hv '^[[:space:]]*#' "$@"; }   # shell sources without comment lines
 
 # busybox on 4.10 has neither pkill nor setsid (mudimodem-detach probes for setsid and falls back).
-code src/rpc/mudimodem src/sbin/* src/etc/init.d/* src/installer/* install.sh uninstall.sh \
+code src/rpc/mudimodem src/lib/rpc/*.lua src/sbin/* src/etc/init.d/* src/installer/* install.sh uninstall.sh \
   | grep -qE '(^|[^a-z])(pkill|setsid)[[:space:]]' && fail "pkill/setsid are absent from the router's busybox"
 # The one firmware/model gate is the installer's; the dev tools run it on the box instead of copying it.
 for f in tools/deploy.sh tools/verify.sh install.sh; do
@@ -27,7 +27,7 @@ if grep -nE 'kill|SIGSTOP|gl_modem' src/lib/mudimodemd/atport.lua | grep -q .; t
 grep -q 'boot-check' src/etc/init.d/mudimodem-revert || fail "boot hook must run mudimodem-revert boot-check"
 grep -qE 'mudimodem-revert boot-check.*&[[:space:]]*$' src/etc/init.d/mudimodem-revert || fail "boot-check must run in the background"
 grep -q 'set_cell_tower' src/sbin/mudimodem-revert || fail "panic must clear GL's stored cell lock per slot"
-grep -q 'gl-stale\|MUDIMODEM_STALE' src/rpc/mudimodem src/sbin/mudimodem-revert && fail "the gl-stale marker is gone; stale is derived live"
+grep -q 'gl-stale\|MUDIMODEM_STALE' src/rpc/mudimodem src/lib/rpc/*.lua src/sbin/mudimodem-revert && fail "the gl-stale marker is gone; stale is derived live"
 # Detached children never inherit nginx's listening sockets.
 grep -q 'mudimodem-detach' src/sbin/glbattlimit || fail "glbattlimit must launch its watcher through mudimodem-detach"
 # Self-update follows the recorded install source.

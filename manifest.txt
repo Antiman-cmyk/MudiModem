@@ -69,6 +69,14 @@ file    src/sbin/glbattlimit              /usr/bin/glbattlimit                  
 file    src/hotplug/20-glbattlimit        /etc/hotplug.d/i2c/20-glbattlimit              0755
 file    src/etc/init.d/glbattlimit        /etc/init.d/glbattlimit                        0755
 file    src/validator/mudimodem.lua       /usr/share/gl-validator.d/mudimodem.lua        0644
+file    src/lib/rpc/core.lua              /usr/lib/mudimodem/rpc/core.lua                0644
+file    src/lib/rpc/bands.lua             /usr/lib/mudimodem/rpc/bands.lua               0644
+file    src/lib/rpc/lock.lua              /usr/lib/mudimodem/rpc/lock.lua                0644
+file    src/lib/rpc/change.lua            /usr/lib/mudimodem/rpc/change.lua              0644
+file    src/lib/rpc/history.lua           /usr/lib/mudimodem/rpc/history.lua             0644
+file    src/lib/rpc/console.lua           /usr/lib/mudimodem/rpc/console.lua             0644
+file    src/lib/rpc/speedtest.lua         /usr/lib/mudimodem/rpc/speedtest.lua           0644
+file    src/lib/rpc/config.lua            /usr/lib/mudimodem/rpc/config.lua              0644
 file    src/rpc/mudimodem                 /usr/lib/oui-httpd/rpc/mudimodem               0644
 
 # Settings defaults — never clobber what the user chose.
