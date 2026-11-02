@@ -388,4 +388,40 @@ r = M.set_bands({ sa = { 78 } })
 assert(r.error and r.error:find("pending"), "must refuse while pending exists")
 print("  ok  - refuses while pending")
 
-print("ALL SET_BANDS TESTS PASSED")
+-- 9. The page can restore its countdown from the box: set_bands answers with the box clock and
+--    the watchdog's deadline, the pending file carries both, and change_status reports them.
+reset()
+local t0 = os.time()
+r = M.set_bands({ sa = { 78 } })
+assert(r.ok and r.window == 60, "set_bands ok")
+assert(type(r.now) == "number" and math.abs(r.now - t0) <= 2, "set_bands must report the box clock")
+assert(type(r.deadline) == "number" and r.deadline >= t0 + 60 and r.deadline <= t0 + 62,
+       "deadline must be now + window, got " .. tostring(r.deadline))
+assert(pget("DEADLINE") == tostring(r.deadline), "pending file must carry DEADLINE")
+local st = M.change_status({})
+assert(type(st.now) == "number" and st.pending, "change_status must see the pending change")
+assert(st.pending.kind == "bands" and st.pending.deadline == r.deadline and st.pending.window == 60, "change_status fields")
+assert(st.pending.applied and st.pending.applied.sa == r.applied.sa, "change_status must return what was applied")
+print("  ok  - deadline + applied survive a page reload (change_status)")
+
+-- 10. Keep after the watchdog already reverted: say so, log no "Kept".
+local f2 = io.open(PENDING, "r"); if f2 then f2:close(); os.remove(PENDING) end
+local hist = os.getenv("MUDIMODEM_HIST")
+local function kept_events()
+  local n = 0
+  local ef = hist and io.open(hist .. "/events.jsonl", "r")
+  if ef then for line in ef:lines() do if line:find('"Kept"', 1, true) then n = n + 1 end end; ef:close() end
+  return n
+end
+local before = kept_events()
+r = M.confirm({})
+assert(r.ok == false and r.was_pending == false and r.error, "confirm with nothing pending must say so")
+assert(kept_events() == before, "a too-late Keep must not log a Kept event")
+assert(M.change_status({}).pending == nil, "nothing pending")
+reset()
+assert(M.set_bands({ sa = { 78 } }).ok)
+r = M.confirm({})
+assert(r.ok and r.was_pending == true and r.kind == "bands", "a timely Keep reports was_pending")
+print("  ok  - confirm reports was_pending; a too-late Keep is not logged as kept")
+
+print("ALL SET_BANDS TESTS PASSED (incl. change status)")

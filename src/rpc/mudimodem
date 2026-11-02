@@ -134,6 +134,33 @@ local function pending_get(key)
   return nil
 end
 
+-- The confirm-or-revert window. The watchdog reads the same variable (default 60 s); it arms
+-- right after the pending file is written, so DEADLINE (written with the file) is at most ~1 s
+-- earlier than the moment it actually reverts — never later.
+local WINDOW = tonumber(os.getenv("MUDIMODEM_WINDOW") or "") or 60
+
+-- Lines that let a page restore its countdown after a reload / on another tab: when the
+-- watchdog fires (box clock) and what the page showed as applied. The pending file is
+-- sourced by sh, so the JSON is single-quoted and must not contain a single quote itself.
+local function pending_meta(applied)
+  local js = cjson.encode(applied or {}):gsub("'", "")
+  return { "DEADLINE=" .. tostring(os.time() + WINDOW), "APPLIED='" .. js .. "'" }
+end
+
+-- The pending change as the page needs it, or nil. Shared by change_status, confirm and the
+-- write paths' answers.
+local function pending_info()
+  if not file_exists(PENDING) then return nil end
+  local applied
+  local raw = pending_get("APPLIED")
+  if raw then
+    local ok, v = pcall(cjson.decode, raw)      -- pure C decode; cannot yield
+    if ok and type(v) == "table" then applied = v end
+  end
+  return { kind = pending_get("KIND") or "bands", slot = tonumber(pending_get("SLOT") or ""),
+           deadline = tonumber(pending_get("DEADLINE") or ""), applied = applied, window = WINDOW }
+end
+
 -- The collector's newest sample (cellular_compat schema) when it is fresh,
 -- else nil. Lets get_lock skip its own QENG read: the collector already paid
 -- for that AT round-trip within the last few seconds.
@@ -741,6 +768,7 @@ function M.set_cell_lock(args)
     "PREV_SAVE_CTRL=" .. ((sc and sc.raw) or ""),
     "PREV_mode_pref=" .. pmode,
     "PREV_nr5g_disable_mode=" .. pdis,
+    table.concat(pending_meta({ rat = rat, pci = pci, freq = freq, scs = scs, band = band }), "\n"),
   }, "\n") .. "\n")
   f:close()
 
@@ -772,7 +800,8 @@ function M.set_cell_lock(args)
 
   append_event("user", "Cell lock applied",
     rat .. " pci " .. pci .. " freq " .. freq .. (band and (" band " .. band) or ""))
-  return { ok = true, window = 60, sub_id = sub_id,
+  local pend = pending_info()
+  return { ok = true, window = WINDOW, sub_id = sub_id, now = os.time(), deadline = pend and pend.deadline,
            applied = { rat = rat, pci = pci, freq = freq, scs = scs, band = band } }
 end
 
@@ -964,6 +993,7 @@ function M.set_bands(args)
     "KIND=bands", "SLOT=" .. tostring(slot),
     "PREV_BAND_CONFIG='" .. cjson.encode(prev_payload) .. "'",
     "APPLIED_BAND_CONFIG='" .. cjson.encode(payload) .. "'",
+    table.concat(pending_meta(applied), "\n"),
   }, "\n") .. "\n")
   f:close()
 
@@ -992,7 +1022,9 @@ function M.set_bands(args)
   if applied.mode and not applied.reset then bits[#bits + 1] = "mode " .. applied.mode end
   append_event("user", "Bands applied", table.concat(bits, "; "))
 
-  return { ok = true, window = 60, applied = applied, slot = slot }
+  local pend = pending_info()
+  return { ok = true, window = WINDOW, applied = applied, slot = slot, now = os.time(),
+           deadline = pend and pend.deadline }
 end
 
 -- READ: the recorded history (samples + user/dog events) for the Tracking page.
@@ -1091,11 +1123,25 @@ end
 -- written through GL's store (set_band_config / set_cell_tower) when it was
 -- applied, so it is ALREADY durable — cellular_manager re-applies GL's store on
 -- restart. Nothing here can fail, which is exactly what makes Keep honest.
+-- KEEP: stand the watchdog down by removing the pending file. When there is nothing pending
+-- the change is already gone — the watchdog reverted it (window elapsed, or a reboot's
+-- boot-check) — and the page must say so instead of claiming it was kept.
 function M.confirm(args)
+  if not file_exists(PENDING) then
+    return { ok = false, was_pending = false,
+             error = "nothing to keep: the change was already reverted (or kept elsewhere)" }
+  end
   local kind = pending_get("KIND") or "bands"
   os.remove(PENDING)
   append_event("user", "Kept", kind == "cell" and "Cell lock confirmed" or "Band change confirmed")
-  return { ok = true, confirmed = true, durable = true }
+  return { ok = true, confirmed = true, durable = true, was_pending = true, kind = kind }
+end
+
+-- READ: is a confirm-or-revert change pending? { now, pending = { kind, slot, deadline, applied,
+-- window } | nil } — box clock, so a page can count down to the watchdog's real deadline after
+-- a reload, on any tab, however long the browser slept.
+function M.change_status(args)
+  return { now = os.time(), pending = pending_info() }
 end
 
 -- Revert a pending change NOW (don't wait out the window). Writes the previous

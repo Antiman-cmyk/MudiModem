@@ -291,7 +291,7 @@ module.exports = {
     }
   },
 
-  created() { this.injectStyle(); },
+  created() { this.injectStyle(); this.restoreChange(0); },
   mounted() {
     this.startStrip();       // preload the strip window; live updates arrive as pushes
     if (this.tab === "tracking") this.loadTracking();
@@ -301,6 +301,9 @@ module.exports = {
   },
   beforeDestroy() {
     this.clearCountdown(); this.stopStripPoll();
+    if (this.watchdogTimer) clearTimeout(this.watchdogTimer);
+    if (this.restoreTimer) clearTimeout(this.restoreTimer);
+    if (this.doneTimer) clearTimeout(this.doneTimer);
     if (this.resetTimer) clearTimeout(this.resetTimer);
     if (this.updateConfirmTimer) clearTimeout(this.updateConfirmTimer);
     if (this.updatePollTimer) clearTimeout(this.updatePollTimer);
@@ -474,7 +477,7 @@ module.exports = {
           // on err_msg/err_code). Storing it as `bands` would make renderGroup
           // dereference d.supported and throw — freezing the tab on the
           // loading text with no message and no refresh button.
-          if (!res || res.error) {
+          if (!res || res.error || !res.config) {   // a reply without a config is not a band model
             if (!light) self.bandsError = (res && res.error) || "request failed";
             return;
           }
@@ -585,7 +588,7 @@ module.exports = {
             return;
           }
           self.lockConfirm = null;
-          self.startCountdown(res.window || 60, res.applied, "cell");
+          self.startCountdown(res.window || 60, res.applied, "cell", res);
         })
         .catch(function (e) {
           var t = e && (e.type || e.message);
@@ -631,6 +634,7 @@ module.exports = {
               self.lockConfirm = null;
               self.pending = { kind: "cell", applied: applied, uncertain: true, armed: !!armed };
               self.finishVerify();
+              if (armed) self.restoreChange(3);   // replace "uncertain" with the real countdown
             } else if (attempts < MAX) {
               setTimeout(probe, 2500);
             } else {
@@ -1154,7 +1158,7 @@ module.exports = {
             if (self.onStaleSlot(res)) self.applyError = res.error;   // onSlotChange cleared it; keep the why
             return;
           }
-          self.startCountdown(res.window || 60, res.applied);
+          self.startCountdown(res.window || 60, res.applied, "bands", res);
         })
         .catch(function (e) {
           var t = e && (e.type || e.message);
@@ -1171,54 +1175,133 @@ module.exports = {
           if (payload.lte) a.lte = payload.lte.join(":");
           self.clearCountdown();
           self.pending = { kind: "bands", applied: a, uncertain: true, window: 60, remaining: 60 };
+          self.restoreChange(24);     // ~60 s: once the box answers, show the real countdown (or nothing)
         })
         .then(function () { self.applying = false; });
     },
     // kind defaults to "bands" so the existing bands call sites keep working
     // unchanged; the cell-lock flow passes "cell" so the banner + refetch land
     // on the right tab (§renderRevert / renderBands / renderLock).
-    startCountdown(window_s, applied, kind) {
+    // ---- confirm-or-revert, as the BOX sees it ----------------------------------------------
+    // The countdown runs to the watchdog's real deadline on the box clock (change_status /
+    // set_* replies carry `deadline` + `now`), so it survives a reload, a tab switch and a phone
+    // that slept; Keep / Revert report what actually happened instead of assuming.
+    startCountdown(window_s, applied, kind, clock) {
       var self = this;
       this.clearCountdown();
-      this.pending = { kind: kind || "bands", remaining: window_s, window: window_s,
-                       applied: applied, done: false };
+      var w = window_s || 60;
+      var end = Date.now() + w * 1000;
+      if (clock && typeof clock.deadline === "number" && typeof clock.now === "number")
+        end = Date.now() + (clock.deadline - clock.now) * 1000;
+      this.pending = { kind: kind || "bands", window: w, applied: applied, done: false, end: end,
+                       remaining: Math.max(0, Math.ceil((end - Date.now()) / 1000)),
+                       keeping: false, reverting: false, expiring: false, keepError: "", revertError: "" };
       this.cdTimer = setInterval(function () {
-        if (!self.pending) return;
-        self.pending.remaining -= 1;
-        if (self.pending.remaining <= 0) {
-          // The watchdog has reverted server-side. Reflect it and re-read.
-          var k = self.pending.kind;
-          self.clearCountdown();
-          self.pending = { kind: k, done: true, reverted: true };
-          if (k === "cell") { self.fetchLock(); self.fetchBands({ light: true }); } else self.fetchBands();
-          setTimeout(function () { self.pending = null; }, 4000);
-        }
+        var p = self.pending;
+        if (!p || p.done || p.end == null) return;
+        p.remaining = Math.max(0, Math.ceil((p.end - Date.now()) / 1000));
+        if (p.remaining <= 0 && !p.expiring) { self.patchPending({ expiring: true }); self.awaitWatchdog(0); }
       }, 1000);
     },
     clearCountdown() {
       if (this.cdTimer) { clearInterval(this.cdTimer); this.cdTimer = null; }
     },
-    keepBands() {
+    patchPending(o) { if (this.pending) this.pending = Object.assign({}, this.pending, o); },
+    refetchAfterChange(kind) {
+      if (kind === "cell") { this.fetchLock(); this.fetchBands({ light: true }); } else this.fetchBands();
+    },
+    // The deadline passed: ask the box what the watchdog did instead of assuming it reverted.
+    awaitWatchdog(tries) {
       var self = this;
-      this.clearCountdown();
-      window.$rpcRequest("call", ["sid", "mudimodem", "confirm", {}])
-        .then(function () {}).catch(function () {})
-        .then(function () {
-          var k = self.pending && self.pending.kind;
+      this.rpcSilent("change_status", {}, 8000).then(function (res) {
+        var p = self.pending;
+        if (!p || p.done || self.pollStopped) return;
+        if ((!res || res.pending) && tries < 10) {          // box busy / still restoring: look again
+          self.patchPending({ reverting: true });
+          self.watchdogTimer = setTimeout(function () { self.awaitWatchdog(tries + 1); }, 3000);
+          return;
+        }
+        if (res && res.pending) {
+          self.patchPending({ reverting: false, revertError:
+            "The auto-revert has not finished after 30 s - use Revert now, or the ssh panic restore." });
+          return;
+        }
+        var k = p.kind;
+        self.clearCountdown();
+        self.pending = { kind: k, done: true, reverted: !!res, unknown: !res };
+        self.refetchAfterChange(k);
+        self.doneTimer = setTimeout(function () { if (self.pending && self.pending.done) self.pending = null; }, 5000);
+      });
+    },
+    // Pick up a change that is pending on the box (page load, another tab, a dropped reply).
+    // `tries` > 0 keeps asking while the box is unreachable (the apply's redial drops the link).
+    restoreChange(tries) {
+      var self = this;
+      this.rpcSilent("change_status", {}, 8000).then(function (res) {
+        if (self.pollStopped) return;
+        if (!res) {
+          if (tries > 0) self.restoreTimer = setTimeout(function () { self.restoreChange(tries - 1); }, 2500);
+          return;
+        }
+        var q = res.pending, p = self.pending;
+        if (q) {
+          if (p && !p.done && p.end != null) return;          // already counting down
+          if (typeof q.deadline === "number")
+            self.startCountdown(q.window || 60, q.applied || (p && p.applied) || {}, q.kind,
+                                { deadline: q.deadline, now: res.now });
+          else if (!p)                                          // pending from an older version: no timer
+            self.pending = { kind: q.kind, applied: q.applied || {}, uncertain: true, window: 60, remaining: 60 };
+        } else if (p && p.uncertain) {
+          // Nothing is armed: the dropped apply never took, or was already reverted.
           self.pending = null;
-          if (k === "cell") { self.fetchLock(); self.fetchBands({ light: true }); } else self.fetchBands();
+          self.applyError = "The connection dropped while applying, and nothing is pending on the router now - the change did not take, or was already reverted.";
+        }
+      });
+    },
+    keepBands() {
+      var self = this, p = this.pending;
+      if (!p || p.done || p.keeping || p.reverting) return;
+      var k = p.kind;
+      this.patchPending({ keeping: true, keepError: "" });
+      window.$rpcRequest("call", ["sid", "mudimodem", "confirm", {}])
+        .then(function (res) {
+          self.clearCountdown();
+          if (res && res.was_pending === false) {
+            // The watchdog had already reverted it (window over, or a reboot's boot-check).
+            self.pending = { kind: k, done: true, tooLate: true };
+            self.doneTimer = setTimeout(function () { if (self.pending && self.pending.done) self.pending = null; }, 8000);
+          } else {
+            self.pending = null;
+          }
+          self.refetchAfterChange(k);
+        })
+        .catch(function (e) {
+          // Most likely the apply's redial: the change is still pending and the watchdog still
+          // counts, so keep the banner (and its timer) and let the user try again.
+          self.patchPending({ keeping: false, keepError: "Couldn't reach the router to keep it (" +
+            ((e && (e.type || e.message)) || "error") + "). The countdown is still running - press Keep again." });
         });
     },
     revertBands() {
-      var self = this;
-      this.clearCountdown();
-      var k = this.pending && this.pending.kind;
-      this.pending = { kind: k, done: true, reverting: true };
+      var self = this, p = this.pending;
+      if (!p || p.done || p.keeping || p.reverting) return;
+      var k = p.kind;
+      this.patchPending({ reverting: true, revertError: "" });
       window.$rpcRequest("call", ["sid", "mudimodem", "revert_now", {}], { timeout: 20000 })
-        .then(function () {}).catch(function () {})
-        .then(function () {
-          self.pending = null;
-          if (k === "cell") { self.fetchLock(); self.fetchBands({ light: true }); } else self.fetchBands();
+        .then(function (res) {
+          if (res && res.error) {
+            // Nothing was restored; the watchdog stays armed and retries at the deadline.
+            self.patchPending({ reverting: false, revertError: res.error });
+            return;
+          }
+          self.clearCountdown();
+          self.pending = { kind: k, done: true, reverted: true };
+          self.refetchAfterChange(k);
+          self.doneTimer = setTimeout(function () { if (self.pending && self.pending.done) self.pending = null; }, 4000);
+        })
+        .catch(function (e) {
+          self.patchPending({ reverting: false, revertError: "Couldn't reach the router to revert (" +
+            ((e && (e.type || e.message)) || "error") + "). The auto-revert is still armed." });
         });
     },
 
@@ -1425,8 +1508,10 @@ module.exports = {
         '.mm-lockbadge{background:var(--background-badge);border:1px solid transparent;border-radius:9px;padding:1px 8px;font:inherit;font-size:10px;font-weight:600;letter-spacing:.02em;color:var(--text-hint);cursor:pointer;white-space:nowrap}' +
         '.mm-lockbadge.mode{color:var(--warning);border-color:var(--warning-disabled,var(--warning));background:var(--warning-disabled,transparent)}' +
         '.mm-lockbadge.lock{color:var(--error);border-color:var(--error);background:transparent}' +
-        '.mm-tabs{display:flex;gap:22px;border-bottom:1px solid var(--divider);margin-bottom:11px;padding:0 4px}' +
-        '.mm-tab{background:none;border:0;padding:9px 0 8px;font:inherit;font-size:13px;cursor:pointer;color:var(--text-weak);border-bottom:2px solid transparent;margin-bottom:-1px}' +
+        // Seven tabs do not fit a phone: scroll the bar sideways instead of the whole page.
+        '.mm-tabs{display:flex;gap:22px;border-bottom:1px solid var(--divider);margin-bottom:11px;padding:0 4px;overflow-x:auto;scrollbar-width:none}' +
+        '.mm-tabs::-webkit-scrollbar{display:none}' +
+        '.mm-tab{flex:none;white-space:nowrap;background:none;border:0;padding:9px 0 8px;font:inherit;font-size:13px;cursor:pointer;color:var(--text-weak);border-bottom:2px solid transparent;margin-bottom:-1px}' +
         '.mm-tab.on{color:var(--primary);border-bottom-color:var(--primary);font-weight:600}' +
         '.mm-tab:disabled{color:var(--text-hint);cursor:default}' +
         '.mm-card{background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);padding:13px 14px}' +
@@ -1608,10 +1693,26 @@ module.exports = {
     },
 
     // Confirm-or-revert banner (design C1: inline, on the tab that caused it).
+    revertButtons(h) {
+      var self = this, p = this.pending, busy = p.keeping || p.reverting;
+      return h("span", { staticStyle: { flex: "none", display: "flex", gap: "6px" } }, [
+        h("button", { staticClass: "mm-btn danger", attrs: { disabled: busy },
+                      on: { click: function () { self.revertBands(); } } }, p.reverting ? "Reverting..." : "Revert now"),
+        h("button", { staticClass: "mm-btn keep", attrs: { disabled: busy },
+                      on: { click: function () { self.keepBands(); } } }, p.keeping ? "Keeping..." : "Keep")
+      ]);
+    },
+    revertErrors(h) {
+      var p = this.pending, msg = p.keepError || p.revertError;
+      return msg ? h("div", { staticClass: "mm-hint", staticStyle: { color: "var(--error)", marginTop: "6px" } }, msg) : null;
+    },
     renderRevert(h) {
       var self = this, p = this.pending;
       if (p.done) {
         var doneMsg = p.reverting ? "Reverting..." :
+          p.tooLate ? "Too late to keep: the auto-revert had already restored your previous " +
+                      (p.kind === "cell" ? "cell setting." : "bands.") + " Apply it again if you want it." :
+          p.unknown ? "Couldn't reach the router to see what the auto-revert did - reload once you're back online." :
           (p.reverted ? (p.kind === "cell" ? "Reverted - cell lock removed." : "Reverted - restored your previous bands.") : "");
         return h("div", { staticClass: "mm-revert" }, [
           h("span", { staticClass: "mm-revert-row" }, doneMsg)
@@ -1641,11 +1742,9 @@ module.exports = {
               " If the auto-revert is still running it will undo this within ~60s - ",
               h("b", "Keep"), " to make it stick, or ", h("b", "Revert"), " to remove it now."
             ])),
-            h("span", { staticStyle: { flex: "none", display: "flex", gap: "6px" } }, [
-              h("button", { staticClass: "mm-btn danger", on: { click: function () { self.revertBands(); } } }, "Revert now"),
-              h("button", { staticClass: "mm-btn keep", on: { click: function () { self.keepBands(); } } }, "Keep")
-            ])
-          ])
+            this.revertButtons(h)
+          ]),
+          this.revertErrors(h)
         ]);
       }
       // Summarise what changed (applied = { mode, sa, nsa, lte } for bands;
@@ -1664,17 +1763,16 @@ module.exports = {
       var pct = Math.max(0, Math.min(100, (p.remaining / p.window) * 100));
       return h("div", { staticClass: "mm-revert" }, [
         h("div", { staticClass: "mm-revert-row" }, [
-          h("span", [
-            "Applied ", h("b", bits.join("; ") || "band change"),
-            ". Reverting in ", h("b", { staticClass: "mm-cd" }, String(p.remaining) + "s"),
-            " unless you keep it - watch the trace above."
-          ]),
-          h("span", { staticStyle: { flex: "none", display: "flex", gap: "6px" } }, [
-            h("button", { staticClass: "mm-btn danger", on: { click: function () { self.revertBands(); } } }, "Revert now"),
-            h("button", { staticClass: "mm-btn keep", on: { click: function () { self.keepBands(); } } }, "Keep")
-          ])
+          h("span", p.expiring
+            ? ["Applied ", h("b", bits.join("; ") || "band change"),
+               ". Time's up - the auto-revert is restoring your previous settings..."]
+            : ["Applied ", h("b", bits.join("; ") || "band change"),
+               ". Reverting in ", h("b", { staticClass: "mm-cd" }, String(p.remaining) + "s"),
+               " unless you keep it - watch the trace above."]),
+          this.revertButtons(h)
         ]),
-        h("div", { staticClass: "mm-bar" }, [h("i", { staticStyle: { width: pct.toFixed(1) + "%" } })])
+        h("div", { staticClass: "mm-bar" }, [h("i", { staticStyle: { width: pct.toFixed(1) + "%" } })]),
+        this.revertErrors(h)
       ]);
     },
 
@@ -1733,7 +1831,7 @@ module.exports = {
         warn,
         modeWarn,
         lockWarn,
-        (this.pending && this.pending.kind !== "cell") ? this.renderRevert(h) : null
+        null   // the pending banner is page-wide (render), not per tab
       ];
       var footer = [];
       if (!this.pending) {
@@ -1977,7 +2075,7 @@ module.exports = {
             on: { click: this.fetchLock }
           }, this.lockLoading ? "refreshing..." : "refresh")
         ]),
-        (this.pending && this.pending.kind === "cell") ? this.renderRevert(h) : null,
+        null,  // the pending banner is page-wide (render), not per tab
         this.lockError && this.lockData
           ? h("div", { staticClass: "mm-hint", staticStyle: { color: "var(--error)" } }, this.lockError) : null,
         (this.lockData.stale)
@@ -2158,6 +2256,8 @@ module.exports = {
       panel = h("div", { staticClass: "mm-card" }, [h("div", { staticClass: "mm-soon" }, "Unknown tab.")]);
     }
 
-    return h("div", { staticClass: "mm" }, [strip, tabs, panel]);
+    // A pending confirm-or-revert change is shown on EVERY tab: leaving the Bands tab (or the
+    // page) must never hide the only Keep button while the watchdog counts down.
+    return h("div", { staticClass: "mm" }, [strip, this.pending ? this.renderRevert(h) : null, tabs, panel]);
   }
 };

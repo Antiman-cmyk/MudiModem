@@ -860,16 +860,89 @@ test('lock tab: cell pending banner renders on lock tab, not bands tab', () => {
   assert.match(text, /Revert now/);
 });
 
-test('bands tab: cell pending does NOT paint the bands banner', () => {
+test('a pending change shows its banner on EVERY tab (page-wide), never only on its own tab', () => {
   const component = loadChunk();
-  // Use a fully-populated bands model (bandsLoading:false, valid bands shape)
-  // so renderBands actually reaches the `pending.kind !== "cell"` gate instead
-  // of short-circuiting on the loading guard — otherwise this test would pass
-  // even if the gate itself were deleted.
   const vm = bandsVm(component);
-  vm.pending = { kind: 'cell', remaining: 42, window: 60, applied: {} };
-  const text = textOf(component.render.call(vm, h));
-  assert.doesNotMatch(text, /42s/);
+  vm.pending = { kind: 'cell', remaining: 42, window: 60, applied: { rat: '5g', pci: 516, freq: 127490 } };
+  for (const tab of ['bands', 'lock', 'config']) {
+    vm.tab = tab;
+    const text = textOf(component.render.call(vm, h));
+    assert.match(text, /42s/, `countdown visible on the ${tab} tab`);
+    assert.match(text, /Keep/, `Keep reachable from the ${tab} tab`);
+  }
+});
+
+const tick = () => new Promise((r) => setImmediate(r));
+
+test('a change pending on the box is restored on load, counting to the BOX deadline', async () => {
+  const calls = stubRpc([{ now: 1000, pending: { kind: 'bands', deadline: 1037, window: 60, applied: { sa: '71' } } }]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.restoreChange(0);
+    await tick(); await tick();
+    assert.strictEqual(calls[0].params[2], 'change_status');
+    assert.ok(vm.pending && !vm.pending.done, 'banner restored');
+    assert.ok(vm.pending.remaining >= 36 && vm.pending.remaining <= 37, 'remaining from the box clock, got ' + vm.pending.remaining);
+    assert.match(textOf(c.render.call(vm, h)), /5G-SA n71/);
+    vm.clearCountdown();
+  } finally { unstubRpc(); }
+});
+
+test('Keep that arrives after the watchdog reverted says "too late" instead of "kept"', async () => {
+  stubRpc([{ ok: false, was_pending: false, error: 'nothing to keep' }, {}]);
+  try {
+    const c = loadChunk();
+    const vm = bandsVm(c);
+    vm.startCountdown(60, { sa: '71' }, 'bands', { now: 0, deadline: 60 });
+    vm.keepBands();
+    await tick(); await tick();
+    assert.ok(vm.pending && vm.pending.done && vm.pending.tooLate, 'too-late state');
+    assert.match(textOf(c.render.call(vm, h)), /Too late to keep/);
+    vm.clearCountdown();
+  } finally { unstubRpc(); }
+});
+
+test('Keep that cannot reach the router keeps the banner and the countdown', async () => {
+  stubRpc([Object.assign(new Error('x'), { type: 'timeout' })]);
+  try {
+    const c = loadChunk();
+    const vm = bandsVm(c);
+    vm.startCountdown(60, { sa: '71' }, 'bands', { now: 0, deadline: 60 });
+    vm.keepBands();
+    await tick(); await tick();
+    assert.ok(vm.pending && !vm.pending.done, 'still pending');
+    assert.ok(vm.cdTimer, 'countdown still running');
+    assert.match(textOf(c.render.call(vm, h)), /Couldn't reach the router to keep it/);
+    vm.clearCountdown();
+  } finally { unstubRpc(); }
+});
+
+test('a refused Revert now is shown, and the banner stays (watchdog still armed)', async () => {
+  stubRpc([{ error: 'restore failed: refused (watchdog still armed)' }]);
+  try {
+    const c = loadChunk();
+    const vm = bandsVm(c);
+    vm.startCountdown(60, { sa: '71' }, 'bands', { now: 0, deadline: 60 });
+    vm.revertBands();
+    await tick(); await tick();
+    assert.ok(vm.pending && !vm.pending.done && !vm.pending.reverting, 'banner stays, not stuck in reverting');
+    assert.match(textOf(c.render.call(vm, h)), /restore failed: refused/);
+    vm.clearCountdown();
+  } finally { unstubRpc(); }
+});
+
+test('at the deadline the page asks the box instead of assuming the revert happened', async () => {
+  const calls = stubRpc([{ now: 100 } /* change_status: nothing pending */, {} /* get_bands */]);
+  try {
+    const c = loadChunk();
+    const vm = bandsVm(c);
+    vm.startCountdown(60, { sa: '71' }, 'bands', { now: 0, deadline: 60 });
+    vm.awaitWatchdog(0);
+    await tick(); await tick();
+    assert.strictEqual(calls[0].params[2], 'change_status');
+    assert.ok(vm.pending && vm.pending.done && vm.pending.reverted, 'reverted, as the box reports');
+  } finally { unstubRpc(); }
 });
 
 // ---- Nearby-cells scan card ----
