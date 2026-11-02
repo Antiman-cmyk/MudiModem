@@ -314,7 +314,7 @@ module.exports = {
     },
     qColor(q) {
       return ({
-        poor: "var(--error)", fair: "var(--warning)", good: "var(--info-hover)",
+        poor: "var(--error)", fair: "var(--warning)", good: "var(--secondary)",   // GL 4.10 cellular-detail uses --secondary; --info-hover == --text-hint in dark
         excellent: "var(--success)", none: "var(--text-hint)"
       })[q];
     },
@@ -1422,7 +1422,7 @@ module.exports = {
         // Control-state badges on the trace header: mode lock + tower lock. Muted
         // when idle (Auto / Unlocked), tinted when a restriction is in force.
         '.mm-lockbadges{display:flex;gap:6px;align-items:center}' +
-        '.mm-lockbadge{background:var(--background-3,rgba(0,0,0,.04));border:1px solid transparent;border-radius:9px;padding:1px 8px;font:inherit;font-size:10px;font-weight:600;letter-spacing:.02em;color:var(--text-hint);cursor:pointer;white-space:nowrap}' +
+        '.mm-lockbadge{background:var(--background-badge);border:1px solid transparent;border-radius:9px;padding:1px 8px;font:inherit;font-size:10px;font-weight:600;letter-spacing:.02em;color:var(--text-hint);cursor:pointer;white-space:nowrap}' +
         '.mm-lockbadge.mode{color:var(--warning);border-color:var(--warning-disabled,var(--warning));background:var(--warning-disabled,transparent)}' +
         '.mm-lockbadge.lock{color:var(--error);border-color:var(--error);background:transparent}' +
         '.mm-tabs{display:flex;gap:22px;border-bottom:1px solid var(--divider);margin-bottom:11px;padding:0 4px}' +
@@ -1486,7 +1486,7 @@ module.exports = {
         '.mm-card-h{font-size:13px;font-weight:600;color:var(--text-title);margin-bottom:6px}' +
         '.mm-kv{display:flex;gap:12px;padding:4px 0;font-size:14px}' +
         '.mm-k{color:var(--text-hint);min-width:64px}' +
-        '.mm-v{color:var(--text)}' +
+        '.mm-v{color:var(--text-title)}' +
         '.mm-link{color:var(--primary);cursor:pointer;text-decoration:underline}' +
         '.mm-warn{color:var(--warning)}' +
         '.mm-upd{color:var(--text-hint)}' +

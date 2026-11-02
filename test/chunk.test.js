@@ -244,11 +244,11 @@ test('shows the active SIM when it IS registered, with carrier label', () => {
 test('quality colour comes from GL levels, mapped to GL ramp tokens', () => {
   const c = loadChunk();
   const vm = makeVm(c, LIVE);
-  // rsrp_level 3 -> good -> --info-hover ; sinr_level 2 -> fair -> --warning
+  // rsrp_level 3 -> good -> --secondary ; sinr_level 2 -> fair -> --warning
   const nodes = walk(c.render.call(vm, h));
   const styled = nodes.filter((n) => n.data && n.data.style && n.data.style.color)
     .map((n) => n.data.style.color);
-  assert.ok(styled.includes('var(--info-hover)'), 'rsrp level 3 -> good ramp token');
+  assert.ok(styled.includes('var(--secondary)'), 'rsrp level 3 -> good ramp token');
   assert.ok(styled.includes('var(--warning)'), 'sinr level 2 -> fair ramp token');
 });
 

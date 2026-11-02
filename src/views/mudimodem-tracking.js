@@ -480,7 +480,7 @@ module.exports = (function () {
       },
       qFromLevel: function (l) { return ({1:"poor",2:"fair",3:"good",4:"excellent"})[l] || "none"; },
       qColor: function (q) {
-        return ({ poor:"var(--error)", fair:"var(--warning)", good:"var(--info-hover)",
+        return ({ poor:"var(--error)", fair:"var(--warning)", good:"var(--secondary)",
           excellent:"var(--success)", none:"var(--text-hint)" })[q];
       },
       clock: function (t) {

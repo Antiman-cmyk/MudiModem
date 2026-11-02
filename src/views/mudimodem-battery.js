@@ -36,7 +36,7 @@ module.exports = (function () {
     { key: "cur",    label: "Current · mA",      unit: "mA", h: 64, dec: 0,
       color: "var(--success)",    zero: true },
     { key: "voltV",  label: "Voltage · V",       unit: "V",  h: 64, dec: 2,
-      color: "var(--info-hover)", fixed: [3.3, 4.3] },
+      color: "var(--secondary)",  fixed: [3.3, 4.3] },   // not --info-hover: equals --text-hint in the dark theme
     { key: "temp",   label: "Temperature · °C",  unit: "°C", h: 64, dec: 1,
       color: "var(--warning)",    minSpan: 5 }
   ];
@@ -940,14 +940,14 @@ module.exports = (function () {
         // GL theme tokens only — never hand-picked colours (CLAUDE.md §8).
         var css = [
           ".mmb{display:flex;flex-direction:column;gap:12px}",
-          ".mmb-card{background:var(--card-bg,var(--bg-content));border-radius:8px;padding:12px 14px}",
-          ".mmb-h{font-weight:600;margin-bottom:8px;color:var(--text-primary)}",
+          ".mmb-card{background:var(--background-card);border-radius:8px;padding:12px 14px}",
+          ".mmb-h{font-weight:600;margin-bottom:8px;color:var(--text-title)}",
           ".mmb-row{display:flex;flex-wrap:wrap;gap:16px;align-items:baseline}",
           ".mmb-stat{display:flex;flex-direction:column;min-width:84px}",
-          ".mmb-stat b{font-size:18px;font-weight:600;color:var(--text-primary);line-height:1.25}",
+          ".mmb-stat b{font-size:18px;font-weight:600;color:var(--text-title);line-height:1.25}",
           ".mmb-stat span{font-size:11px;color:var(--text-badge)}",
           ".mmb-seg{display:inline-flex;gap:2px}",
-          ".mmb-seg button{border:0;background:var(--bg-body);color:var(--text-badge);",
+          ".mmb-seg button{border:0;background:var(--background-content);color:var(--text-badge);",
           "padding:3px 10px;font-size:12px;border-radius:4px;cursor:pointer}",
           ".mmb-seg button.on{background:var(--primary);color:#fff}",
           // Chart: HTML lane headers (value + Range) sit above the shared SVG so
@@ -959,7 +959,7 @@ module.exports = (function () {
           ".mmb-lane-head{display:flex;flex-direction:row;flex-wrap:wrap;",
           "align-items:baseline;gap:8px;padding:0 0 4px;line-height:1.3}",
           ".mmb-lane-name{font-size:12px;color:var(--text-badge)}",
-          ".mmb-lane-head b{font-size:14px;font-weight:700;color:var(--text-primary);",
+          ".mmb-lane-head b{font-size:14px;font-weight:700;color:var(--text-title);",
           "font-variant-numeric:tabular-nums}",
           ".mmb-lane-head small{font-size:12px;font-weight:400;color:var(--text-hint);",
           "font-variant-numeric:tabular-nums}",
@@ -968,7 +968,7 @@ module.exports = (function () {
           ".mmb-note{font-size:12px;color:var(--text-badge);margin-top:6px}",
           ".mmb-kv{display:flex;align-items:center;gap:10px;margin:6px 0}",
           ".mmb-k{font-size:13px;color:var(--text-badge);min-width:92px}",
-          ".mmb-v{font-size:13px;color:var(--text-primary)}",
+          ".mmb-v{font-size:13px;color:var(--text-title)}",
           // accent-color keeps the thumb/track on the GL palette without a hex
           // literal; engines without it fall back to the default control colour.
           ".mmb-v input[type=range]{width:180px;vertical-align:middle;accent-color:var(--primary)}",
@@ -978,7 +978,7 @@ module.exports = (function () {
           // Headline estimate: the largest thing on the card, with its own
           // provenance kept deliberately quiet beside it.
           ".mmb-est{display:flex;align-items:baseline;gap:10px;margin-bottom:10px;flex-wrap:wrap}",
-          ".mmb-est b{font-size:22px;font-weight:600;color:var(--text-primary);line-height:1.2}",
+          ".mmb-est b{font-size:22px;font-weight:600;color:var(--text-title);line-height:1.2}",
           ".mmb-prov{font-size:11px;color:var(--text-hint)}"
         ].join("");
         var el = document.createElement("style");
@@ -1120,7 +1120,7 @@ module.exports = (function () {
           var plotW = W - PADL - PADR;
           strip.push(h("rect", { attrs: {
             x: PADL, y: 0.5, width: Math.max(1, plotW), height: Math.max(1, H - 1),
-            fill: "var(--bg-body, var(--background-body, transparent))",
+            fill: "var(--background-content)",
             stroke: "#999999", "stroke-width": 1.5, rx: 2
           } }));
           // Domain bounds on the RIGHT y-axis (left is free for the HTML
@@ -1169,7 +1169,7 @@ module.exports = (function () {
                 cx: self.xOfT(near.t, bounds).toFixed(1),
                 cy: self.yIn(L, 0, near[L.key], d).toFixed(1), r: 3.5,
                 fill: L.color,
-                stroke: "var(--background-card, var(--bg-content))",
+                stroke: "var(--background-card)",
                 "stroke-width": 1.5
               } }));
             }
@@ -1232,7 +1232,7 @@ module.exports = (function () {
             STATE_LABEL[this.chargeState(near)]
           ];
           foot.push(h("text", { attrs: { x: PADL, y: axisY + 16, "font-size": FS_READOUT,
-            fill: "var(--text-primary)" } }, bits.join("  ·  ")));
+            fill: "var(--text-title)" } }, bits.join("  ·  ")));
         }
         var footH = axisY + 24;
         rows.push(h("svg", {
