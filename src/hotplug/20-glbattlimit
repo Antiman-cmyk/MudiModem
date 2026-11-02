@@ -2,7 +2,7 @@
 # Re-apply MudiModem charge limit on charger-related i2c hotplug events.
 # Reads /etc/mudimodem/battlimit.json (GUI-scale target). No-op when disabled
 # or when a watcher is already running.
-# Spec: docs/superpowers/specs/2026-07-22-battery-charge-limit-design.md
+# Spec: docs/design/2026-07-22-battery-charge-limit-design.md
 
 CFG="${MUDIMODEM_BATTLIMIT_FILE:-/etc/mudimodem/battlimit.json}"
 BIN="${MUDIMODEM_BATTLIMIT_BIN:-/usr/bin/glbattlimit}"

@@ -1,7 +1,7 @@
 # AT console + community AT command library — Phase 3 design
 
 *2026-07-18. Brainstormed with Kevin; approved section by section. Builds on CLAUDE.md §7a and the
-`console.html` mockup (`.superpowers/brainstorm/782253-1784289176/content/console.html`).*
+`console.html` mockup (`console.html` (local brainstorm mockup, never committed)).*
 
 ## 0. Probe findings that shaped this design (2026-07-18, read-only)
 

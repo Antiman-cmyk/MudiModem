@@ -731,7 +731,7 @@ module.exports = (function () {
       },
 
       // ---- runtime / charge-time estimate -------------------------------
-      // Spec: docs/superpowers/specs/2026-07-28-battery-runtime-estimate-design.md
+      // Spec: docs/design/2026-07-28-battery-runtime-estimate-design.md
       //
       // ⚠️ SoC-slope based, and it has to be: the box exposes NO charge_full /
       // charge_now / energy_* node, so the pack's capacity in mAh does not

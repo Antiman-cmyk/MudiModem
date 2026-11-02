@@ -835,7 +835,7 @@ test('renderLimitCard: shows the form fields once bl has loaded', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Target slider (spec: docs/superpowers/specs/2026-07-28-charge-limit-slider-design.md).
+// Target slider (spec: docs/design/2026-07-28-charge-limit-slider-design.md).
 // The old number input accepted GUI 20-100 while the backend rejects anything
 // below GUI 50 (glbattlimit's gauge>=50 floor), so ~30% of its range was dead.
 // The slider makes that range unreachable rather than merely validated-against.
@@ -1008,7 +1008,7 @@ test('renderLimitCard: Charging stopped only when a fresh sample confirms 0 mA',
 
 // ---------------------------------------------------------------------------
 // Runtime / charge-time estimate (spec:
-// docs/superpowers/specs/2026-07-28-battery-runtime-estimate-design.md).
+// docs/design/2026-07-28-battery-runtime-estimate-design.md).
 //
 // SoC-slope based, because the box exposes NO charge_full/energy_* node - the
 // pack capacity in mAh does not exist anywhere on the device, so the obvious
@@ -1308,7 +1308,7 @@ test('the hover readout fits inside the svg height', () => {
 
 // ---------------------------------------------------------------------------
 // Chart hybrid craft (2026-07-29) — jayck88 hover/range presentation on our
-// data plane. Spec: docs/superpowers/specs/2026-07-29-battery-chart-hybrid-design.md
+// data plane. Spec: docs/design/2026-07-29-battery-chart-hybrid-design.md
 // ---------------------------------------------------------------------------
 
 test('chartBounds stretches when retained history is shorter than the selected range', () => {

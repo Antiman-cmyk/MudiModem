@@ -2,8 +2,8 @@
 
 **Date:** 2026-07-17
 **Status:** design agreed; band data unverified (see Open questions)
-**Mockup:** `.superpowers/brainstorm/782253-1784289176/content/design.html` (self-contained, opens in any browser)
-**Addendum (2026-07-17, Tracking page):** `.superpowers/brainstorm/782253-1784289176/content/tracking.html` — see §10
+**Mockup:** `design.html` (local brainstorm mockup, never committed) (self-contained, opens in any browser)
+**Addendum (2026-07-17, Tracking page):** `tracking.html` (local brainstorm mockup, never committed) — see §10
 **Supersedes the UI portions of:** `2026-07-16-mudimodem-design.md`
 
 ---
@@ -210,7 +210,7 @@ or not a browser is open (CLAUDE.md §5).
 **Date:** 2026-07-17
 **Status:** ✅ design agreed **and data source resolved** (2026-07-17) — in-memory recorder,
 history kept in a session-scoped `window` singleton (§10.6.1). Ready for an implementation plan.
-**Mockup:** `.superpowers/brainstorm/782253-1784289176/content/tracking.html` (⚠️ its "Cell · PCI"
+**Mockup:** `tracking.html` (local brainstorm mockup, never committed) (⚠️ its "Cell · PCI"
 bus is corrected to **Cell ID** below — the box carries no PCI over the websocket, §10.2).
 
 ### 10.1 Why a separate page, and why it's allowed to look different

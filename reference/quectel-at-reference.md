@@ -434,7 +434,7 @@ AT+QNWLOCK="save_ctrl",0,0             ← GL sets on unlock; 0 = lock gone on r
 - Crossed AT replies on `modem.CPU.AT` reproduced again (§10) — a query answered with the *next*
   query's payload. Validate reply prefixes.
 
-**Design consuming all this:** `docs/superpowers/specs/2026-07-18-cell-lock-tab-design.md`.
+**Design consuming all this:** `docs/design/2026-07-18-cell-lock-tab-design.md`.
 
 ### ⚠️ Cell lock drops a REMOTE admin session — root cause 2026-07-19 🟢
 **Symptom:** locking a cell "sometimes" kills the RPC/web connection afterwards; it recovers on its

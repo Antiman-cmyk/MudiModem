@@ -20,7 +20,7 @@ died with `running:true` on disk. A run always ends on a terminal write
 uncaught exception or SIGTERM. A run that loses the flock exits WITHOUT
 touching the file — it belongs to the run holding the lock.
 
-Design doc: docs/superpowers/specs/2026-07-20-speedtest-tab-design.md
+Design doc: docs/design/2026-07-20-speedtest-tab-design.md
 """
 import fcntl
 import json

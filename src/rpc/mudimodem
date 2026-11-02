@@ -1666,7 +1666,7 @@ end
 
 -- ---- Battery charge limit (Config tab) ------------------------------------
 -- Policy file + glbattlimit CLI. No ubus. Spec:
--- docs/superpowers/specs/2026-07-22-battery-charge-limit-design.md
+-- docs/design/2026-07-22-battery-charge-limit-design.md
 -- Env (MUDIMODEM_BATTLIMIT_FILE / MUDIMODEM_BATTLIMIT_BIN) re-read each call
 -- so isolation tests can override after dofile.
 
