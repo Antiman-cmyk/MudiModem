@@ -69,10 +69,11 @@ R4 features built on it, plus the fixes they surfaced.
   band change; NSA-only is refused under 5G-only, where it would leave nothing to connect to.
 - **Bands for the standby SIM:** with two SIMs, the Bands tab can edit the SIM that is not in use.
   GL stores the change and applies it the next time that SIM connects (switch or failover).
-- **Half the modem polling for live RF:** GL already samples both SIMs' signal every 10 s; the
-  collector now reads GL's samples instead of asking the modem again, and asks only for the cell
-  id when the serving cell changes (or once a minute). Same samples, same signal levels — verified
-  by running GL's own cellular stack under emulation.
+- **No extra modem polling for live RF:** GL already samples both SIMs' signal every 10 s; the
+  collector now reads GL's samples instead of asking the modem again (one QENG + QCAINFO less every
+  10 s on the shared AT channel), and asks only for the cell id when the serving cell changes (or
+  once a minute). Same samples, same signal levels — verified by running GL's own cellular stack
+  under emulation.
 - **Chinese:** the whole Modem page is available in Simplified Chinese and follows GL's language
   setting (switching GL's language switches the page). Technical terms (RSRP, n71, AT commands)
   stay as they are; the community AT library stays English.
