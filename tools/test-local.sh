@@ -79,5 +79,5 @@ command -v shellcheck >/dev/null && run "shellcheck" shellcheck -s sh -S warning
   src/sbin/mudimodem-revert src/sbin/mudimodem-selfupdate install.sh uninstall.sh src/lib/mudimodem-detach \
   src/sbin/glbattlimit src/hotplug/20-glbattlimit src/etc/init.d/* src/lib/mudimodem-deps \
   src/installer/mudimodem-install tools/deploy.sh tools/build.sh tools/firmware.sh tools/emu.sh \
-  test/installer.test.sh test/manifest.test.sh test/static.test.sh
+  test/installer.test.sh test/manifest.test.sh test/static.test.sh test/emu/gl-bus.sh
 exit $rc

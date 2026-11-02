@@ -46,8 +46,14 @@ Rules that follow from the merge code:
 
 Pushes are `ubus call gl-session notify '{"name":…,"data":…}'` — the bus `cellular_manager`
 itself uses for `cellular.modems_status` (🟢 `gl-ngx-session.lua`, 🟡 `libcmstate_manager.so`);
-`notify` is a no-op inside gl-session when no browser is attached, so it is called
-unconditionally. `get_history` / `get_battery_history` remain only for the one-time window
+`notify` is a no-op inside gl-session when no browser is attached; the collector probes
+`has_websocket` (every 30 s idle / 60 s attached) and skips the push while nobody listens.
+**Wire shape** (🟢 `usr/sbin/gl-ngx-session` `notify` = `cjson.encode(msg)` of the eco.ubus-decoded
+message; reproduced end to end on the image's ubus/ubusd/eco in `test/collectd-emu.test.py`): a
+pushed frame has **no `null` keys** (absent instead) and an **empty array arrives as `{}`** (a
+no-service sample's `signals`). The /ws seed reads `latest.json` and keeps both. Page code must
+therefore test `x == null` and `Array.isArray(x)`, never `=== null` / `.length` on a sample field.
+`get_history` / `get_battery_history` remain only for the one-time window
 preload and range backfill; each chart keeps a 30–45 s stall guard that fetches the tail once
 if pushes stop (websocket reconnect, collector restart). The 1.x `collectd.sock` Unix socket is
 gone with the LCD renderer it fed.
