@@ -113,7 +113,9 @@ var __mm = (() => {
     "Can't reach the router — battery history stopped updating.": "无法连接路由器 — 电池历史已停止更新。",
     "Cancel": "取消",
     "Carrier": "运营商",
+    "Carrier aggregation: several carriers combined for more speed.": "载波聚合：把多个载波合在一起以提高速度。",
     "Cell": "小区",
+    "Cell / Ch": "小区 / 信道",
     "Cell ID": "小区 ID",
     "Cell lock": "锁定基站",
     "Cell lock applied": "已锁定基站",
@@ -130,15 +132,20 @@ var __mm = (() => {
     "Charging": "充电中",
     "Charging stopped": "已停止充电",
     "Choose the network mode and which 5G/LTE bands the modem may use. Blocked bands are ones the module supports but your carrier forbids - they can't be selected because they never take.": "选择网络模式，以及 Modem 可以使用的 5G/LTE 频段。被屏蔽的频段是模组支持、但运营商策略不允许的频段 - 选了也不会生效，所以不能选。",
+    "Clear": "清空",
     "Clear history": "清除历史",
     "Clear it": "清除",
+    "Clear the transcript": "清空记录",
+    "Click again to delete all results": "再点一次删除全部结果",
     "Commands go straight to the {modem}. Nothing is validated. Entries marked nv write modem memory that survives a factory reset.": "命令会直接发给 {modem}，不做任何校验。标记为 nv 的条目会写入 Modem 的存储，恢复出厂设置后仍然存在。",
     "Config": "配置",
     "Confirm": "确认",
     "Connection dropped while applying the lock - checking whether it took...": "锁定时连接中断 - 正在确认是否已生效…",
     "Connection dropped while locking and hasn't recovered yet - refresh once you're back to see the current lock state.": "锁定时连接中断且尚未恢复 - 恢复后请刷新以查看当前锁定状态。",
     "Contributed by": "贡献者",
+    "Copied": "已复制",
     "Copy": "复制",
+    "Copy failed - select the text to copy it": "复制失败 - 请手动选择文本复制",
     "Copy the transcript": "复制记录",
     "Couldn't check interfaces: {err}": "无法检查网络接口：{err}",
     "Couldn't confirm which SIM answered - values may be for the other slot": "无法确认是哪张 SIM 卡在应答 - 数值可能属于另一个卡槽",
@@ -170,6 +177,7 @@ var __mm = (() => {
     "Download": "下载",
     "Draining on power": "接电源仍在放电",
     "Each edited band group needs at least one band": "每个修改过的频段组至少要保留一个频段",
+    "Each test uses about {mib} MiB of data — about {day} a day at this interval.": "每次测速约消耗 {mib} MiB 流量 — 按当前间隔每天约 {day}。",
     "Earlier battery history didn't load — showing samples since the tab opened; retrying every {s} s.": "更早的电池历史没能加载 — 只显示打开本页以来的采样；每 {s} 秒重试一次。",
     "Earlier history didn't load — showing live samples since the page opened; retrying every {s} s.": "更早的历史没能加载 — 只显示打开页面以来的实时采样；每 {s} 秒重试一次。",
     "Enable higher-risk commands": "启用高风险命令",
@@ -258,6 +266,7 @@ var __mm = (() => {
     "Raw AT": "AT 命令",
     "Reading band configuration from the modem...": "正在从 Modem 读取频段配置…",
     "Reading lock state from the modem...": "正在从 Modem 读取锁定状态…",
+    "Received power from the cell, in dBm. Above −90 is good, −90 to −105 fair, below −110 poor.": "从基站收到的信号功率，单位 dBm。高于 −90 为好，−90 到 −105 一般，低于 −110 差。",
     "Recovery": "恢复方法",
     "Refresh now": "立即更新",
     "Refreshing…": "正在更新…",
@@ -288,6 +297,8 @@ var __mm = (() => {
     "Sending the default to the modem: band filtering off + Auto mode.": "正在向 Modem 发送默认设置：关闭频段过滤 + 自动模式。",
     "Sending…": "正在发送…",
     "Sharp edge.": "注意风险。",
+    "Signal against noise and interference, in dB. Above 13 is good, 0 to 13 fair, below 0 poor.": "信号与噪声和干扰之比，单位 dB。高于 13 为好，0 到 13 一般，低于 0 差。",
+    "Signal quality including how busy the cell is, in dB. Above −10 is good, −10 to −15 fair, below −15 poor.": "信号质量（含基站繁忙程度），单位 dB。高于 −10 为好，−10 到 −15 一般，低于 −15 差。",
     "Source": "来源",
     "Speedtest": "测速",
     "Starting…": "正在启动…",
@@ -306,6 +317,7 @@ var __mm = (() => {
     "The collector has not produced a sample for {age} (modem resetting, or mudimodem-collectd stopped) - these are its last known values, not live readings.": "采集器已经 {age} 没有产生新采样（Modem 正在重置，或 mudimodem-collectd 已停止），以下是最后一次的数值，不是实时读数。",
     "The collector's last sample is {age} old - nothing newer has been pushed": "采集器的最后一次采样已是 {age} 前，之后没有新的推送",
     "The connection dropped while applying, and nothing is pending on the router now - the change did not take, or was already reverted.": "应用时连接中断，且路由器上现在没有待确认的修改 - 修改没有生效，或已被恢复。",
+    "The frequency band in use: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter.": "当前使用的频段：n 表示 5G NR，B 表示 LTE。低频覆盖远；高频速度快但覆盖近。",
     "The lock request was cut off by a connection drop and no lock is set - try again.": "锁定请求因连接中断而失败，目前没有设置锁定 - 请重试。",
     "The watchdog reverted a lock, but {gl} still remembers it - GL may re-apply it later. Clear it to reconcile.": "看门狗已撤销一次锁定，但 {gl} 仍然记着它 - GL 之后可能会重新应用。请清除以保持一致。",
     "Time": "时间",
@@ -336,6 +348,8 @@ var __mm = (() => {
     "WRITES MODEM NV — survives factory reset": "写入 Modem NV — 恢复出厂设置后仍然存在",
     "Waiting for the collector's first sample (mudimodem-collectd pushes every 10s)...": "正在等待采集器的第一次采样（mudimodem-collectd 每 10 秒推送一次）…",
     "Watchdog": "看门狗",
+    "What these readings mean": "这些读数的含义",
+    "Which cell the modem is on (its ID) and the channel number with its frequency.": "Modem 当前所在的小区（小区 ID），以及信道号和对应频率。",
     "Wired WAN": "有线 WAN",
     "Would strand your {rat} cell lock - clear the lock first": "会让 {rat} 基站锁定失效 - 请先解除锁定",
     "Your connection dropped while applying, but the band change ({what}) most likely applied.": "应用时连接中断了，但频段修改（{what}）很可能已经生效。",
@@ -416,6 +430,8 @@ var __mm = (() => {
     "{locked} to {target}. The modem will not hand over.": "{locked}到 {target}。Modem 不会切换基站。",
     "{name} (not connected)": "{name}（未连接）",
     "{name} is not connected": "{name} 未连接",
+    "{n} GiB": "{n} GiB",
+    "{n} MiB": "{n} MiB",
     "{n} commands": "{n} 条命令",
     "{n} h ago": "{n} 小时前",
     "{n} min": "{n} 分钟",
@@ -533,6 +549,7 @@ var __mm = (() => {
   var speedtest_default = localize(function() {
     "use strict";
     var IFACES = [["cellular", "Cellular"], ["wired", "Wired WAN"]];
+    var TEST_MIB = 22;
     var INTERVALS = [
       [1800, "30 min"],
       [3600, "1 hour"],
@@ -591,7 +608,10 @@ var __mm = (() => {
           scheduleSaving: false,
           cursor: null,
           pinned: null,
-          width: 900
+          width: 900,
+          clearArmed: false,
+          clearTimer: null
+          // "Clear history" asks twice: it deletes up to 500 results
         };
       },
       computed: {
@@ -641,6 +661,7 @@ var __mm = (() => {
       // poll that would run until the test ends.
       beforeDestroy: function() {
         this._dead = true;
+        if (this.clearTimer) clearTimeout(this.clearTimer);
         if (this.statusPoll) clearInterval(this.statusPoll);
         this.statusPoll = null;
         if (typeof window !== "undefined" && this._onResize) window.removeEventListener("resize", this._onResize);
@@ -680,6 +701,11 @@ var __mm = (() => {
             self.results = r && r.results || [];
             self.resultsErr = "";
             self.resultsLoading = false;
+            if (!self.lastResult && self.results.length) {
+              self.lastResult = self.results.reduce(function(a, b) {
+                return (b.t || 0) > (a.t || 0) ? b : a;
+              });
+            }
           }).catch(function(e) {
             if (self._dead) return;
             self.resultsErr = e && (e.message || e.type) || "could not load history";
@@ -794,6 +820,19 @@ var __mm = (() => {
           if (prop === "checked") el.checked = !!this.schedule.enabled;
           else el.value = String(this.schedule.interval_seconds);
         },
+        armClear: function() {
+          var self = this;
+          if (this.clearArmed) {
+            this.clearArmed = false;
+            clearTimeout(this.clearTimer);
+            this.clearHistory();
+            return;
+          }
+          this.clearArmed = true;
+          this.clearTimer = setTimeout(function() {
+            self.clearArmed = false;
+          }, 5e3);
+        },
         clearHistory: function() {
           var self = this;
           this.rpc("clear_speedtest_history", {}).then(function() {
@@ -857,7 +896,12 @@ var __mm = (() => {
             return h("option", { attrs: { value: iv[0] }, key: iv[0] }, t("Every {n}", { n: t(iv[1]) }));
           }));
           var err = this.scheduleErr ? h("span", { staticClass: "mms-err" }, t("Couldn't save the schedule: {err}", { err: this.scheduleErr })) : null;
-          return h("div", { staticClass: "mms-sched" }, [toggle, sel, err].filter(Boolean));
+          var perDay = 86400 / (this.schedule.interval_seconds || 21600) * TEST_MIB;
+          var cost = h("span", { staticClass: "mms-hint" }, t("Each test uses about {mib} MiB of data — about {day} a day at this interval.", {
+            mib: TEST_MIB,
+            day: perDay >= 1024 ? t("{n} GiB", { n: (perDay / 1024).toFixed(1) }) : t("{n} MiB", { n: Math.round(perDay) })
+          }));
+          return h("div", { staticClass: "mms-sched" }, [toggle, sel, err, cost].filter(Boolean));
         },
         renderLatestResult: function(h) {
           if (!this.lastResult) return null;
@@ -1089,7 +1133,7 @@ var __mm = (() => {
         },
         injectStyle: function() {
           if (typeof document === "undefined" || document.getElementById(this.styleId)) return;
-          var css = ".mms{color:var(--text-regular)}.mms-card{background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);padding:12px 14px;margin-bottom:11px}.mms-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}.mms-crumb{background:none;border:0;font:inherit;font-size:12px;color:var(--primary);cursor:pointer;padding:0}.mms-title{font-size:14px;font-weight:600;color:var(--text-title)}.mms-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.mms-btn{font-size:12px;font-weight:600;border-radius:3px;padding:7px 14px;cursor:pointer;font-family:inherit;border:1px solid var(--border);background:var(--background-card);color:var(--text-regular)}.mms-btn.primary{background:var(--primary);color:#fff;border-color:var(--primary)}.mms-btn:disabled{opacity:.6;cursor:default}.mms-err{color:var(--error);font-size:12px}.mms-sched{display:flex;align-items:center;gap:10px;margin-top:10px;font-size:12px}.mms-sched-toggle{display:flex;align-items:center;gap:6px;cursor:pointer}.mms-empty{padding:24px 0;text-align:center;color:var(--text-hint);font-size:12.5px}.mms-graph{position:relative;cursor:crosshair}.mms-graph svg{display:block;width:100%}.mms-tip{position:absolute;top:8px;left:8px;pointer-events:none;z-index:5;background:var(--background-card);border:1px solid var(--border);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.12);padding:8px 10px;min-width:170px}.mms-tip .t{font-size:10.5px;color:var(--text-badge);margin-bottom:5px}.mms-tip-row{display:flex;justify-content:space-between;gap:14px;font-size:11.5px;padding:1px 0}.mms-tip-row b{font-weight:600;color:var(--text-title)}.mms-latest-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px}.mms-latest-when{font-size:11px;color:var(--text-badge)}.mms-latest-big{display:flex;gap:22px;margin-bottom:10px;flex-wrap:wrap}.mms-latest-metric{display:flex;flex-direction:column}.mms-latest-metric .v{font-size:22px;font-weight:700;color:var(--text-title);line-height:1.15}.mms-latest-metric .u{font-size:10.5px;color:var(--text-badge)}";
+          var css = ".mms{color:var(--text-regular)}.mms-card{background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);padding:12px 14px;margin-bottom:11px}.mms-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}.mms-crumb{background:none;border:0;font:inherit;font-size:12px;color:var(--primary);cursor:pointer;padding:0}.mms-title{font-size:14px;font-weight:600;color:var(--text-title)}.mms-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.mms-btn{font-size:12px;font-weight:600;border-radius:3px;padding:7px 14px;cursor:pointer;font-family:inherit;border:1px solid var(--border);background:var(--background-card);color:var(--text-regular)}.mms-btn.primary{background:var(--primary);color:#fff;border-color:var(--primary)}.mms-btn.danger{color:var(--error);border-color:var(--error)}.mms-hint{font-size:11.5px;color:var(--text-weak);flex-basis:100%}.mms-btn:disabled{opacity:.6;cursor:default}.mms-err{color:var(--error);font-size:12px}.mms-sched{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:10px;font-size:12px}.mms-sched-toggle{display:flex;align-items:center;gap:6px;cursor:pointer}.mms-empty{padding:24px 0;text-align:center;color:var(--text-hint);font-size:12.5px}.mms-graph{position:relative;cursor:crosshair}.mms-graph svg{display:block;width:100%}.mms-tip{position:absolute;top:8px;left:8px;pointer-events:none;z-index:5;background:var(--background-card);border:1px solid var(--border);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.12);padding:8px 10px;min-width:170px}.mms-tip .t{font-size:10.5px;color:var(--text-badge);margin-bottom:5px}.mms-tip-row{display:flex;justify-content:space-between;gap:14px;font-size:11.5px;padding:1px 0}.mms-tip-row b{font-weight:600;color:var(--text-title)}.mms-latest-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px}.mms-latest-when{font-size:11px;color:var(--text-badge)}.mms-latest-big{display:flex;gap:22px;margin-bottom:10px;flex-wrap:wrap}.mms-latest-metric{display:flex;flex-direction:column}.mms-latest-metric .v{font-size:22px;font-weight:700;color:var(--text-title);line-height:1.15}.mms-latest-metric .u{font-size:10.5px;color:var(--text-badge)}";
           var el = document.createElement("style");
           el.id = this.styleId;
           el.textContent = css;
@@ -1143,9 +1187,16 @@ var __mm = (() => {
                 h("span", "History"),
                 ifaceFilterSel,
                 slotSel,
-                h("button", { staticClass: "mms-btn", on: { click: function() {
-                  self.clearHistory();
-                } } }, "Clear history")
+                h(
+                  "button",
+                  {
+                    staticClass: "mms-btn" + (self.clearArmed ? " danger" : ""),
+                    on: { click: function() {
+                      self.armClear();
+                    } }
+                  },
+                  self.clearArmed ? "Click again to delete all results" : "Clear history"
+                )
               ].filter(Boolean)),
               this.renderGraph(h)
             ])

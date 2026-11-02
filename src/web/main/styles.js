@@ -80,7 +80,10 @@ export default {
         '.mm-revert b{font-weight:600}.mm-cd{font-variant-numeric:tabular-nums}' +
         '.mm-bar{height:2px;background:var(--warning-disabled);border-radius:1px;margin-top:8px;overflow:hidden}.mm-bar i{display:block;height:100%;background:var(--warning);transition:width 1s linear}' +
         // nearby-cells scan card
-        '.mm-scan-row{display:flex;gap:10px;align-items:center;padding:7px 4px;border-bottom:1px solid var(--divider);font-size:12px}' +
+        '.mm-help{margin-left:6px;width:15px;height:15px;line-height:13px;border-radius:50%;border:1px solid var(--border);background:transparent;color:var(--text-weak);font-size:10px;font-weight:700;cursor:pointer;padding:0;vertical-align:1px}' +
+        '.mm-gloss{flex-basis:100%;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:4px 16px;font-size:11.5px;color:var(--text-weak);border-top:1px solid var(--divider);padding-top:8px;margin-top:4px}' +
+        '.mm-gloss b{color:var(--text-title)}' +
+        '.mm-scan-row{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;padding:7px 4px;border-bottom:1px solid var(--divider);font-size:12px}' +
         '.mm-scan-row>span{min-width:0}.mm-scan-row>span:nth-child(2){flex:1}' +
         '.mm-scan-badge{flex:none;font-size:10px;padding:1px 6px;border:1px solid var(--border);border-radius:3px;color:var(--text-badge)}' +
         '@media(max-width:640px){.mm-strip{flex-direction:column}.mm-read{border-left:0;border-top:1px solid var(--divider);text-align:left;align-items:flex-start}.mm-facts{justify-content:flex-start}.mm-revert-row{flex-direction:column;align-items:flex-start}}' +

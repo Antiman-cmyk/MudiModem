@@ -575,3 +575,29 @@ test('graph: a SIM selector appears when the cellular history spans two SIMs, an
   vm.results = TWO_SIMS.filter((r) => r.slot === 1);
   assert.strictEqual(vm.filtered.length, 2, 'a vanished SIM falls back to all, not to nothing');
 });
+
+test('Clear history asks twice: the first click only arms, the second deletes', async () => {
+  const calls = stubRpc([{ ok: true }]);
+  try {
+    const vm = makeVm(loadChunk());
+    vm.results = [{ t: 1 }];
+    vm.armClear();
+    assert.strictEqual(vm.clearArmed, true, 'armed after one click');
+    assert.strictEqual(calls.length, 0, 'nothing deleted on the first click');
+    vm.armClear();
+    await Promise.resolve(); await Promise.resolve();
+    assert.strictEqual(vm.clearArmed, false);
+    assert.strictEqual(calls[0].params[2], 'clear_speedtest_history');
+    assert.deepStrictEqual(vm.results, []);
+  } finally { unstubRpc(); }
+});
+
+test('the latest-result panel starts with the newest stored result', async () => {
+  stubRpc([{ results: [{ t: 5, down_mbps: 1 }, { t: 9, down_mbps: 2 }, { t: 7, down_mbps: 3 }] }]);
+  try {
+    const vm = makeVm(loadChunk());
+    vm.fetchHistory();
+    await Promise.resolve(); await Promise.resolve();
+    assert.strictEqual(vm.lastResult && vm.lastResult.t, 9);
+  } finally { unstubRpc(); }
+});

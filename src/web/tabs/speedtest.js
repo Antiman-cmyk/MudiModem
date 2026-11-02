@@ -24,6 +24,8 @@ export default localize((function () {
   "use strict";
 
   var IFACES = [["cellular", "Cellular"], ["wired", "Wired WAN"]];
+  // Bytes one test moves (tools/mudimodem-speedtest.py: 20 MiB down + 2 MiB up + a few KiB of latency probes).
+  var TEST_MIB = 22;
   var INTERVALS = [[1800, "30 min"], [3600, "1 hour"], [7200, "2 hours"],
     [21600, "6 hours"], [43200, "12 hours"], [86400, "24 hours"]];
   var PHASE_TEXT = { starting: "Starting…", download: "Testing download…", upload: "Testing upload…",
@@ -73,7 +75,8 @@ export default localize((function () {
         lastResult: null,
         statusPoll: null,
         schedule: null, scheduleErr: "", scheduleSaving: false,
-        cursor: null, pinned: null, width: 900
+        cursor: null, pinned: null, width: 900,
+        clearArmed: false, clearTimer: null   // "Clear history" asks twice: it deletes up to 500 results
       };
     },
 
@@ -122,6 +125,7 @@ export default localize((function () {
     // poll that would run until the test ends.
     beforeDestroy: function () {
       this._dead = true;
+      if (this.clearTimer) clearTimeout(this.clearTimer);
       if (this.statusPoll) clearInterval(this.statusPoll);
       this.statusPoll = null;
       if (typeof window !== "undefined" && this._onResize) window.removeEventListener("resize", this._onResize);
@@ -158,6 +162,10 @@ export default localize((function () {
             if (self._dead) return;
             self.results = (r && r.results) || [];
             self.resultsErr = ""; self.resultsLoading = false;
+            // Show the newest stored result until a new test lands, instead of an empty panel.
+            if (!self.lastResult && self.results.length) {
+              self.lastResult = self.results.reduce(function (a, b) { return (b.t || 0) > (a.t || 0) ? b : a; });
+            }
           })
           .catch(function (e) {
             if (self._dead) return;
@@ -263,6 +271,12 @@ export default localize((function () {
         if (prop === "checked") el.checked = !!this.schedule.enabled;
         else el.value = String(this.schedule.interval_seconds);
       },
+      armClear: function () {
+        var self = this;
+        if (this.clearArmed) { this.clearArmed = false; clearTimeout(this.clearTimer); this.clearHistory(); return; }
+        this.clearArmed = true;
+        this.clearTimer = setTimeout(function () { self.clearArmed = false; }, 5000);
+      },
       clearHistory: function () {
         var self = this;
         this.rpc("clear_speedtest_history", {})
@@ -319,7 +333,11 @@ export default localize((function () {
         }, INTERVALS.map(function (iv) { return h("option", { attrs: { value: iv[0] }, key: iv[0] }, T("Every {n}", { n: T(iv[1]) })); }));
         var err = this.scheduleErr
           ? h("span", { staticClass: "mms-err" }, T("Couldn't save the schedule: {err}", { err: this.scheduleErr })) : null;
-        return h("div", { staticClass: "mms-sched" }, [toggle, sel, err].filter(Boolean));
+        // Every automatic test spends real data on the SIM: say how much before it is switched on.
+        var perDay = (86400 / (this.schedule.interval_seconds || 21600)) * TEST_MIB;
+        var cost = h("span", { staticClass: "mms-hint" }, T("Each test uses about {mib} MiB of data — about {day} a day at this interval.", {
+          mib: TEST_MIB, day: perDay >= 1024 ? T("{n} GiB", { n: (perDay / 1024).toFixed(1) }) : T("{n} MiB", { n: Math.round(perDay) }) }));
+        return h("div", { staticClass: "mms-sched" }, [toggle, sel, err, cost].filter(Boolean));
       },
       renderLatestResult: function (h) {
         if (!this.lastResult) return null;
@@ -505,9 +523,11 @@ export default localize((function () {
           '.mms-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap}' +
           '.mms-btn{font-size:12px;font-weight:600;border-radius:3px;padding:7px 14px;cursor:pointer;font-family:inherit;border:1px solid var(--border);background:var(--background-card);color:var(--text-regular)}' +
           '.mms-btn.primary{background:var(--primary);color:#fff;border-color:var(--primary)}' +
+          '.mms-btn.danger{color:var(--error);border-color:var(--error)}' +
+          '.mms-hint{font-size:11.5px;color:var(--text-weak);flex-basis:100%}' +
           '.mms-btn:disabled{opacity:.6;cursor:default}' +
           '.mms-err{color:var(--error);font-size:12px}' +
-          '.mms-sched{display:flex;align-items:center;gap:10px;margin-top:10px;font-size:12px}' +
+          '.mms-sched{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:10px;font-size:12px}' +
           '.mms-sched-toggle{display:flex;align-items:center;gap:6px;cursor:pointer}' +
           '.mms-empty{padding:24px 0;text-align:center;color:var(--text-hint);font-size:12.5px}' +
           '.mms-graph{position:relative;cursor:crosshair}.mms-graph svg{display:block;width:100%}' +
@@ -562,7 +582,9 @@ export default localize((function () {
           h("div", { staticClass: "mms-card" }, [
             h("div", { staticClass: "mms-controls" }, [
               h("span", "History"), ifaceFilterSel, slotSel,
-              h("button", { staticClass: "mms-btn", on: { click: function () { self.clearHistory(); } } }, "Clear history")
+              h("button", { staticClass: "mms-btn" + (self.clearArmed ? " danger" : ""),
+                on: { click: function () { self.armClear(); } } },
+                self.clearArmed ? "Click again to delete all results" : "Clear history")
             ].filter(Boolean)),
             this.renderGraph(h)
           ])

@@ -10,6 +10,7 @@ export default {
       // fed LIVE by the collector's own pushes over the websocket
       // (mudimodem.collect) — no polling. A slow safety poll only fires when
       // no push has arrived for a while (collector restarting, ws hiccup).
+      showGlossary: false,    // the "?" next to the RSRP label: what each reading means
       STRIP_MIN: 15,          // minutes of history the strip shows
       STRIP_POLL_MS: 30000,   // safety-poll cadence (only acts when pushes stalled)
       STRIP_STALL_MS: 45000,  // no push for this long => safety poll fetches the tail
@@ -66,6 +67,21 @@ export default {
         ? (lk.rat === "4g" ? "B" : "n") + lk.band
         : (lk.pci !== undefined && lk.pci !== null ? "PCI " + lk.pci : "");
       return { text: rat + (tag ? " " + tag : ""), locked: true, title: this.lockLabel() };
+    },
+
+    // What each reading means, with rough ranges — tap the "?" (works on touch, unlike a title).
+    renderGlossary(h) {
+      var items = [
+        ["RSRP", "Received power from the cell, in dBm. Above −90 is good, −90 to −105 fair, below −110 poor."],
+        ["SINR", "Signal against noise and interference, in dB. Above 13 is good, 0 to 13 fair, below 0 poor."],
+        ["RSRQ", "Signal quality including how busy the cell is, in dB. Above −10 is good, −10 to −15 fair, below −15 poor."],
+        ["Band", "The frequency band in use: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter."],
+        ["Cell / Ch", "Which cell the modem is on (its ID) and the channel number with its frequency."],
+        ["CA", "Carrier aggregation: several carriers combined for more speed."]
+      ];
+      return h("div", { staticClass: "mm-gloss" }, items.map(function (it) {
+        return h("div", { key: it[0] }, [h("b", it[0]), " ", h("span", it[1])]);
+      }));
     },
 
     // Two clickable status badges for the trace header. Each jumps to its tab.

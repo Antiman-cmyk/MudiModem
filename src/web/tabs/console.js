@@ -49,7 +49,9 @@ export default localize((function () {
       libErr: "",
       q: "",                // rail search text
       selId: null,          // selected entry id; null = free-typing
-      riskOK: false,        // "Enable higher-risk commands" (localStorage)
+      riskOK: false,        // "Enable higher-risk commands" — this browser session only (sessionStorage)
+      copyNote: "",         // feedback after Copy (copied / failed), shown for a moment
+      stickBottom: true,    // keep the transcript scrolled to the newest line unless the user scrolled up
       lines: STORE.lines,   // transcript { t, kind: cmd|resp|ok|err|urc|note, text } — page-lifetime
       LINES_MAX: 400,
       history: STORE.history,   // sent commands, oldest first — page-lifetime, HISTORY_MAX
@@ -140,11 +142,17 @@ export default localize((function () {
     gateBlocked() { return !!(this.sel && this.sel.risk !== "read" && !this.riskOK); }
   },
 
+  // New transcript lines land at the bottom: follow them unless the user scrolled up to read.
+  updated() {
+    var el = this.$refs && this.$refs.term;
+    if (el && this.stickBottom) el.scrollTop = el.scrollHeight;
+  },
   created() {
     var self = this;
     this.injectStyle();
-    // Storage can be blocked (privacy settings): touching window.localStorage then THROWS.
-    try { this.riskOK = window.localStorage.getItem("mudimodem.riskEnabled") === "1"; } catch (e) { /* default off */ }
+    // Session-scoped on purpose: a risky-commands switch must not stay on for weeks. Storage can be
+    // blocked (privacy settings): touching it then THROWS, so it is guarded.
+    try { this.riskOK = window.sessionStorage.getItem("mudimodem.riskEnabled") === "1"; } catch (e) { /* default off */ }
     this.fetchLib();
     // library_status curls GitHub on the router (up to ~8 s). Once per PAGE,
     // not once per tab open; a re-created tab reuses the answer (or waits on
@@ -207,7 +215,7 @@ export default localize((function () {
     },
     toggleGate() {
       this.riskOK = !this.riskOK;
-      try { window.localStorage.setItem("mudimodem.riskEnabled", this.riskOK ? "1" : "0"); } catch (e) { /* session only */ }
+      try { window.sessionStorage.setItem("mudimodem.riskEnabled", this.riskOK ? "1" : "0"); } catch (e) { /* this page only */ }
     },
     pick(e) {
       this.selId = e.id;
@@ -389,11 +397,34 @@ export default localize((function () {
           self.push("err", (e && (e.message || e.type)) || "request failed");
         });
     },
+    // navigator.clipboard exists only on HTTPS; the admin is usually plain http://192.168.8.1, so
+    // fall back to a hidden textarea + execCommand, and always say what happened.
     copyTranscript() {
+      var self = this;
       var txt = this.lines.map(function (l) { return l.t + "  " + l.text; }).join("\n");
+      var done = function (ok) {
+        self.copyNote = ok ? "Copied" : "Copy failed - select the text to copy it";
+        clearTimeout(self._copyTimer);
+        self._copyTimer = setTimeout(function () { self.copyNote = ""; }, 2500);
+      };
+      var legacy = function () {
+        if (typeof document === "undefined") return done(false);
+        var ta = document.createElement("textarea");
+        ta.value = txt; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.select();
+        var ok = false;
+        try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+        document.body.removeChild(ta);
+        done(ok);
+      };
       if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(txt);
-      }
+        navigator.clipboard.writeText(txt).then(function () { done(true); }, legacy);
+      } else legacy();
+    },
+    clearTranscript() { this.lines.splice(0, this.lines.length); this.stickBottom = true; },
+    onTermScroll(e) {
+      var el = e && e.target;
+      if (el) this.stickBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
     },
     riskText(r) {
       return { read: "safe — reads only",
@@ -571,7 +602,7 @@ export default localize((function () {
         })
       : [h("div", { staticClass: "mmc-hint" },
           "ready. Pick a command from the library, or type one.")];
-    var term = h("div", { staticClass: "mmc-term" }, termKids);
+    var term = h("div", { staticClass: "mmc-term", ref: "term", on: { scroll: this.onTermScroll } }, termKids);
 
     // ---- param strip ----
     var pstrip = null;
@@ -649,6 +680,13 @@ export default localize((function () {
             attrs: { title: "Copy the transcript" },
             on: { click: function () { self.copyTranscript(); } }
           }, "Copy"),
+          h("button", {
+            staticClass: "mmc-send", staticStyle: { background: "transparent",
+              color: "var(--text-weak)", borderColor: "var(--border)", fontWeight: "400" },
+            attrs: { title: "Clear the transcript", disabled: !this.lines.length },
+            on: { click: function () { self.clearTranscript(); } }
+          }, "Clear"),
+          this.copyNote ? h("span", { staticClass: "mmc-hint" }, this.copyNote) : null,
           h("span", { staticClass: "mmc-hint" }, this.truthLine)
         ])
       ]),

@@ -756,3 +756,29 @@ test('the truth line and timeout hint follow the transport the backend reports',
     assert.match(vm.lines.filter((l) => l.kind === 'err').pop().text, /drops a late answer/, 'GL timeout hint');
   } finally { global.window = saved; }
 });
+
+test('Clear empties the transcript; the risk switch is remembered for this session only', () => {
+  const store = {};
+  global.window = { sessionStorage: { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = v; } },
+                    localStorage: { getItem: () => { throw new Error('must not use localStorage'); }, setItem: () => { throw new Error('must not use localStorage'); } } };
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c);
+    vm.lines.push({ t: '00:00', kind: 'cmd', text: 'ATI' });
+    vm.clearTranscript();
+    assert.strictEqual(vm.lines.length, 0);
+    vm.riskOK = false;
+    vm.toggleGate();
+    assert.strictEqual(store['mudimodem.riskEnabled'], '1');
+  } finally { delete global.window; }
+});
+
+test('Copy without the clipboard API (plain-http admin) still answers', () => {
+  const c = loadChunk();
+  const vm = makeVm(c);
+  vm.lines.push({ t: '00:00', kind: 'cmd', text: 'ATI' });
+  vm.copyTranscript();            // no navigator.clipboard, no document in node
+  assert.match(vm.copyNote, /Copy failed/);
+  clearTimeout(vm._copyTimer);
+  vm.lines.splice(0);
+});

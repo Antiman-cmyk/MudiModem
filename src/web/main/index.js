@@ -212,12 +212,14 @@ export default localize(compose({
       stripKids = [
         h("div", { staticClass: "mm-trace" }, [
           h("div", { staticStyle: { display: "flex", justifyContent: "space-between", alignItems: "center" } }, [
-            h("span", { staticClass: "mm-eyebrow", style: this.staleFor ? { color: "var(--warning)" } : {}, attrs: {
+            h("span", [h("span", { staticClass: "mm-eyebrow", style: this.staleFor ? { color: "var(--warning)" } : {}, attrs: {
               title: this.staleFor
                 ? t("The collector's last sample is {age} old - nothing newer has been pushed", { age: this.fmtAge(this.staleFor) })
                 : t("Sampled every 10s by the MudiModem collector (pushed live), last {n} minutes", { n: this.STRIP_MIN })
             } }, this.staleFor ? t("RSRP · last sample {age} ago", { age: this.fmtAge(this.staleFor) })
                                : t("RSRP · last {n} min", { n: this.STRIP_MIN })),
+              h("button", { staticClass: "mm-help", attrs: { type: "button", title: "What these readings mean", "aria-expanded": String(this.showGlossary) },
+                on: { click: function () { self.showGlossary = !self.showGlossary; } } }, "?")]),
             this.renderLockBadges(h)
           ]),
           h("div", { staticClass: "mm-plot" }, [
@@ -253,6 +255,7 @@ export default localize(compose({
               })
           ))
         ]),
+        this.showGlossary ? this.renderGlossary(h) : null,
         this.staleFor
           ? h("div", { staticClass: "mm-hint mm-stale", staticStyle: { color: "var(--warning)", flexBasis: "100%" } },
               t("The collector has not produced a sample for {age} (modem resetting, or mudimodem-collectd stopped) - these are its last known values, not live readings.",

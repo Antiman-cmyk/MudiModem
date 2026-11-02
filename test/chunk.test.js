@@ -1988,3 +1988,15 @@ test('strip trace: a SIM switch starts a new line, and the label names the sampl
   assert.match(textOf(axis), /T-Mobile  SIM 1/, 'the RF readings carry the carrier + SIM they came from');
   assert.doesNotMatch(textOf(axis), /AT&T/, "the active SIM's carrier is not pinned on SIM1's readings");
 });
+
+test('the "?" beside the RSRP label opens a glossary of the readings', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, LIVE);
+  assert.doesNotMatch(textOf(c.render.call(vm, h)), /Received power from the cell/, 'closed by default');
+  const help = walk(c.render.call(vm, h)).find((n) => n.data.staticClass === 'mm-help');
+  assert.ok(help && help.data.on && help.data.on.click, 'help button present');
+  help.data.on.click();
+  const txt = textOf(c.render.call(vm, h));
+  assert.match(txt, /Received power from the cell/);
+  assert.match(txt, /Carrier aggregation/);
+});

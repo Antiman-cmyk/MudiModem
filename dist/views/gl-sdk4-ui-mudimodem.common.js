@@ -114,7 +114,9 @@ var __mm = (() => {
     "Can't reach the router — battery history stopped updating.": "无法连接路由器 — 电池历史已停止更新。",
     "Cancel": "取消",
     "Carrier": "运营商",
+    "Carrier aggregation: several carriers combined for more speed.": "载波聚合：把多个载波合在一起以提高速度。",
     "Cell": "小区",
+    "Cell / Ch": "小区 / 信道",
     "Cell ID": "小区 ID",
     "Cell lock": "锁定基站",
     "Cell lock applied": "已锁定基站",
@@ -131,15 +133,20 @@ var __mm = (() => {
     "Charging": "充电中",
     "Charging stopped": "已停止充电",
     "Choose the network mode and which 5G/LTE bands the modem may use. Blocked bands are ones the module supports but your carrier forbids - they can't be selected because they never take.": "选择网络模式，以及 Modem 可以使用的 5G/LTE 频段。被屏蔽的频段是模组支持、但运营商策略不允许的频段 - 选了也不会生效，所以不能选。",
+    "Clear": "清空",
     "Clear history": "清除历史",
     "Clear it": "清除",
+    "Clear the transcript": "清空记录",
+    "Click again to delete all results": "再点一次删除全部结果",
     "Commands go straight to the {modem}. Nothing is validated. Entries marked nv write modem memory that survives a factory reset.": "命令会直接发给 {modem}，不做任何校验。标记为 nv 的条目会写入 Modem 的存储，恢复出厂设置后仍然存在。",
     "Config": "配置",
     "Confirm": "确认",
     "Connection dropped while applying the lock - checking whether it took...": "锁定时连接中断 - 正在确认是否已生效…",
     "Connection dropped while locking and hasn't recovered yet - refresh once you're back to see the current lock state.": "锁定时连接中断且尚未恢复 - 恢复后请刷新以查看当前锁定状态。",
     "Contributed by": "贡献者",
+    "Copied": "已复制",
     "Copy": "复制",
+    "Copy failed - select the text to copy it": "复制失败 - 请手动选择文本复制",
     "Copy the transcript": "复制记录",
     "Couldn't check interfaces: {err}": "无法检查网络接口：{err}",
     "Couldn't confirm which SIM answered - values may be for the other slot": "无法确认是哪张 SIM 卡在应答 - 数值可能属于另一个卡槽",
@@ -171,6 +178,7 @@ var __mm = (() => {
     "Download": "下载",
     "Draining on power": "接电源仍在放电",
     "Each edited band group needs at least one band": "每个修改过的频段组至少要保留一个频段",
+    "Each test uses about {mib} MiB of data — about {day} a day at this interval.": "每次测速约消耗 {mib} MiB 流量 — 按当前间隔每天约 {day}。",
     "Earlier battery history didn't load — showing samples since the tab opened; retrying every {s} s.": "更早的电池历史没能加载 — 只显示打开本页以来的采样；每 {s} 秒重试一次。",
     "Earlier history didn't load — showing live samples since the page opened; retrying every {s} s.": "更早的历史没能加载 — 只显示打开页面以来的实时采样；每 {s} 秒重试一次。",
     "Enable higher-risk commands": "启用高风险命令",
@@ -259,6 +267,7 @@ var __mm = (() => {
     "Raw AT": "AT 命令",
     "Reading band configuration from the modem...": "正在从 Modem 读取频段配置…",
     "Reading lock state from the modem...": "正在从 Modem 读取锁定状态…",
+    "Received power from the cell, in dBm. Above −90 is good, −90 to −105 fair, below −110 poor.": "从基站收到的信号功率，单位 dBm。高于 −90 为好，−90 到 −105 一般，低于 −110 差。",
     "Recovery": "恢复方法",
     "Refresh now": "立即更新",
     "Refreshing…": "正在更新…",
@@ -289,6 +298,8 @@ var __mm = (() => {
     "Sending the default to the modem: band filtering off + Auto mode.": "正在向 Modem 发送默认设置：关闭频段过滤 + 自动模式。",
     "Sending…": "正在发送…",
     "Sharp edge.": "注意风险。",
+    "Signal against noise and interference, in dB. Above 13 is good, 0 to 13 fair, below 0 poor.": "信号与噪声和干扰之比，单位 dB。高于 13 为好，0 到 13 一般，低于 0 差。",
+    "Signal quality including how busy the cell is, in dB. Above −10 is good, −10 to −15 fair, below −15 poor.": "信号质量（含基站繁忙程度），单位 dB。高于 −10 为好，−10 到 −15 一般，低于 −15 差。",
     "Source": "来源",
     "Speedtest": "测速",
     "Starting…": "正在启动…",
@@ -307,6 +318,7 @@ var __mm = (() => {
     "The collector has not produced a sample for {age} (modem resetting, or mudimodem-collectd stopped) - these are its last known values, not live readings.": "采集器已经 {age} 没有产生新采样（Modem 正在重置，或 mudimodem-collectd 已停止），以下是最后一次的数值，不是实时读数。",
     "The collector's last sample is {age} old - nothing newer has been pushed": "采集器的最后一次采样已是 {age} 前，之后没有新的推送",
     "The connection dropped while applying, and nothing is pending on the router now - the change did not take, or was already reverted.": "应用时连接中断，且路由器上现在没有待确认的修改 - 修改没有生效，或已被恢复。",
+    "The frequency band in use: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter.": "当前使用的频段：n 表示 5G NR，B 表示 LTE。低频覆盖远；高频速度快但覆盖近。",
     "The lock request was cut off by a connection drop and no lock is set - try again.": "锁定请求因连接中断而失败，目前没有设置锁定 - 请重试。",
     "The watchdog reverted a lock, but {gl} still remembers it - GL may re-apply it later. Clear it to reconcile.": "看门狗已撤销一次锁定，但 {gl} 仍然记着它 - GL 之后可能会重新应用。请清除以保持一致。",
     "Time": "时间",
@@ -337,6 +349,8 @@ var __mm = (() => {
     "WRITES MODEM NV — survives factory reset": "写入 Modem NV — 恢复出厂设置后仍然存在",
     "Waiting for the collector's first sample (mudimodem-collectd pushes every 10s)...": "正在等待采集器的第一次采样（mudimodem-collectd 每 10 秒推送一次）…",
     "Watchdog": "看门狗",
+    "What these readings mean": "这些读数的含义",
+    "Which cell the modem is on (its ID) and the channel number with its frequency.": "Modem 当前所在的小区（小区 ID），以及信道号和对应频率。",
     "Wired WAN": "有线 WAN",
     "Would strand your {rat} cell lock - clear the lock first": "会让 {rat} 基站锁定失效 - 请先解除锁定",
     "Your connection dropped while applying, but the band change ({what}) most likely applied.": "应用时连接中断了，但频段修改（{what}）很可能已经生效。",
@@ -417,6 +431,8 @@ var __mm = (() => {
     "{locked} to {target}. The modem will not hand over.": "{locked}到 {target}。Modem 不会切换基站。",
     "{name} (not connected)": "{name}（未连接）",
     "{name} is not connected": "{name} 未连接",
+    "{n} GiB": "{n} GiB",
+    "{n} MiB": "{n} MiB",
     "{n} commands": "{n} 条命令",
     "{n} h ago": "{n} 小时前",
     "{n} min": "{n} 分钟",
@@ -572,6 +588,8 @@ var __mm = (() => {
         // fed LIVE by the collector's own pushes over the websocket
         // (mudimodem.collect) — no polling. A slow safety poll only fires when
         // no push has arrived for a while (collector restarting, ws hiccup).
+        showGlossary: false,
+        // the "?" next to the RSRP label: what each reading means
         STRIP_MIN: 15,
         // minutes of history the strip shows
         STRIP_POLL_MS: 3e4,
@@ -635,6 +653,20 @@ var __mm = (() => {
         var rat = lk.rat === "4g" ? "LTE" : "5G";
         var tag = lk.band !== void 0 && lk.band !== null && lk.band !== "" ? (lk.rat === "4g" ? "B" : "n") + lk.band : lk.pci !== void 0 && lk.pci !== null ? "PCI " + lk.pci : "";
         return { text: rat + (tag ? " " + tag : ""), locked: true, title: this.lockLabel() };
+      },
+      // What each reading means, with rough ranges — tap the "?" (works on touch, unlike a title).
+      renderGlossary(h) {
+        var items = [
+          ["RSRP", "Received power from the cell, in dBm. Above −90 is good, −90 to −105 fair, below −110 poor."],
+          ["SINR", "Signal against noise and interference, in dB. Above 13 is good, 0 to 13 fair, below 0 poor."],
+          ["RSRQ", "Signal quality including how busy the cell is, in dB. Above −10 is good, −10 to −15 fair, below −15 poor."],
+          ["Band", "The frequency band in use: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter."],
+          ["Cell / Ch", "Which cell the modem is on (its ID) and the channel number with its frequency."],
+          ["CA", "Carrier aggregation: several carriers combined for more speed."]
+        ];
+        return h("div", { staticClass: "mm-gloss" }, items.map(function(it) {
+          return h("div", { key: it[0] }, [h("b", it[0]), " ", h("span", it[1])]);
+        }));
       },
       // Two clickable status badges for the trace header. Each jumps to its tab.
       renderLockBadges(h) {
@@ -2733,7 +2765,7 @@ var __mm = (() => {
       injectStyle() {
         if (typeof document === "undefined") return;
         if (document.getElementById(this.styleId)) return;
-        var css = '.mm{color:var(--text-regular);font-variant-numeric:tabular-nums}.mm-strip{display:flex;align-items:stretch;background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);margin-bottom:11px;overflow:hidden}.mm-trace{flex:1;min-width:0;padding:9px 0 6px 13px}.mm-eyebrow{font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge)}.mm-plot{height:40px;margin-top:3px}.mm-plot svg{display:block;width:100%;height:100%;overflow:visible}.mm-axis{display:flex;justify-content:space-between;font-size:9.5px;color:var(--text-hint);margin-top:2px}.mm-read{flex:none;min-width:120px;padding:10px 14px 9px 15px;text-align:right;border-left:1px solid var(--divider);display:flex;flex-direction:column;justify-content:center}.mm-rsrp{font-size:29px;font-weight:600;line-height:1;letter-spacing:-.025em}.mm-rsrp .u{font-size:11px;font-weight:500;color:var(--text-hint);margin-left:2px}.mm-facts{display:flex;flex-wrap:wrap;gap:5px 13px;justify-content:flex-end;margin-top:7px}.mm-facts .k{display:block;font-size:9px;letter-spacing:.04em;text-transform:uppercase;color:var(--text-badge)}.mm-facts b{font-size:12.5px;font-weight:600}.mm-lockbadges{display:flex;gap:6px;align-items:center}.mm-lockbadge{background:var(--background-badge);border:1px solid transparent;border-radius:9px;padding:1px 8px;font:inherit;font-size:10px;font-weight:600;letter-spacing:.02em;color:var(--text-hint);cursor:pointer;white-space:nowrap}.mm-lockbadge.mode{color:var(--warning);border-color:var(--warning-disabled,var(--warning));background:var(--warning-disabled,transparent)}.mm-lockbadge.lock{color:var(--error);border-color:var(--error);background:transparent}.mm-tabs{display:flex;gap:22px;border-bottom:1px solid var(--divider);margin-bottom:11px;padding:0 4px;overflow-x:auto;scrollbar-width:none}.mm-tabs::-webkit-scrollbar{display:none}.mm-tab{flex:none;white-space:nowrap;background:none;border:0;padding:9px 0 8px;font:inherit;font-size:13px;cursor:pointer;color:var(--text-weak);border-bottom:2px solid transparent;margin-bottom:-1px}.mm-tab.on{color:var(--primary);border-bottom-color:var(--primary);font-weight:600}.mm-tab:disabled{color:var(--text-hint);cursor:default}.mm-card{background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);padding:13px 14px}.mm-sect{font-size:13px;font-weight:600;color:var(--text-title)}.mm-hint{font-size:11.5px;color:var(--text-badge)}.mm-dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px 16px;margin-top:11px}.mm-dl .k{display:block;font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge)}.mm-dl b{font-size:13px;font-weight:600;color:var(--text-title)}.mm-soon{padding:26px 14px;text-align:center;color:var(--text-hint);font-size:12px;line-height:1.6}.mm-empty{padding:30px 14px;text-align:center;color:var(--text-hint);font-size:12.5px}.mm-grp{margin-bottom:15px}.mm-grp:last-child{margin-bottom:2px}.mm-grp-h{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px}.mm-grp-t{font-size:12px;font-weight:600;color:var(--text-title)}.mm-acts{display:flex;gap:2px}.mm-act{background:none;border:0;font:inherit;font-size:10.5px;cursor:pointer;color:var(--primary);padding:2px 6px;border-radius:3px}.mm-act:hover{background:var(--primary-background)}.mm-grp-off .mm-wrap{opacity:.5}.mm-gate{font-size:10.5px;color:var(--warning-hover);background:var(--warning-background);border:1px solid var(--warning-disabled);border-radius:3px;padding:4px 8px;margin-bottom:6px}.mm-seg{display:inline-flex;border:1px solid var(--border);border-radius:4px;overflow:hidden}.mm-seg-b{font:inherit;font-size:12px;background:transparent;border:0;padding:5px 14px;cursor:pointer;color:var(--text-weak);border-right:1px solid var(--border)}.mm-seg-b:last-child{border-right:0}.mm-seg-b.on{background:var(--primary);color:#fff;font-weight:600}.mm-seg-b:disabled{cursor:default;opacity:.6}.mm-wrap{display:flex;gap:4px;flex-wrap:wrap}.mm-band{position:relative;min-width:44px;padding:4px 6px 3px;text-align:center;border:1px solid var(--border);border-radius:4px;background:var(--background-card);transition:border-color .1s,background .1s}.mm-band b{display:block;font-size:12px;font-weight:600;line-height:1.2}.mm-band s{display:block;font-size:9px;line-height:1.2;color:var(--text-hint);text-decoration:none}.mm-band.active{background:var(--success);border-color:var(--success)}.mm-band.active b{color:#fff}.mm-band.active s{color:rgba(255,255,255,.75)}.mm-band.permitted{border-color:var(--primary)}.mm-band.permitted b{color:var(--primary)}.mm-band.sel{background:var(--success);border-color:var(--success)}.mm-band.sel b{color:#fff}.mm-band.sel s{color:rgba(255,255,255,.75)}.mm-band.unsel b{color:var(--text-regular)}.mm-band.blocked{opacity:.5}.mm-band.blocked b{color:var(--text-hint);text-decoration:line-through}.mm-band.clickable{cursor:pointer}.mm-band.clickable:hover{border-color:var(--primary)}.mm-band.serving{box-shadow:0 0 0 2px var(--success)}.mm-band.serving::after{content:"";position:absolute;top:-3px;right:-3px;width:7px;height:7px;border-radius:50%;background:var(--success);border:1.5px solid var(--background-card)}.mm-axis2{display:flex;justify-content:space-between;font-size:9.5px;color:var(--text-hint);margin-top:6px}.mm-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:10.5px;color:var(--text-badge);margin-top:12px;padding-top:10px;border-top:1px solid var(--divider)}.mm-legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}.mm-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;border-top:1px solid var(--divider);padding-top:11px;margin-top:11px}.mm-btn{font:inherit;font-size:11.5px;font-weight:600;border-radius:3px;padding:6px 13px;cursor:pointer;border:1px solid transparent}.mm-btn.primary{background:var(--primary);color:#fff;border-color:var(--primary)}.mm-btn.primary:disabled{background:var(--primary-disabled);border-color:transparent;cursor:default}.mm-btn.keep{background:var(--warning);color:#fff;border-color:var(--warning)}.mm-btn.danger{background:transparent;color:var(--error);border-color:var(--error)}.mm-revert{background:var(--warning-background);border:1px solid var(--warning);border-radius:3px;padding:9px 11px;margin:0 0 12px}.mm-revert-row{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:11.5px;color:var(--warning-hover)}.mm-revert b{font-weight:600}.mm-cd{font-variant-numeric:tabular-nums}.mm-bar{height:2px;background:var(--warning-disabled);border-radius:1px;margin-top:8px;overflow:hidden}.mm-bar i{display:block;height:100%;background:var(--warning);transition:width 1s linear}.mm-scan-row{display:flex;gap:10px;align-items:center;padding:7px 4px;border-bottom:1px solid var(--divider);font-size:12px}.mm-scan-row>span{min-width:0}.mm-scan-row>span:nth-child(2){flex:1}.mm-scan-badge{flex:none;font-size:10px;padding:1px 6px;border:1px solid var(--border);border-radius:3px;color:var(--text-badge)}@media(max-width:640px){.mm-strip{flex-direction:column}.mm-read{border-left:0;border-top:1px solid var(--divider);text-align:left;align-items:flex-start}.mm-facts{justify-content:flex-start}.mm-revert-row{flex-direction:column;align-items:flex-start}}.mm-card+.mm-card{margin-top:11px}.mm-card-h{font-size:13px;font-weight:600;color:var(--text-title);margin-bottom:6px}.mm-kv{display:flex;gap:12px;padding:4px 0;font-size:14px}.mm-k{color:var(--text-hint);min-width:64px}.mm-v{color:var(--text-title)}.mm-link{color:var(--primary);cursor:pointer;text-decoration:underline}.mm-warn{color:var(--warning)}.mm-upd{color:var(--text-hint)}.mm-note{margin-top:8px;color:var(--text-hint);font-size:13px}';
+        var css = '.mm{color:var(--text-regular);font-variant-numeric:tabular-nums}.mm-strip{display:flex;align-items:stretch;background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);margin-bottom:11px;overflow:hidden}.mm-trace{flex:1;min-width:0;padding:9px 0 6px 13px}.mm-eyebrow{font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge)}.mm-plot{height:40px;margin-top:3px}.mm-plot svg{display:block;width:100%;height:100%;overflow:visible}.mm-axis{display:flex;justify-content:space-between;font-size:9.5px;color:var(--text-hint);margin-top:2px}.mm-read{flex:none;min-width:120px;padding:10px 14px 9px 15px;text-align:right;border-left:1px solid var(--divider);display:flex;flex-direction:column;justify-content:center}.mm-rsrp{font-size:29px;font-weight:600;line-height:1;letter-spacing:-.025em}.mm-rsrp .u{font-size:11px;font-weight:500;color:var(--text-hint);margin-left:2px}.mm-facts{display:flex;flex-wrap:wrap;gap:5px 13px;justify-content:flex-end;margin-top:7px}.mm-facts .k{display:block;font-size:9px;letter-spacing:.04em;text-transform:uppercase;color:var(--text-badge)}.mm-facts b{font-size:12.5px;font-weight:600}.mm-lockbadges{display:flex;gap:6px;align-items:center}.mm-lockbadge{background:var(--background-badge);border:1px solid transparent;border-radius:9px;padding:1px 8px;font:inherit;font-size:10px;font-weight:600;letter-spacing:.02em;color:var(--text-hint);cursor:pointer;white-space:nowrap}.mm-lockbadge.mode{color:var(--warning);border-color:var(--warning-disabled,var(--warning));background:var(--warning-disabled,transparent)}.mm-lockbadge.lock{color:var(--error);border-color:var(--error);background:transparent}.mm-tabs{display:flex;gap:22px;border-bottom:1px solid var(--divider);margin-bottom:11px;padding:0 4px;overflow-x:auto;scrollbar-width:none}.mm-tabs::-webkit-scrollbar{display:none}.mm-tab{flex:none;white-space:nowrap;background:none;border:0;padding:9px 0 8px;font:inherit;font-size:13px;cursor:pointer;color:var(--text-weak);border-bottom:2px solid transparent;margin-bottom:-1px}.mm-tab.on{color:var(--primary);border-bottom-color:var(--primary);font-weight:600}.mm-tab:disabled{color:var(--text-hint);cursor:default}.mm-card{background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);padding:13px 14px}.mm-sect{font-size:13px;font-weight:600;color:var(--text-title)}.mm-hint{font-size:11.5px;color:var(--text-badge)}.mm-dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px 16px;margin-top:11px}.mm-dl .k{display:block;font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge)}.mm-dl b{font-size:13px;font-weight:600;color:var(--text-title)}.mm-soon{padding:26px 14px;text-align:center;color:var(--text-hint);font-size:12px;line-height:1.6}.mm-empty{padding:30px 14px;text-align:center;color:var(--text-hint);font-size:12.5px}.mm-grp{margin-bottom:15px}.mm-grp:last-child{margin-bottom:2px}.mm-grp-h{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px}.mm-grp-t{font-size:12px;font-weight:600;color:var(--text-title)}.mm-acts{display:flex;gap:2px}.mm-act{background:none;border:0;font:inherit;font-size:10.5px;cursor:pointer;color:var(--primary);padding:2px 6px;border-radius:3px}.mm-act:hover{background:var(--primary-background)}.mm-grp-off .mm-wrap{opacity:.5}.mm-gate{font-size:10.5px;color:var(--warning-hover);background:var(--warning-background);border:1px solid var(--warning-disabled);border-radius:3px;padding:4px 8px;margin-bottom:6px}.mm-seg{display:inline-flex;border:1px solid var(--border);border-radius:4px;overflow:hidden}.mm-seg-b{font:inherit;font-size:12px;background:transparent;border:0;padding:5px 14px;cursor:pointer;color:var(--text-weak);border-right:1px solid var(--border)}.mm-seg-b:last-child{border-right:0}.mm-seg-b.on{background:var(--primary);color:#fff;font-weight:600}.mm-seg-b:disabled{cursor:default;opacity:.6}.mm-wrap{display:flex;gap:4px;flex-wrap:wrap}.mm-band{position:relative;min-width:44px;padding:4px 6px 3px;text-align:center;border:1px solid var(--border);border-radius:4px;background:var(--background-card);transition:border-color .1s,background .1s}.mm-band b{display:block;font-size:12px;font-weight:600;line-height:1.2}.mm-band s{display:block;font-size:9px;line-height:1.2;color:var(--text-hint);text-decoration:none}.mm-band.active{background:var(--success);border-color:var(--success)}.mm-band.active b{color:#fff}.mm-band.active s{color:rgba(255,255,255,.75)}.mm-band.permitted{border-color:var(--primary)}.mm-band.permitted b{color:var(--primary)}.mm-band.sel{background:var(--success);border-color:var(--success)}.mm-band.sel b{color:#fff}.mm-band.sel s{color:rgba(255,255,255,.75)}.mm-band.unsel b{color:var(--text-regular)}.mm-band.blocked{opacity:.5}.mm-band.blocked b{color:var(--text-hint);text-decoration:line-through}.mm-band.clickable{cursor:pointer}.mm-band.clickable:hover{border-color:var(--primary)}.mm-band.serving{box-shadow:0 0 0 2px var(--success)}.mm-band.serving::after{content:"";position:absolute;top:-3px;right:-3px;width:7px;height:7px;border-radius:50%;background:var(--success);border:1.5px solid var(--background-card)}.mm-axis2{display:flex;justify-content:space-between;font-size:9.5px;color:var(--text-hint);margin-top:6px}.mm-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:10.5px;color:var(--text-badge);margin-top:12px;padding-top:10px;border-top:1px solid var(--divider)}.mm-legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}.mm-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;border-top:1px solid var(--divider);padding-top:11px;margin-top:11px}.mm-btn{font:inherit;font-size:11.5px;font-weight:600;border-radius:3px;padding:6px 13px;cursor:pointer;border:1px solid transparent}.mm-btn.primary{background:var(--primary);color:#fff;border-color:var(--primary)}.mm-btn.primary:disabled{background:var(--primary-disabled);border-color:transparent;cursor:default}.mm-btn.keep{background:var(--warning);color:#fff;border-color:var(--warning)}.mm-btn.danger{background:transparent;color:var(--error);border-color:var(--error)}.mm-revert{background:var(--warning-background);border:1px solid var(--warning);border-radius:3px;padding:9px 11px;margin:0 0 12px}.mm-revert-row{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:11.5px;color:var(--warning-hover)}.mm-revert b{font-weight:600}.mm-cd{font-variant-numeric:tabular-nums}.mm-bar{height:2px;background:var(--warning-disabled);border-radius:1px;margin-top:8px;overflow:hidden}.mm-bar i{display:block;height:100%;background:var(--warning);transition:width 1s linear}.mm-help{margin-left:6px;width:15px;height:15px;line-height:13px;border-radius:50%;border:1px solid var(--border);background:transparent;color:var(--text-weak);font-size:10px;font-weight:700;cursor:pointer;padding:0;vertical-align:1px}.mm-gloss{flex-basis:100%;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:4px 16px;font-size:11.5px;color:var(--text-weak);border-top:1px solid var(--divider);padding-top:8px;margin-top:4px}.mm-gloss b{color:var(--text-title)}.mm-scan-row{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;padding:7px 4px;border-bottom:1px solid var(--divider);font-size:12px}.mm-scan-row>span{min-width:0}.mm-scan-row>span:nth-child(2){flex:1}.mm-scan-badge{flex:none;font-size:10px;padding:1px 6px;border:1px solid var(--border);border-radius:3px;color:var(--text-badge)}@media(max-width:640px){.mm-strip{flex-direction:column}.mm-read{border-left:0;border-top:1px solid var(--divider);text-align:left;align-items:flex-start}.mm-facts{justify-content:flex-start}.mm-revert-row{flex-direction:column;align-items:flex-start}}.mm-card+.mm-card{margin-top:11px}.mm-card-h{font-size:13px;font-weight:600;color:var(--text-title);margin-bottom:6px}.mm-kv{display:flex;gap:12px;padding:4px 0;font-size:14px}.mm-k{color:var(--text-hint);min-width:64px}.mm-v{color:var(--text-title)}.mm-link{color:var(--primary);cursor:pointer;text-decoration:underline}.mm-warn{color:var(--warning)}.mm-upd{color:var(--text-hint)}.mm-note{margin-top:8px;color:var(--text-hint);font-size:13px}';
         var el = document.createElement("style");
         el.id = this.styleId;
         el.textContent = css;
@@ -2959,9 +2991,18 @@ var __mm = (() => {
         stripKids = [
           h("div", { staticClass: "mm-trace" }, [
             h("div", { staticStyle: { display: "flex", justifyContent: "space-between", alignItems: "center" } }, [
-              h("span", { staticClass: "mm-eyebrow", style: this.staleFor ? { color: "var(--warning)" } : {}, attrs: {
-                title: this.staleFor ? t("The collector's last sample is {age} old - nothing newer has been pushed", { age: this.fmtAge(this.staleFor) }) : t("Sampled every 10s by the MudiModem collector (pushed live), last {n} minutes", { n: this.STRIP_MIN })
-              } }, this.staleFor ? t("RSRP · last sample {age} ago", { age: this.fmtAge(this.staleFor) }) : t("RSRP · last {n} min", { n: this.STRIP_MIN })),
+              h("span", [
+                h("span", { staticClass: "mm-eyebrow", style: this.staleFor ? { color: "var(--warning)" } : {}, attrs: {
+                  title: this.staleFor ? t("The collector's last sample is {age} old - nothing newer has been pushed", { age: this.fmtAge(this.staleFor) }) : t("Sampled every 10s by the MudiModem collector (pushed live), last {n} minutes", { n: this.STRIP_MIN })
+                } }, this.staleFor ? t("RSRP · last sample {age} ago", { age: this.fmtAge(this.staleFor) }) : t("RSRP · last {n} min", { n: this.STRIP_MIN })),
+                h("button", {
+                  staticClass: "mm-help",
+                  attrs: { type: "button", title: "What these readings mean", "aria-expanded": String(this.showGlossary) },
+                  on: { click: function() {
+                    self.showGlossary = !self.showGlossary;
+                  } }
+                }, "?")
+              ]),
               this.renderLockBadges(h)
             ]),
             h("div", { staticClass: "mm-plot" }, [
@@ -3005,6 +3046,7 @@ var __mm = (() => {
               })
             ))
           ]),
+          this.showGlossary ? this.renderGlossary(h) : null,
           this.staleFor ? h(
             "div",
             { staticClass: "mm-hint mm-stale", staticStyle: { color: "var(--warning)", flexBasis: "100%" } },

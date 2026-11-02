@@ -100,7 +100,9 @@ var __mm = (() => {
     "Can't reach the router — battery history stopped updating.": "无法连接路由器 — 电池历史已停止更新。",
     "Cancel": "取消",
     "Carrier": "运营商",
+    "Carrier aggregation: several carriers combined for more speed.": "载波聚合：把多个载波合在一起以提高速度。",
     "Cell": "小区",
+    "Cell / Ch": "小区 / 信道",
     "Cell ID": "小区 ID",
     "Cell lock": "锁定基站",
     "Cell lock applied": "已锁定基站",
@@ -117,15 +119,20 @@ var __mm = (() => {
     "Charging": "充电中",
     "Charging stopped": "已停止充电",
     "Choose the network mode and which 5G/LTE bands the modem may use. Blocked bands are ones the module supports but your carrier forbids - they can't be selected because they never take.": "选择网络模式，以及 Modem 可以使用的 5G/LTE 频段。被屏蔽的频段是模组支持、但运营商策略不允许的频段 - 选了也不会生效，所以不能选。",
+    "Clear": "清空",
     "Clear history": "清除历史",
     "Clear it": "清除",
+    "Clear the transcript": "清空记录",
+    "Click again to delete all results": "再点一次删除全部结果",
     "Commands go straight to the {modem}. Nothing is validated. Entries marked nv write modem memory that survives a factory reset.": "命令会直接发给 {modem}，不做任何校验。标记为 nv 的条目会写入 Modem 的存储，恢复出厂设置后仍然存在。",
     "Config": "配置",
     "Confirm": "确认",
     "Connection dropped while applying the lock - checking whether it took...": "锁定时连接中断 - 正在确认是否已生效…",
     "Connection dropped while locking and hasn't recovered yet - refresh once you're back to see the current lock state.": "锁定时连接中断且尚未恢复 - 恢复后请刷新以查看当前锁定状态。",
     "Contributed by": "贡献者",
+    "Copied": "已复制",
     "Copy": "复制",
+    "Copy failed - select the text to copy it": "复制失败 - 请手动选择文本复制",
     "Copy the transcript": "复制记录",
     "Couldn't check interfaces: {err}": "无法检查网络接口：{err}",
     "Couldn't confirm which SIM answered - values may be for the other slot": "无法确认是哪张 SIM 卡在应答 - 数值可能属于另一个卡槽",
@@ -157,6 +164,7 @@ var __mm = (() => {
     "Download": "下载",
     "Draining on power": "接电源仍在放电",
     "Each edited band group needs at least one band": "每个修改过的频段组至少要保留一个频段",
+    "Each test uses about {mib} MiB of data — about {day} a day at this interval.": "每次测速约消耗 {mib} MiB 流量 — 按当前间隔每天约 {day}。",
     "Earlier battery history didn't load — showing samples since the tab opened; retrying every {s} s.": "更早的电池历史没能加载 — 只显示打开本页以来的采样；每 {s} 秒重试一次。",
     "Earlier history didn't load — showing live samples since the page opened; retrying every {s} s.": "更早的历史没能加载 — 只显示打开页面以来的实时采样；每 {s} 秒重试一次。",
     "Enable higher-risk commands": "启用高风险命令",
@@ -245,6 +253,7 @@ var __mm = (() => {
     "Raw AT": "AT 命令",
     "Reading band configuration from the modem...": "正在从 Modem 读取频段配置…",
     "Reading lock state from the modem...": "正在从 Modem 读取锁定状态…",
+    "Received power from the cell, in dBm. Above −90 is good, −90 to −105 fair, below −110 poor.": "从基站收到的信号功率，单位 dBm。高于 −90 为好，−90 到 −105 一般，低于 −110 差。",
     "Recovery": "恢复方法",
     "Refresh now": "立即更新",
     "Refreshing…": "正在更新…",
@@ -275,6 +284,8 @@ var __mm = (() => {
     "Sending the default to the modem: band filtering off + Auto mode.": "正在向 Modem 发送默认设置：关闭频段过滤 + 自动模式。",
     "Sending…": "正在发送…",
     "Sharp edge.": "注意风险。",
+    "Signal against noise and interference, in dB. Above 13 is good, 0 to 13 fair, below 0 poor.": "信号与噪声和干扰之比，单位 dB。高于 13 为好，0 到 13 一般，低于 0 差。",
+    "Signal quality including how busy the cell is, in dB. Above −10 is good, −10 to −15 fair, below −15 poor.": "信号质量（含基站繁忙程度），单位 dB。高于 −10 为好，−10 到 −15 一般，低于 −15 差。",
     "Source": "来源",
     "Speedtest": "测速",
     "Starting…": "正在启动…",
@@ -293,6 +304,7 @@ var __mm = (() => {
     "The collector has not produced a sample for {age} (modem resetting, or mudimodem-collectd stopped) - these are its last known values, not live readings.": "采集器已经 {age} 没有产生新采样（Modem 正在重置，或 mudimodem-collectd 已停止），以下是最后一次的数值，不是实时读数。",
     "The collector's last sample is {age} old - nothing newer has been pushed": "采集器的最后一次采样已是 {age} 前，之后没有新的推送",
     "The connection dropped while applying, and nothing is pending on the router now - the change did not take, or was already reverted.": "应用时连接中断，且路由器上现在没有待确认的修改 - 修改没有生效，或已被恢复。",
+    "The frequency band in use: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter.": "当前使用的频段：n 表示 5G NR，B 表示 LTE。低频覆盖远；高频速度快但覆盖近。",
     "The lock request was cut off by a connection drop and no lock is set - try again.": "锁定请求因连接中断而失败，目前没有设置锁定 - 请重试。",
     "The watchdog reverted a lock, but {gl} still remembers it - GL may re-apply it later. Clear it to reconcile.": "看门狗已撤销一次锁定，但 {gl} 仍然记着它 - GL 之后可能会重新应用。请清除以保持一致。",
     "Time": "时间",
@@ -323,6 +335,8 @@ var __mm = (() => {
     "WRITES MODEM NV — survives factory reset": "写入 Modem NV — 恢复出厂设置后仍然存在",
     "Waiting for the collector's first sample (mudimodem-collectd pushes every 10s)...": "正在等待采集器的第一次采样（mudimodem-collectd 每 10 秒推送一次）…",
     "Watchdog": "看门狗",
+    "What these readings mean": "这些读数的含义",
+    "Which cell the modem is on (its ID) and the channel number with its frequency.": "Modem 当前所在的小区（小区 ID），以及信道号和对应频率。",
     "Wired WAN": "有线 WAN",
     "Would strand your {rat} cell lock - clear the lock first": "会让 {rat} 基站锁定失效 - 请先解除锁定",
     "Your connection dropped while applying, but the band change ({what}) most likely applied.": "应用时连接中断了，但频段修改（{what}）很可能已经生效。",
@@ -403,6 +417,8 @@ var __mm = (() => {
     "{locked} to {target}. The modem will not hand over.": "{locked}到 {target}。Modem 不会切换基站。",
     "{name} (not connected)": "{name}（未连接）",
     "{name} is not connected": "{name} 未连接",
+    "{n} GiB": "{n} GiB",
+    "{n} MiB": "{n} MiB",
     "{n} commands": "{n} 条命令",
     "{n} h ago": "{n} 小时前",
     "{n} min": "{n} 分钟",
@@ -547,7 +563,11 @@ var __mm = (() => {
           selId: null,
           // selected entry id; null = free-typing
           riskOK: false,
-          // "Enable higher-risk commands" (localStorage)
+          // "Enable higher-risk commands" — this browser session only (sessionStorage)
+          copyNote: "",
+          // feedback after Copy (copied / failed), shown for a moment
+          stickBottom: true,
+          // keep the transcript scrolled to the newest line unless the user scrolled up
           lines: STORE.lines,
           // transcript { t, kind: cmd|resp|ok|err|urc|note, text } — page-lifetime
           LINES_MAX: 400,
@@ -654,11 +674,16 @@ var __mm = (() => {
           return !!(this.sel && this.sel.risk !== "read" && !this.riskOK);
         }
       },
+      // New transcript lines land at the bottom: follow them unless the user scrolled up to read.
+      updated() {
+        var el = this.$refs && this.$refs.term;
+        if (el && this.stickBottom) el.scrollTop = el.scrollHeight;
+      },
       created() {
         var self = this;
         this.injectStyle();
         try {
-          this.riskOK = window.localStorage.getItem("mudimodem.riskEnabled") === "1";
+          this.riskOK = window.sessionStorage.getItem("mudimodem.riskEnabled") === "1";
         } catch (e) {
         }
         this.fetchLib();
@@ -722,7 +747,7 @@ var __mm = (() => {
         toggleGate() {
           this.riskOK = !this.riskOK;
           try {
-            window.localStorage.setItem("mudimodem.riskEnabled", this.riskOK ? "1" : "0");
+            window.sessionStorage.setItem("mudimodem.riskEnabled", this.riskOK ? "1" : "0");
           } catch (e) {
           }
         },
@@ -937,13 +962,51 @@ var __mm = (() => {
             self.push("err", e && (e.message || e.type) || "request failed");
           });
         },
+        // navigator.clipboard exists only on HTTPS; the admin is usually plain http://192.168.8.1, so
+        // fall back to a hidden textarea + execCommand, and always say what happened.
         copyTranscript() {
+          var self = this;
           var txt = this.lines.map(function(l) {
             return l.t + "  " + l.text;
           }).join("\n");
+          var done = function(ok) {
+            self.copyNote = ok ? "Copied" : "Copy failed - select the text to copy it";
+            clearTimeout(self._copyTimer);
+            self._copyTimer = setTimeout(function() {
+              self.copyNote = "";
+            }, 2500);
+          };
+          var legacy = function() {
+            if (typeof document === "undefined") return done(false);
+            var ta = document.createElement("textarea");
+            ta.value = txt;
+            ta.setAttribute("readonly", "");
+            ta.style.position = "fixed";
+            ta.style.opacity = "0";
+            document.body.appendChild(ta);
+            ta.select();
+            var ok = false;
+            try {
+              ok = document.execCommand("copy");
+            } catch (e) {
+              ok = false;
+            }
+            document.body.removeChild(ta);
+            done(ok);
+          };
           if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(txt);
-          }
+            navigator.clipboard.writeText(txt).then(function() {
+              done(true);
+            }, legacy);
+          } else legacy();
+        },
+        clearTranscript() {
+          this.lines.splice(0, this.lines.length);
+          this.stickBottom = true;
+        },
+        onTermScroll(e) {
+          var el = e && e.target;
+          if (el) this.stickBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
         },
         riskText(r) {
           return {
@@ -1075,7 +1138,7 @@ var __mm = (() => {
           { staticClass: "mmc-hint" },
           "ready. Pick a command from the library, or type one."
         )];
-        var term = h("div", { staticClass: "mmc-term" }, termKids);
+        var term = h("div", { staticClass: "mmc-term", ref: "term", on: { scroll: this.onTermScroll } }, termKids);
         var pstrip = null;
         if (this.paramMode) {
           pstrip = h("div", { staticClass: "mmc-pstrip" }, this.selParams.map(function(p) {
@@ -1166,6 +1229,20 @@ var __mm = (() => {
                   self.copyTranscript();
                 } }
               }, "Copy"),
+              h("button", {
+                staticClass: "mmc-send",
+                staticStyle: {
+                  background: "transparent",
+                  color: "var(--text-weak)",
+                  borderColor: "var(--border)",
+                  fontWeight: "400"
+                },
+                attrs: { title: "Clear the transcript", disabled: !this.lines.length },
+                on: { click: function() {
+                  self.clearTranscript();
+                } }
+              }, "Clear"),
+              this.copyNote ? h("span", { staticClass: "mmc-hint" }, this.copyNote) : null,
               h("span", { staticClass: "mmc-hint" }, this.truthLine)
             ])
           ]),
