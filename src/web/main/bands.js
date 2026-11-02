@@ -17,6 +17,7 @@ export default {
       applying: false,      // Apply in flight
       applyError: "",
       resetNote: "",        // transient feedback from "Apply defaults"
+      showBandHelp: false,  // the "?" next to the Bands title: what each band layer means
       resetTimer: null,     // handle clearing resetNote
     };
   },
@@ -304,6 +305,33 @@ export default {
         .then(function () { self.applying = false; });
     },
 
+    // "SA +n66 −n41": what Apply would change in one group, against what is set now. Long
+    // lists stop after a few with "+N more" (the grid shows them all).
+    diffText(group) {
+      var pre = this.prefixOf(group), cur = this.seedFor(group), sel = this.sel[group] || [];
+      var asc = function (a, b) { return a - b; };
+      var add = sel.filter(function (b) { return cur.indexOf(b) === -1; }).sort(asc);
+      var rem = cur.filter(function (b) { return sel.indexOf(b) === -1; }).sort(asc);
+      var bits = add.map(function (b) { return "+" + pre + b; }).concat(rem.map(function (b) { return "−" + pre + b; }));
+      var MAX = 6, more = bits.length - MAX;
+      return ({ sa: "SA", nsa: "NSA", LTE: "LTE" })[group] + " " + bits.slice(0, MAX).join(" ") +
+        (more > 0 ? " " + t("+{n} more", { n: more }) : "");
+    },
+
+    // The four layers a band goes through, in the words the grid uses (the "?" by the title).
+    renderBandHelp(h) {
+      var items = [
+        ["Module supports", "Every band this modem can use. GL's own band page offers all of them."],
+        ["Carrier allows", "Your SIM's carrier policy. A band outside it never takes, whatever you select - the grid shows it as blocked."],
+        ["Selected", "The bands you allow the modem to use. Apply writes them through GL, with a 60 s revert."],
+        ["Modem advertises", "What the modem currently tells the network it can do (its UE capability): normally your selection within the carrier's policy. The 5G NSA group shows it, read-only."],
+        ["In use", "The carriers serving you right now: the ring around a band (the primary carrier and any aggregated ones)."]
+      ];
+      return h("div", { staticClass: "mm-gloss" }, items.map(function (it) {
+        return h("div", { key: it[0] }, [h("b", it[0]), " ", h("span", it[1])]);
+      }));
+    },
+
     // Classify one band for the read-only groups: active / permitted / blocked.
     bandState(group, b) {
       var d = this.bands;
@@ -337,17 +365,17 @@ export default {
           if (!self.selectable(group, b)) {
             cls = "blocked"; tip = t("{b} blocked by carrier policy; selecting has no effect", { b: pre + b });
           } else if (self.isSelected(group, b)) {
-            cls = "sel"; tip = t("{b} allowed (click to remove)", { b: pre + b });
+            cls = "sel"; tip = t("{b} selected (click to remove)", { b: pre + b });
           } else {
-            cls = "unsel"; tip = t("{b} permitted (click to allow)", { b: pre + b });
+            cls = "unsel"; tip = t("{b} carrier allows, not selected (click to select)", { b: pre + b });
           }
         } else {
           var st = self.bandState(group, b);
           cls = st;
-          tip = pre + b + " " + t(({ active: "in use", permitted: "permitted, not active", blocked: "blocked by carrier policy" })[st]);
+          tip = pre + b + " " + t(({ active: "advertised by the modem", permitted: "carrier allows, not advertised", blocked: "blocked by carrier policy" })[st]);
         }
         var clickable = interactive && cls !== "blocked" && !self.pending;
-        if (serving) tip += " — " + t("serving now ({role})", { role: servingHere[b] });
+        if (serving) tip += " — " + t("in use now ({role})", { role: servingHere[b] });
         return h("span", {
           key: b,
           staticClass: "mm-band " + cls + (serving ? " serving" : "") + (clickable ? " clickable" : ""),
@@ -367,7 +395,7 @@ export default {
           mkAct("Invert", function () { self.invertSel(group); })
         ]);
       }
-      var counts = t("{s} supported / {p} permitted / {a} active", {
+      var counts = t("{s} module supports · {p} carrier allows · {a} modem advertises", {
         s: (d.supported[group] || []).length, p: (d.policy[group] || []).length, a: (d.capability[group] || []).length });
       // Mode gate: if the selected mode doesn't enable this RAT, say so — the
       // selections are inert until the mode includes it.
@@ -509,7 +537,9 @@ export default {
         : null;
       var head = [
         h("div", { staticStyle: { display: "flex", justifyContent: "space-between", alignItems: "baseline" } }, [
-          h("span", { staticClass: "mm-sect" }, "Bands"),
+          h("span", [h("span", { staticClass: "mm-sect" }, "Bands"),
+            h("button", { staticClass: "mm-help", attrs: { type: "button", title: "What the band layers mean", "aria-expanded": String(this.showBandHelp) },
+              on: { click: function () { self.showBandHelp = !self.showBandHelp; } } }, "?")]),
           h("span", [
             h("span", { staticClass: "mm-hint", staticStyle: { marginRight: "10px" } }, op ? t("carrier {plmn}", { plmn: op }) : ""),
             h("button", {
@@ -520,7 +550,8 @@ export default {
           ])
         ]),
         h("div", { staticClass: "mm-hint", staticStyle: { margin: "3px 0 12px" } },
-          "Choose the network mode and which 5G/LTE bands the modem may use. Blocked bands are ones the module supports but your carrier forbids - they can't be selected because they never take."),
+          "Choose the network mode and which 5G/LTE bands the modem may use. Bands your carrier forbids are shown as blocked: they can't be selected because they never take."),
+        this.showBandHelp ? this.renderBandHelp(h) : null,
         this.renderSimPick(h),
         this.bandSlot != null
           ? h("div", { staticClass: "mm-note", staticStyle: { marginBottom: "10px" } }, t("Editing SIM {n}, which is not in use. Changes are stored and GL applies them the next time SIM {n} connects (a SIM switch or failover) - without the 60 s revert, since nothing changes now.", { n: this.bandSlot }))
@@ -539,16 +570,16 @@ export default {
         else if (empty) status = h("span", { staticStyle: { color: "var(--error)" } }, "Each edited band group needs at least one band");
         else if (changed) {
           var parts = [];
-          if (this.modeChanged()) parts.push(t("mode -> {m}", { m: t({ AUTO: "Auto", NR5G: "5G only", LTE: "4G only" }[this.selMode] || this.selMode) }));
+          if (this.modeChanged()) parts.push(t("mode {m}", { m: t({ AUTO: "Auto", NR5G: "5G only", LTE: "4G only" }[this.selMode] || this.selMode) }));
           if (this.selMode === "LTE" && (this.changed("sa") || this.changed("nsa")))
             parts.push(t("5G selections held back under 4G-only"));
-          if (this.changed("sa")) parts.push(this.sel.sa.length + " SA");
-          if (this.changed("nsa")) parts.push(this.sel.nsa.length + " NSA");
-          if (this.changed("LTE")) parts.push(this.sel.LTE.length + " LTE");
+          if (this.sendable("sa")) parts.push(this.diffText("sa"));
+          if (this.sendable("nsa")) parts.push(this.diffText("nsa"));
+          if (this.sendable("LTE")) parts.push(this.diffText("LTE"));
           if (this.nr5gChanged()) parts.push(t({ both: "5G SA + NSA", nsa: "5G NSA only", sa: "5G SA only" }[this.selNr5g]));
           status = this.bandSlot != null
-            ? t("{what} changed; stored for SIM {n}", { what: parts.join(" + "), n: this.bandSlot })
-            : t("{what} changed; applies with a 60s revert", { what: parts.join(" + ") }) + " " +
+            ? t("Changes: {what}. Stored for SIM {n}.", { what: parts.join("; "), n: this.bandSlot })
+            : t("Changes: {what}. Applies with a 60s revert.", { what: parts.join("; ") }) + " " +
               t("The link drops for a few seconds while the modem re-registers.");
         } else status = "No changes";
         footer.push(h("div", { staticClass: "mm-foot" }, [
@@ -570,10 +601,10 @@ export default {
         if (this.storedNote) footer.push(h("div", { staticClass: "mm-note" }, this.storedNote));
       }
       var legend = [h("div", { staticClass: "mm-legend" }, [
-        h("span", [h("i", { staticStyle: { background: "var(--success)" } }), "allowed"]),
-        h("span", [h("i", { staticStyle: { background: "transparent", border: "1px solid var(--border)" } }), "permitted, not selected"]),
-        h("span", [h("i", { staticStyle: { background: "var(--text-hint)" } }), "blocked by policy"]),
-        h("span", "ring = serving now (every carrier: PCC + SCCs)")
+        h("span", [h("i", { staticStyle: { background: "var(--success)" } }), "selected"]),
+        h("span", [h("i", { staticStyle: { background: "transparent", border: "1px solid var(--border)" } }), "carrier allows, not selected"]),
+        h("span", [h("i", { staticStyle: { background: "var(--text-hint)" } }), "blocked by carrier policy"]),
+        h("span", "ring = in use now (every carrier: PCC + SCCs)")
       ])];
       return h("div", { staticClass: "mm-card" }, head.filter(Boolean).concat(groups).concat(footer).concat(legend));
     },

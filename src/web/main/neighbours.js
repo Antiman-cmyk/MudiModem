@@ -107,7 +107,7 @@ export default {
           return b.rsrp - a.rsrp;
         });
         var rows = sorted.map(function (c, i) {
-          var q = c.rsrp !== undefined ? (c.rsrp >= -95 ? "good" : (c.rsrp >= -105 ? "fair" : "poor")) : "none";
+          var q = self.qFromLevel(self.glLevel("rsrp", c.rsrp));   // GL's scale, as the strip
           var confirming = self.nbConfirm === i;
           var target = self.nbTarget(c);
           return h("div", { key: "n" + i, staticClass: "mm-scan-row" }, [

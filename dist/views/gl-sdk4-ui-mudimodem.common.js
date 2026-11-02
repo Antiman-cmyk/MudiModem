@@ -63,6 +63,33 @@ var __mm = (() => {
 
   // src/web/locales/zh-cn.js
   var zh_cn_default = {
+    "selected": "已选择",
+    "{s} module supports · {p} carrier allows · {a} modem advertises": "模组支持 {s} · 运营商允许 {p} · 模组实际广播 {a}",
+    "{b} selected (click to remove)": "{b} 已选择（点击取消）",
+    "{b} carrier allows, not selected (click to select)": "{b} 运营商允许，未选择（点击选择）",
+    "ring = in use now (every carrier: PCC + SCCs)": "圆环 = 正在使用（所有载波：PCC + SCC）",
+    "in use now ({role})": "正在使用（{role}）",
+    "carrier allows, not selected": "运营商允许，未选择",
+    "carrier allows, not advertised": "运营商允许，模组未广播",
+    "advertised by the modem": "模组实际广播",
+    "Your SIM's carrier policy. A band outside it never takes, whatever you select - the grid shows it as blocked.": "SIM 卡运营商的策略。策略之外的频段无论怎么选都不会生效，网格里显示为已屏蔽。",
+    "What the modem currently tells the network it can do (its UE capability): normally your selection within the carrier's policy. The 5G NSA group shows it, read-only.": "Modem 当前向网络声明的能力（UE capability）：通常是你的选择中运营商允许的部分。5G NSA 一组只读显示它。",
+    "What the band layers mean": "各层频段的含义",
+    "The carriers serving you right now: the ring around a band (the primary carrier and any aggregated ones).": "当前为你服务的载波：频段外的圆环（主载波和聚合的辅载波）。",
+    "The bands you allow the modem to use. Apply writes them through GL, with a 60 s revert.": "你允许 Modem 使用的频段。点“应用”后通过 GL 写入，60 秒内可回滚。",
+    "Signal quality including how busy the cell is, in dB. LTE: −6 or better is excellent, down to −10 good, down to −14 fair. 5G: −12, −16 and −20.": "包含基站繁忙程度的信号质量，单位 dB。LTE：−6 及以上为优，−10 以上为良，−14 以上为中。5G 的分界是 −12、−16 和 −20。",
+    "Signal against noise and interference, in dB. 12 or more is excellent, 6 to 12 good, 0 to 6 fair, below 0 poor.": "信号与噪声和干扰之比，单位 dB。12 及以上为优，6 到 12 为良，0 到 6 为中，低于 0 为差。",
+    "Selected": "已选择",
+    "Received power from the cell, in dBm. −100 or better is excellent, down to −105 good, down to −110 fair, below that poor.": "来自基站的接收功率，单位 dBm。−100 及以上为优，−105 以上为良，−110 以上为中，更低为差。",
+    "Module supports": "模组支持",
+    "Modem advertises": "模组实际广播",
+    "In use": "正在使用",
+    "Every band this modem can use. GL's own band page offers all of them.": "这个 Modem 能用的所有频段。GL 自带的频段页面列出的就是这些。",
+    "Choose the network mode and which 5G/LTE bands the modem may use. Bands your carrier forbids are shown as blocked: they can't be selected because they never take.": "选择网络模式，以及 Modem 可以使用哪些 5G / LTE 频段。运营商禁止的频段显示为已屏蔽：选了也不会生效，所以不能选。",
+    "Changes: {what}. Stored for SIM {n}.": "改动：{what}。保存给 SIM {n}。",
+    "Changes: {what}. Applies with a 60s revert.": "改动：{what}。应用后 60 秒内可回滚。",
+    "Carrier allows": "运营商允许",
+    "+{n} more": "另外 {n} 项",
     "waiting for the next sample...": "等待下一个采样……",
     "scanned {age} ago · SIM {slot}": "{age}前扫描 · SIM {slot}",
     "scanned {age} ago": "{age}前扫描",
@@ -149,7 +176,6 @@ var __mm = (() => {
     "Charge limit not available on this device.": "此设备不支持充电上限。",
     "Charging": "充电中",
     "Charging stopped": "已停止充电",
-    "Choose the network mode and which 5G/LTE bands the modem may use. Blocked bands are ones the module supports but your carrier forbids - they can't be selected because they never take.": "选择网络模式，以及 Modem 可以使用的 5G/LTE 频段。被屏蔽的频段是模组支持、但运营商策略不允许的频段 - 选了也不会生效，所以不能选。",
     "Clear": "清空",
     "Clear history": "清除历史",
     "Clear it": "清除",
@@ -310,7 +336,6 @@ var __mm = (() => {
     "Read neighbours": "读取邻区",
     "Reading band configuration from the modem...": "正在从 Modem 读取频段配置…",
     "Reading lock state from the modem...": "正在从 Modem 读取锁定状态…",
-    "Received power from the cell, in dBm. Above −90 is good, −90 to −105 fair, below −110 poor.": "从基站收到的信号功率，单位 dBm。高于 −90 为好，−90 到 −105 一般，低于 −110 差。",
     "Recovery": "恢复方法",
     "Refresh now": "立即更新",
     "Refreshing…": "正在更新…",
@@ -345,8 +370,6 @@ var __mm = (() => {
     "Sending the default to the modem: band filtering off + Auto mode.": "正在向 Modem 发送默认设置：关闭频段过滤 + 自动模式。",
     "Sending…": "正在发送…",
     "Sharp edge.": "注意风险。",
-    "Signal against noise and interference, in dB. Above 13 is good, 0 to 13 fair, below 0 poor.": "信号与噪声和干扰之比，单位 dB。高于 13 为好，0 到 13 一般，低于 0 差。",
-    "Signal quality including how busy the cell is, in dB. Above −10 is good, −10 to −15 fair, below −15 poor.": "信号质量（含基站繁忙程度），单位 dB。高于 −10 为好，−10 到 −15 一般，低于 −15 差。",
     "Source": "来源",
     "Speedtest": "测速",
     "Starting…": "正在启动…",
@@ -411,11 +434,9 @@ var __mm = (() => {
     "Your connection dropped while applying, but the {lock} did apply.": "应用时连接中断了，但 {lock} 已经生效。",
     "a tick marks the moment — everything to its right is the radio's answer": "竖线标记操作的时刻 — 它右侧就是无线信号的反应",
     "after {d} offline": "断网 {d} 后恢复",
-    "allowed": "已允许",
     "apply failed": "应用失败",
     "band change": "频段修改",
     "blocked by carrier policy": "被运营商策略屏蔽",
-    "blocked by policy": "被策略屏蔽",
     "but the network mode is {mode} - the lock can't take effect. Set the mode to {need}, or clear the lock on the Cell lock tab.": "但网络模式是“{mode}” - 锁定无法生效。请把模式设为“{need}”，或在“锁定基站”页解除锁定。",
     "carrier {plmn}": "运营商 {plmn}",
     "changed": "已修改",
@@ -437,12 +458,10 @@ var __mm = (() => {
     "from the last {n} min": "依据最近 {n} 分钟",
     "high band, fast + short range": "高频，速度快、覆盖近",
     "hourly, kept 30 days": "按小时，保留 30 天",
-    "in use": "使用中",
     "load failed": "加载失败",
     "lock failed": "锁定失败",
     "locked": "已锁定",
     "low band, reaches far": "低频，覆盖远",
-    "mode -> {m}": "模式 -> {m}",
     "mode {m}": "模式 {m}",
     "modem": "Modem",
     "ms latency": "ms 延迟",
@@ -453,8 +472,6 @@ var __mm = (() => {
     "nv": "nv",
     "one clock, all three metrics — hover for a slice, click to pin": "同一时间轴上的三个指标 — 悬停查看某一时刻，点击固定",
     "other frequency": "异频",
-    "permitted, not active": "允许但未生效",
-    "permitted, not selected": "允许但未选择",
     "pinned": "已固定",
     "read": "只读",
     "read before locking": "锁定前请先阅读",
@@ -471,7 +488,6 @@ var __mm = (() => {
     "resolving…": "正在识别…",
     "rev unknown": "版本未知",
     "rev {rev}": "版本 {rev}",
-    "ring = serving now (every carrier: PCC + SCCs)": "圆环 = 当前服务（所有载波：PCC + SCC）",
     "safe — reads only": "安全 — 只读",
     "same frequency": "同频",
     "scan failed": "扫描失败",
@@ -484,7 +500,6 @@ var __mm = (() => {
     "upload at the cap": "上传已达上限",
     "gave up waiting for the router": "等待路由器超时，已放弃",
     "serving now": "当前服务",
-    "serving now ({role})": "当前服务（{role}）",
     "set": "设置",
     "skipped — previous step failed": "已跳过 — 上一步失败",
     "slot {slot}": "卡槽 {slot}",
@@ -495,9 +510,7 @@ var __mm = (() => {
     "view frozen": "视图已冻结",
     "v{v} available": "v{v} 可更新",
     "which radios the modem may use": "Modem 可以使用的制式",
-    "{b} allowed (click to remove)": "{b} 已允许（点击移除）",
     "{b} blocked by carrier policy; selecting has no effect": "{b} 被运营商策略屏蔽，选择也不会生效",
-    "{b} permitted (click to allow)": "{b} 运营商允许（点击启用）",
     "{carrier} (slot {slot})": "{carrier}（卡槽 {slot}）",
     "{label} applying a lock briefly re-registers the modem, which can drop a remote (Tailscale / VPN) connection to this router for a few seconds. It reconnects on its own - if the request seems to hang or fail, wait a moment; the lock likely applied and this page will offer to keep or revert it once you're back.": "{label}应用锁定会让 Modem 短暂重新注册，可能导致到本路由器的远程连接（Tailscale / VPN）中断几秒钟。连接会自动恢复 - 如果请求像是卡住或失败了，请稍等片刻；锁定很可能已经生效，重新连上后本页面会让你选择保留或恢复。",
     "{locked} to {target}. The modem will not hand over.": "{locked}到 {target}。Modem 不会切换基站。",
@@ -521,12 +534,9 @@ var __mm = (() => {
     "{pct} % GL UI Reported Charge": "{pct} %（GL 界面电量）",
     "{rat} cell PCI {pci} / ARFCN {freq}": "{rat} 小区 PCI {pci} / ARFCN {freq}",
     "{rat} lock PCI {pci} / ARFCN {freq}": "{rat} 锁定 PCI {pci} / ARFCN {freq}",
-    "{s} supported / {p} permitted / {a} active": "支持 {s} / 允许 {p} / 生效 {a}",
     "{time} remaining": "剩余 {time}",
     "{time} to {pct} %": "{time} 充到 {pct} %",
     "{title} (read-only)": "{title}（只读）",
-    "{what} changed; applies with a 60s revert": "已修改 {what}；应用后有 60 秒的自动恢复",
-    "{what} changed; stored for SIM {n}": "{what} 已更改；将为 SIM {n} 保存",
     "~{h} h": "约 {h} 小时",
     "~{h} h {m} m": "约 {h} 小时 {m} 分钟",
     "~{m} m": "约 {m} 分钟",
@@ -764,9 +774,10 @@ var __mm = (() => {
       // What each reading means, with rough ranges — tap the "?" (works on touch, unlike a title).
       renderGlossary(h) {
         var items = [
-          ["RSRP", "Received power from the cell, in dBm. Above −90 is good, −90 to −105 fair, below −110 poor."],
-          ["SINR", "Signal against noise and interference, in dB. Above 13 is good, 0 to 13 fair, below 0 poor."],
-          ["RSRQ", "Signal quality including how busy the cell is, in dB. Above −10 is good, −10 to −15 fair, below −15 poor."],
+          // the colours follow GL's own levels (serving.js glLevel); the ranges say so
+          ["RSRP", "Received power from the cell, in dBm. −100 or better is excellent, down to −105 good, down to −110 fair, below that poor."],
+          ["SINR", "Signal against noise and interference, in dB. 12 or more is excellent, 6 to 12 good, 0 to 6 fair, below 0 poor."],
+          ["RSRQ", "Signal quality including how busy the cell is, in dB. LTE: −6 or better is excellent, down to −10 good, down to −14 fair. 5G: −12, −16 and −20."],
           ["Band", "The frequency band in use: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter."],
           ["Cell / Ch", "Which cell the modem is on (its ID) and the channel number with its frequency."],
           ["CA", "Carrier aggregation: several carriers combined for more speed."]
@@ -1339,6 +1350,8 @@ var __mm = (() => {
         applyError: "",
         resetNote: "",
         // transient feedback from "Apply defaults"
+        showBandHelp: false,
+        // the "?" next to the Bands title: what each band layer means
         resetTimer: null
         // handle clearing resetNote
       };
@@ -1616,6 +1629,40 @@ var __mm = (() => {
           self.applying = false;
         });
       },
+      // "SA +n66 −n41": what Apply would change in one group, against what is set now. Long
+      // lists stop after a few with "+N more" (the grid shows them all).
+      diffText(group) {
+        var pre = this.prefixOf(group), cur = this.seedFor(group), sel = this.sel[group] || [];
+        var asc = function(a, b) {
+          return a - b;
+        };
+        var add = sel.filter(function(b) {
+          return cur.indexOf(b) === -1;
+        }).sort(asc);
+        var rem = cur.filter(function(b) {
+          return sel.indexOf(b) === -1;
+        }).sort(asc);
+        var bits = add.map(function(b) {
+          return "+" + pre + b;
+        }).concat(rem.map(function(b) {
+          return "−" + pre + b;
+        }));
+        var MAX = 6, more = bits.length - MAX;
+        return { sa: "SA", nsa: "NSA", LTE: "LTE" }[group] + " " + bits.slice(0, MAX).join(" ") + (more > 0 ? " " + t("+{n} more", { n: more }) : "");
+      },
+      // The four layers a band goes through, in the words the grid uses (the "?" by the title).
+      renderBandHelp(h) {
+        var items = [
+          ["Module supports", "Every band this modem can use. GL's own band page offers all of them."],
+          ["Carrier allows", "Your SIM's carrier policy. A band outside it never takes, whatever you select - the grid shows it as blocked."],
+          ["Selected", "The bands you allow the modem to use. Apply writes them through GL, with a 60 s revert."],
+          ["Modem advertises", "What the modem currently tells the network it can do (its UE capability): normally your selection within the carrier's policy. The 5G NSA group shows it, read-only."],
+          ["In use", "The carriers serving you right now: the ring around a band (the primary carrier and any aggregated ones)."]
+        ];
+        return h("div", { staticClass: "mm-gloss" }, items.map(function(it) {
+          return h("div", { key: it[0] }, [h("b", it[0]), " ", h("span", it[1])]);
+        }));
+      },
       // Classify one band for the read-only groups: active / permitted / blocked.
       bandState(group, b) {
         var d = this.bands;
@@ -1655,18 +1702,18 @@ var __mm = (() => {
               tip = t("{b} blocked by carrier policy; selecting has no effect", { b: pre + b });
             } else if (self.isSelected(group, b)) {
               cls = "sel";
-              tip = t("{b} allowed (click to remove)", { b: pre + b });
+              tip = t("{b} selected (click to remove)", { b: pre + b });
             } else {
               cls = "unsel";
-              tip = t("{b} permitted (click to allow)", { b: pre + b });
+              tip = t("{b} carrier allows, not selected (click to select)", { b: pre + b });
             }
           } else {
             var st = self.bandState(group, b);
             cls = st;
-            tip = pre + b + " " + t({ active: "in use", permitted: "permitted, not active", blocked: "blocked by carrier policy" }[st]);
+            tip = pre + b + " " + t({ active: "advertised by the modem", permitted: "carrier allows, not advertised", blocked: "blocked by carrier policy" }[st]);
           }
           var clickable = interactive && cls !== "blocked" && !self.pending;
-          if (serving) tip += " — " + t("serving now ({role})", { role: servingHere[b] });
+          if (serving) tip += " — " + t("in use now ({role})", { role: servingHere[b] });
           return h("span", {
             key: b,
             staticClass: "mm-band " + cls + (serving ? " serving" : "") + (clickable ? " clickable" : ""),
@@ -1693,7 +1740,7 @@ var __mm = (() => {
             })
           ]);
         }
-        var counts = t("{s} supported / {p} permitted / {a} active", {
+        var counts = t("{s} module supports · {p} carrier allows · {a} modem advertises", {
           s: (d.supported[group] || []).length,
           p: (d.policy[group] || []).length,
           a: (d.capability[group] || []).length
@@ -1835,7 +1882,16 @@ var __mm = (() => {
         ]) : null;
         var head = [
           h("div", { staticStyle: { display: "flex", justifyContent: "space-between", alignItems: "baseline" } }, [
-            h("span", { staticClass: "mm-sect" }, "Bands"),
+            h("span", [
+              h("span", { staticClass: "mm-sect" }, "Bands"),
+              h("button", {
+                staticClass: "mm-help",
+                attrs: { type: "button", title: "What the band layers mean", "aria-expanded": String(this.showBandHelp) },
+                on: { click: function() {
+                  self.showBandHelp = !self.showBandHelp;
+                } }
+              }, "?")
+            ]),
             h("span", [
               h("span", { staticClass: "mm-hint", staticStyle: { marginRight: "10px" } }, op ? t("carrier {plmn}", { plmn: op }) : ""),
               h("button", {
@@ -1851,8 +1907,9 @@ var __mm = (() => {
           h(
             "div",
             { staticClass: "mm-hint", staticStyle: { margin: "3px 0 12px" } },
-            "Choose the network mode and which 5G/LTE bands the modem may use. Blocked bands are ones the module supports but your carrier forbids - they can't be selected because they never take."
+            "Choose the network mode and which 5G/LTE bands the modem may use. Bands your carrier forbids are shown as blocked: they can't be selected because they never take."
           ),
+          this.showBandHelp ? this.renderBandHelp(h) : null,
           this.renderSimPick(h),
           this.bandSlot != null ? h("div", { staticClass: "mm-note", staticStyle: { marginBottom: "10px" } }, t("Editing SIM {n}, which is not in use. Changes are stored and GL applies them the next time SIM {n} connects (a SIM switch or failover) - without the 60 s revert, since nothing changes now.", { n: this.bandSlot })) : null,
           warn,
@@ -1870,14 +1927,14 @@ var __mm = (() => {
           else if (empty) status = h("span", { staticStyle: { color: "var(--error)" } }, "Each edited band group needs at least one band");
           else if (changed) {
             var parts = [];
-            if (this.modeChanged()) parts.push(t("mode -> {m}", { m: t({ AUTO: "Auto", NR5G: "5G only", LTE: "4G only" }[this.selMode] || this.selMode) }));
+            if (this.modeChanged()) parts.push(t("mode {m}", { m: t({ AUTO: "Auto", NR5G: "5G only", LTE: "4G only" }[this.selMode] || this.selMode) }));
             if (this.selMode === "LTE" && (this.changed("sa") || this.changed("nsa")))
               parts.push(t("5G selections held back under 4G-only"));
-            if (this.changed("sa")) parts.push(this.sel.sa.length + " SA");
-            if (this.changed("nsa")) parts.push(this.sel.nsa.length + " NSA");
-            if (this.changed("LTE")) parts.push(this.sel.LTE.length + " LTE");
+            if (this.sendable("sa")) parts.push(this.diffText("sa"));
+            if (this.sendable("nsa")) parts.push(this.diffText("nsa"));
+            if (this.sendable("LTE")) parts.push(this.diffText("LTE"));
             if (this.nr5gChanged()) parts.push(t({ both: "5G SA + NSA", nsa: "5G NSA only", sa: "5G SA only" }[this.selNr5g]));
-            status = this.bandSlot != null ? t("{what} changed; stored for SIM {n}", { what: parts.join(" + "), n: this.bandSlot }) : t("{what} changed; applies with a 60s revert", { what: parts.join(" + ") }) + " " + t("The link drops for a few seconds while the modem re-registers.");
+            status = this.bandSlot != null ? t("Changes: {what}. Stored for SIM {n}.", { what: parts.join("; "), n: this.bandSlot }) : t("Changes: {what}. Applies with a 60s revert.", { what: parts.join("; ") }) + " " + t("The link drops for a few seconds while the modem re-registers.");
           } else status = "No changes";
           footer.push(h("div", { staticClass: "mm-foot" }, [
             h("span", { staticClass: "mm-hint" }, [status]),
@@ -1902,10 +1959,10 @@ var __mm = (() => {
           if (this.storedNote) footer.push(h("div", { staticClass: "mm-note" }, this.storedNote));
         }
         var legend = [h("div", { staticClass: "mm-legend" }, [
-          h("span", [h("i", { staticStyle: { background: "var(--success)" } }), "allowed"]),
-          h("span", [h("i", { staticStyle: { background: "transparent", border: "1px solid var(--border)" } }), "permitted, not selected"]),
-          h("span", [h("i", { staticStyle: { background: "var(--text-hint)" } }), "blocked by policy"]),
-          h("span", "ring = serving now (every carrier: PCC + SCCs)")
+          h("span", [h("i", { staticStyle: { background: "var(--success)" } }), "selected"]),
+          h("span", [h("i", { staticStyle: { background: "transparent", border: "1px solid var(--border)" } }), "carrier allows, not selected"]),
+          h("span", [h("i", { staticStyle: { background: "var(--text-hint)" } }), "blocked by carrier policy"]),
+          h("span", "ring = in use now (every carrier: PCC + SCCs)")
         ])];
         return h("div", { staticClass: "mm-card" }, head.filter(Boolean).concat(groups).concat(footer).concat(legend));
       }
@@ -2360,7 +2417,7 @@ var __mm = (() => {
             return b.rsrp - a.rsrp;
           });
           var rows = sorted.map(function(tw, i) {
-            var q = tw.rsrp !== void 0 ? tw.rsrp >= -95 ? "good" : tw.rsrp >= -105 ? "fair" : "poor" : "none";
+            var q = self.qFromLevel(self.glLevel("rsrp", tw.rsrp));
             var confirming = self.lockConfirm && self.lockConfirm.scanIdx === i;
             var target = self.scanTarget(tw);
             return h("div", { key: i, staticClass: "mm-scan-row" }, [
@@ -2631,7 +2688,7 @@ var __mm = (() => {
             return b.rsrp - a.rsrp;
           });
           var rows = sorted.map(function(c, i) {
-            var q = c.rsrp !== void 0 ? c.rsrp >= -95 ? "good" : c.rsrp >= -105 ? "fair" : "poor" : "none";
+            var q = self.qFromLevel(self.glLevel("rsrp", c.rsrp));
             var confirming = self.nbConfirm === i;
             var target = self.nbTarget(c);
             return h("div", { key: "n" + i, staticClass: "mm-scan-row" }, [
@@ -3235,6 +3292,16 @@ var __mm = (() => {
       };
     },
     methods: {
+      // GL's own signal levels (libcm_network.so; cellular_compat LEVEL_AT, measured by running GL):
+      // the ONE scale this page colours readings by. The strip and Tracking take the levels the
+      // collector carries; rows without them (a scan, the neighbour list) compute the same here.
+      // RSRP and SINR are the same for LTE and NR, RSRQ is not. 0 = no reading.
+      glLevel(kind, v, nr) {
+        var at = { rsrp: [-100, -105, -110], sinr: [12, 6, 0], rsrq: nr ? [-12, -16, -20] : [-6, -10, -14] }[kind];
+        if (!at || v === null || v === void 0 || v === "" || isNaN(Number(v))) return 0;
+        v = Number(v);
+        return v >= at[0] ? 4 : v >= at[1] ? 3 : v >= at[2] ? 2 : 1;
+      },
       qFromLevel(lvl) {
         return { 1: "poor", 2: "fair", 3: "good", 4: "excellent" }[lvl] || "none";
       },

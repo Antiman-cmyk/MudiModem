@@ -37,6 +37,17 @@ export default {
     };
   },
   methods: {
+    // GL's own signal levels (libcm_network.so; cellular_compat LEVEL_AT, measured by running GL):
+    // the ONE scale this page colours readings by. The strip and Tracking take the levels the
+    // collector carries; rows without them (a scan, the neighbour list) compute the same here.
+    // RSRP and SINR are the same for LTE and NR, RSRQ is not. 0 = no reading.
+    glLevel(kind, v, nr) {
+      var at = { rsrp: [-100, -105, -110], sinr: [12, 6, 0], rsrq: nr ? [-12, -16, -20] : [-6, -10, -14] }[kind];
+      if (!at || v === null || v === undefined || v === "" || isNaN(Number(v))) return 0;
+      v = Number(v);
+      return v >= at[0] ? 4 : v >= at[1] ? 3 : v >= at[2] ? 2 : 1;
+    },
+
     qFromLevel(lvl) {
       return ({ 1: "poor", 2: "fair", 3: "good", 4: "excellent" })[lvl] || "none";
     },

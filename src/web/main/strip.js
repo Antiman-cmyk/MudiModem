@@ -72,9 +72,10 @@ export default {
     // What each reading means, with rough ranges — tap the "?" (works on touch, unlike a title).
     renderGlossary(h) {
       var items = [
-        ["RSRP", "Received power from the cell, in dBm. Above −90 is good, −90 to −105 fair, below −110 poor."],
-        ["SINR", "Signal against noise and interference, in dB. Above 13 is good, 0 to 13 fair, below 0 poor."],
-        ["RSRQ", "Signal quality including how busy the cell is, in dB. Above −10 is good, −10 to −15 fair, below −15 poor."],
+        // the colours follow GL's own levels (serving.js glLevel); the ranges say so
+        ["RSRP", "Received power from the cell, in dBm. −100 or better is excellent, down to −105 good, down to −110 fair, below that poor."],
+        ["SINR", "Signal against noise and interference, in dB. 12 or more is excellent, 6 to 12 good, 0 to 6 fair, below 0 poor."],
+        ["RSRQ", "Signal quality including how busy the cell is, in dB. LTE: −6 or better is excellent, down to −10 good, down to −14 fair. 5G: −12, −16 and −20."],
         ["Band", "The frequency band in use: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter."],
         ["Cell / Ch", "Which cell the modem is on (its ID) and the channel number with its frequency."],
         ["CA", "Carrier aggregation: several carriers combined for more speed."]

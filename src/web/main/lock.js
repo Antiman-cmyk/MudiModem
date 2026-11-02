@@ -420,7 +420,7 @@ export default {
           return b.rsrp - a.rsrp;   // -84 before -95 (strongest first)
         });
         var rows = sorted.map(function (tw, i) {
-          var q = tw.rsrp !== undefined ? (tw.rsrp >= -95 ? "good" : (tw.rsrp >= -105 ? "fair" : "poor")) : "none";
+          var q = self.qFromLevel(self.glLevel("rsrp", tw.rsrp));   // GL's scale, as the strip
           var confirming = self.lockConfirm && self.lockConfirm.scanIdx === i;
           var target = self.scanTarget(tw);
           return h("div", { key: i, staticClass: "mm-scan-row" }, [

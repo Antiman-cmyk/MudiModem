@@ -605,6 +605,36 @@ function chips(c, vm) {
 }
 function chip(cs, b) { return cs.find((n) => textOf(n.children[0]) === b); }
 
+test('bands footer names the change itself: +n78 −n41, not "2 SA"', () => {
+  const c = loadChunk();
+  const vm = bandsVm(c);                       // config sa = [71]
+  vm.sel.sa = [71, 41];
+  let txt = textOf(c.render.call(vm, h));
+  assert.match(txt, /Changes: SA \+n41\. Applies with a 60s revert\./);
+  vm.sel.sa = [41];
+  txt = textOf(c.render.call(vm, h));
+  assert.match(txt, /Changes: SA \+n41 −n71\./);
+  vm.sel.LTE = [12, 66, 2, 4, 5, 7, 13, 14];   // LTE config [] seeds from policy [12, 66]
+  assert.equal(vm.diffText('LTE'), 'LTE +B2 +B4 +B5 +B7 +B13 +B14', 'six shown in full');
+  vm.sel.LTE.push(17);
+  assert.equal(vm.diffText('LTE'), 'LTE +B2 +B4 +B5 +B7 +B13 +B14 +1 more', 'then "+N more"');
+});
+
+test('one signal scale: scan and neighbour rows are coloured by GL\'s own levels', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, LIVE);
+  assert.deepEqual([-99, -100, -101, -105, -106, -110, -111].map((v) => vm.glLevel('rsrp', v)), [4, 4, 3, 3, 2, 2, 1]);
+  assert.deepEqual([12, 6, 0, -1].map((v) => vm.glLevel('sinr', v)), [4, 3, 2, 1]);
+  assert.equal(vm.glLevel('rsrq', -11, true), 4, 'NR RSRQ: -12 or better');
+  assert.equal(vm.glLevel('rsrq', -11, false), 2, 'LTE RSRQ: -10 is the good line');
+  assert.equal(vm.glLevel('rsrp', null), 0); assert.equal(vm.glLevel('rsrp', ''), 0); assert.equal(vm.glLevel('rsrp', undefined), 0);
+  vm.tab = 'lock';
+  vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+  vm.scan = { towers: [{ pci: 1, freq: 627264, network_type: '5G SA', band: 78, scs: 30, rsrp: -100 }], running: false, error: '', ts: 1, slot: 1 };
+  const span = walk(c.render.call(vm, h)).find((n) => n.tag === 'span' && textOf(n) === '-100 dBm');
+  assert.equal(span.data.style.color, 'var(--success)', '-100 dBm is excellent, as on the strip');
+});
+
 test('SA band chips are interactive: selected / permitted / blocked', () => {
   const c = loadChunk();
   const vm = bandsVm(c);              // selSA seeded to [71]
@@ -683,7 +713,7 @@ test('5G method: seeded from GL, NSA only sends nr5g and leaves SA out; refused 
   assert.strictEqual(vm.sendable('sa'), false);
   const txt = textOf(c.render.call(vm, h));
   assert.match(txt, /Off: 5G NSA only/);
-  assert.match(txt, /5G NSA only changed; applies with a 60s revert/);
+  assert.match(txt, /Changes: 5G NSA only\. Applies with a 60s revert/);
   const calls = stubRpc([{ ok: true, window: 60, applied: { nr5g: 'nsa' }, slot: 1 }]);
   try {
     vm.startCountdown = () => {};
