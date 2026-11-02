@@ -20,6 +20,19 @@ part of R2), plus the fixes it surfaced.
   theme does not define, so they rendered without colour or background. They now use GL's own
   tokens, and a test enforces this. "Good" signal is now `--secondary`, as on GL's own pages;
   before, it was the same grey as "no data" in the dark theme.
+- **Chinese:** the whole Modem page is available in Simplified Chinese and follows GL's language
+  setting (switching GL's language switches the page). Technical terms (RSRP, n71, AT commands)
+  stay as they are; the community AT library stays English.
+- **Smaller fixes:**
+  - Speed test: "Clear history" needs a second click, and the schedule shows how much data it
+    costs. The latest result is shown as soon as the tab opens.
+  - AT console: follows new output, Copy works on the plain-http admin, there is a Clear button,
+    and the higher-risk switch now lasts one browser session only.
+  - Cell lock: an LTE lock shows its band as B<n>, and scan rows wrap on phones.
+  - Status strip: a "?" explains each reading and its rough ranges.
+- **Page code is now built:** ES modules under `src/web` are compiled with esbuild into
+  `dist/views` (committed). The main chunk is split into modules, and all `/rpc` calls go through
+  one place.
 - **Development without a router:**
   - `tools/firmware.sh` fetches and unpacks the pinned 4.10.0 image.
   - `tools/emu.sh` runs the router's own Lua, eco, busybox and binaries under qemu.

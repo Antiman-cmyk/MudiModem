@@ -54,6 +54,10 @@ Marks: 🟢 read in the image or verified on a box · 🟡 binary strings / disa
   so background/retrying calls go through a direct `$axios.post("/rpc", …)` ("rpcSilent") and
   only user-initiated one-shots use `$rpcRequest`. Also global: `$axios`, `$message`,
   `$getCookie`, `window.$i18n` (vue-i18n 8.28, `mergeLocaleMessage`, fallback `en`).
+- **Our page's i18n:** English in the source is the key; `src/web/kit/i18n.js` reads
+  `window.$i18n.locale` inside render (reactive, so a GL language switch re-renders us) and
+  translates h() text children + title/placeholder by exact match, sentences with values via
+  `t()`/`tp()` templates; tables in `src/web/locales/`.
 - **i18n:** GL ships en/de/es/it/ja/zh-cn/zh-tw as `/www/i18n/gl-sdk4-ui-<pkg>.<lang>.json`,
   merged by `ui.load_locales` into `window.$i18n`. Do **not** drop files there (`/www` is not kept
   across upgrades, and a bad file makes `load_locales` fail and app.js retry forever ⇒ admin

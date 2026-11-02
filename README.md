@@ -182,6 +182,11 @@ including passes under the **router's own** Lua, busybox shell and tools via qem
 (`tools/preview.js`). What ships where is listed once, in `manifest.txt`; `tools/deploy.sh` pushes a
 working tree to a real box over ssh when one is genuinely needed.
 
+The page is written as ES modules under `src/web` and built with esbuild (`npm ci && npm run
+build:web`) into `dist/views`, which is committed so the installer can fetch it; the router never
+builds anything. The interface follows GL's language setting — English and Simplified Chinese
+today (`src/web/locales/`).
+
 Start with `CLAUDE.md` (rules of the road), then `docs/architecture.md` (structure and the
 refactor plan), `docs/cellular-api-4.10.md` (every GL interface used, with evidence) and
 `docs/knowledge.md` (platform and modem knowledge). `docs/audit-2026-11-02.md` is the open

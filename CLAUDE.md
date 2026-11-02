@@ -35,8 +35,13 @@ Rule of scope (owner): ship only what stock 4.10 lacks or does incompletely.
 - Nothing slow inside the nginx plugin: 4.10 runs **one** nginx worker, so `os.execute`/`io.popen`
   stall the whole admin. Long work runs detached (via `mudimodem-detach`) or in a daemon.
 - **Never `pcall` an `oui.ubus.call`** (cosocket yield). OpenWrt Lua 5.1 ints are 32-bit.
-- Chunks: one eval-able expression (`module.exports = …`), `render(h)` only, served as `.gz`.
-  Use only CSS variables GL's theme defines. Background calls use rpcSilent, never `$rpcRequest`.
+- Page code lives in `src/web` (ES modules) and is built by `npm run build:web` into `dist/views`
+  (committed — install.sh fetches raw files); never edit `dist/`. Each chunk is one eval-able
+  expression, `render(h)` only (Vue 2.6 runtime-only), served as `.gz`. Use only CSS variables
+  GL's theme defines. All /rpc goes through `kit/rpc.js`: background calls `rpcSilent`,
+  user-initiated one-shots `rpc` (GL banner). User-visible text is English in the source and
+  translated by `kit/i18n.js` (sentences with values as `t("… {x} …", {x})`); add every new string
+  to `src/web/locales/zh-cn.js`.
 - Nothing of ours under `/www`; every shipped file comes from `manifest.txt`, which also generates
   the firmware-upgrade keep list. Never write `/etc/sysupgrade.conf`.
 - A malformed menu JSON or i18n file breaks GL's whole admin — validate before shipping.
@@ -48,7 +53,10 @@ Rule of scope (owner): ship only what stock 4.10 lacks or does incompletely.
 manifest.txt            what ships where (single source; install/deploy/uninstall/keep.d)
 install.sh uninstall.sh bootstrap scripts run on the router (curl | sh)
 src/installer/          the one on-box installer every path runs
-src/views/*.js          page chunks (plain JS, render(h)); src/menu/*.json menu entries
+src/web/main/          the main chunk: index.js (shell) + strip/change/bands/lock/config/… modules
+src/web/tabs/          lazy tab chunks (tracking, console, speedtest, battery)
+src/web/kit/           shared: rpc, i18n, compose, chunks, fmt     src/web/locales/  zh-cn table
+dist/views/            BUILT chunks (committed, shipped)           src/menu/*.json   menu entries
 src/rpc/mudimodem       nginx Lua plugin (object "mudimodem"); src/validator/ its arg validator
 src/sbin/ src/lib/      daemons + helpers (collector, revert watchdog, speedtest, battery limit)
 src/ws/mudimodem.lua    /ws seed module; src/nginx/ the gl-conf.d alias
@@ -64,6 +72,9 @@ tools/firmware.sh fetch && tools/firmware.sh extract   # official 4.10.0 image -
 tools/test-local.sh                                    # all suites; router userland via qemu if rootfs present
 tools/emu.sh sh|lua|eco|run …                          # the router's own userland under qemu
 node tools/preview.js --matrix                         # every tab x phone/desktop x light/dark, GL's theme, fake data
+npm ci && npm run build:web                            # src/web -> dist/views (esbuild); test-local checks freshness
+node tools/i18n-keys.mjs --check zh-cn                 # UI strings missing from the Chinese table
+node tools/preview.js --i18n-audit --locale zh-cn      # any English left in the rendered page
 tools/build.sh                                         # payload tarball (what deploy pushes)
 MUDI_HOST=mudi tools/deploy.sh                         # push to a box over ssh (no sftp: uses cat)
 MUDI_HOST=mudi tools/verify.sh                         # on-box assertions (optional, last)
