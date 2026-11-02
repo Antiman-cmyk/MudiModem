@@ -54,6 +54,28 @@ def jsonl(path):
         return [json.loads(x) for x in f if x.strip()]
 
 
+def ct_sample(status, cell, networks):
+    """The sample the collector builds from GL's cell_info, computed by the collector's own code
+    (cellular_compat.build_sample under the image's Lua), minus t: the reference the get_signals
+    path must reproduce."""
+    out = subprocess.run([EMU, "lua", "-e", REF_LUA], input=json.dumps([status, cell, networks]),
+                         capture_output=True, text=True, env=dict(os.environ, LUA_PATH=os.path.join(ROOT, "src", "lib", "?.lua") + ";;"))
+    if out.returncode != 0:
+        raise AssertionError(out.stderr)
+    s = json.loads(out.stdout)
+    s.pop("t", None)
+    if s.get("signals") == {}:
+        s["signals"] = []
+    return s
+
+
+REF_LUA = """
+local cjson = require "cjson"; local cc = require "cellular_compat"; cc.init(cjson.null)
+local a = cjson.decode(io.read("*a"))
+io.write(cjson.encode(cc.build_sample(a[1], a[2], a[3], 0, "cpu", nil, cjson.empty_array)))
+"""
+
+
 def strip_t(s):
     return {k: v for k, v in s.items() if k != "t"}
 
@@ -116,7 +138,8 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         calls = os.path.join(bus, "calls.jsonl")
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline and p.poll() is None:
-            if sum(1 for c in jsonl(calls) if c["method"] == "cell_info") >= ticks:
+            # one `cellular.modem status` per RF tick, whatever the RF source
+            if sum(1 for c in jsonl(calls) if c["method"] == "status" and c["object"] == "cellular.modem") >= ticks:
                 break
             time.sleep(0.2)
         time.sleep(0.6)                       # let the last tick / flush finish
@@ -145,10 +168,12 @@ class CollectorOnEmulatedBus(unittest.TestCase):
             self.assertEqual(c["args"], {"bus": "cpu", "slot": 1})
         statuses = [c for c in r["calls"] if c["object"] == "cellular.modem" and c["method"] == "status"]
         self.assertEqual(len(statuses), len(cells), "exactly one cell_info per tick")
-        # nothing but the read path: no AT, no writes, no get_signals yet
+        # nothing but the read path: no AT, no writes (GL's sampler is absent here: get_signals is
+        # asked and answers nothing, so every tick reads cell_info — the startup path)
         seen = {(c["object"], c["method"]) for c in r["calls"]}
         self.assertLessEqual(seen, {("cellular.modem", "status"), ("cellular.network", "cell_info"),
-                                    ("cellular.network", "info"), ("network.interface", "dump")})
+                                    ("cellular.network", "info"), ("network.interface", "dump"),
+                                    ("cellular.collect", "get_signals")})
         self.assertEqual(sum(1 for c in r["calls"] if c["method"] == "info"), 1,
                          "carrier identity is cached, not read per tick")
         # samples follow the cell_info cycle; the failed read leaves no line
@@ -224,9 +249,11 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         self.assertEqual(live, [golden_sample(ct.MODEM_STATUS_410, cells[i % 2], ct.NETWORK_INFO_410)
                                 for i in range(len(live))], "the python collector's samples")
         seq = [(c["object"], c["method"], c["args"]) for c in eco["calls"]]
-        self.assertEqual(seq[:3], [("cellular.modem", "status", {}),
+        self.assertEqual(seq[:4], [("cellular.modem", "status", {}),
+                                   ("cellular.collect", "get_signals", {"bus": "cpu", "time": 25, "slot": 1}),
                                    ("cellular.network", "cell_info", {"bus": "cpu", "slot": 1}),
-                                   ("cellular.network", "info", {})], "the python collector's call order")
+                                   ("cellular.network", "info", {})],
+                         "per tick: the slot, GL's sampler (none here), cell_info, then the carrier once")
 
     def test_eco_throughput_from_the_cellular_device_counters(self):
         """Each sample carries the cellular device's kbit/s since the previous tick, from sysfs
@@ -362,6 +389,61 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         # one key per (hour, cell): no duplicate within a bucket from one run
         keys = [(x["t"], x.get("cell"), x.get("no_service")) for x in lines]
         self.assertEqual(len(keys), len(set(keys)))
+
+    def run_gl_sampler(self, rows_cycle, cells, ticks, **env):
+        scen = {"modem_status": ct.MODEM_STATUS_410, "network_info": ct.NETWORK_INFO_410, "has_ws": True,
+                "gl_signals": rows_cycle, "cell_info": cells}
+        r = self.run_collector("eco", scen, ticks=ticks, extra_env=env)
+        self.assertEqual(r["rc"], 0, r["stderr"])
+        return r
+
+    def test_eco_rf_from_gl_sampler(self):
+        """RF comes from GL's own sampler (get_signals: no AT); cell_info only for the identity.
+        The sample built from GL's level-less rows is the one GL's own cell_info gives (levels
+        with GL's thresholds, measured by running GL's cellular_manager: test/emu/gl-real.sh)."""
+        rows = ct.gl_signal_rows(ct.GL_CELL_SA)
+        r = self.run_gl_sampler([rows], [ct.GL_CELL_SA], ticks=8)
+        gets = [c for c in r["calls"] if c["method"] == "get_signals"]
+        cells = [c for c in r["calls"] if c["method"] == "cell_info"]
+        self.assertGreaterEqual(len(gets), 8)
+        self.assertEqual(len(cells), 1, "one cell_info for the identity, then GL's rows only")
+        self.assertEqual(gets[0]["args"], {"bus": "cpu", "time": 25, "slot": 1})
+        want = ct_sample(ct.MODEM_STATUS_410, ct.GL_CELL_SA, ct.NETWORK_INFO_410)
+        got = [strip_t(x) for x in r["samples"]]
+        self.assertGreaterEqual(len(got), 8)
+        for g in got:
+            self.assertEqual(g, want)
+        self.assertEqual((got[-1]["rsrp_level"], got[-1]["rsrq_level"], got[-1]["sinr_level"]), (4, 3, 2))
+
+    def test_eco_gl_sampler_handover_nsa_and_no_service(self):
+        """A new serving carrier in GL's rows -> one cell_info for the new identity; EN-DC rows
+        get each row's own level family; no service needs no cell_info at all."""
+        sa, nsa, none = (ct.gl_signal_rows(c) for c in (ct.GL_CELL_SA, ct.GL_CELL_NSA, ct.GL_CELL_NO_SERVICE))
+        r = self.run_gl_sampler([sa, sa, nsa, nsa, none, none] + [sa] * 12,     # the tail outlasts the run
+                                [ct.GL_CELL_SA, ct.GL_CELL_NSA, ct.GL_CELL_SA], ticks=8)
+        got = [strip_t(x) for x in r["samples"]][:8]
+        want = [ct_sample(ct.MODEM_STATUS_410, c, ct.NETWORK_INFO_410) for c in
+                (ct.GL_CELL_SA, ct.GL_CELL_SA, ct.GL_CELL_NSA, ct.GL_CELL_NSA,
+                 ct.GL_CELL_NO_SERVICE, ct.GL_CELL_NO_SERVICE, ct.GL_CELL_SA, ct.GL_CELL_SA)]
+        self.assertEqual(got, want)
+        cells = [c for c in r["calls"] if c["method"] == "cell_info"]
+        self.assertEqual(len(cells), 3, "SA, then NSA, then SA again after the outage — never for no service")
+        self.assertFalse(got[4]["registered"])
+
+    def test_eco_gl_sampler_stale_and_identity_refresh(self):
+        """GL's rows older than 25 s are not used (cell_info every tick); a steady cell's identity is
+        re-read once per IDENTITY_EVERY."""
+        rows = ct.gl_signal_rows(ct.GL_CELL_SA)
+        stale = self.run_collector("eco", {"modem_status": ct.MODEM_STATUS_410, "network_info": ct.NETWORK_INFO_410,
+                                           "has_ws": True, "gl_signals": [rows], "gl_signals_age": 60,
+                                           "cell_info": [ct.GL_CELL_SA]}, ticks=5)
+        self.assertEqual(stale["rc"], 0, stale["stderr"])
+        n_ticks = len([c for c in stale["calls"] if c["method"] == "get_signals"])
+        self.assertEqual(len([c for c in stale["calls"] if c["method"] == "cell_info"]), n_ticks,
+                         "stale rows: every tick reads cell_info")
+        fast = self.run_gl_sampler([rows], [ct.GL_CELL_SA], ticks=12, MUDIMODEM_IDENTITY_EVERY="0.5")
+        n = len([c for c in fast["calls"] if c["method"] == "cell_info"])
+        self.assertTrue(3 <= n <= 8, "identity re-read about every 0.5 s at a 0.2 s poll, got %d of 12 ticks" % n)
 
     def test_eco_shared_trim_loses_no_line(self):
         """events.jsonl is appended to by the plugin and the watchdog while the daemon trims it:

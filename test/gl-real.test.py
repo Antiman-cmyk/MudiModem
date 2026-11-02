@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""mudimodemd against GL's OWN cellular stack: cellular_manager (and the modem_AT it spawns) from
+the 4.10 image, chrooted under qemu with a fake RG650V behind /dev/smd9 (test/emu/gl-real.sh).
+Nothing of GL is faked here but the modem's AT replies, so what GL returns is what GL's code does.
+
+  * the collector's RF comes from GL's sampler (cellular.collect get_signals), and its sample is
+    the one GL's own cell_info gives — levels included (GL's thresholds, cellular_compat);
+  * cell_info runs only for the identity: once, then again after the serving cell changes.
+Needs firmware/rootfs, qemu-user + binfmt, and root for the namespaces/overlay; skips otherwise."""
+import json, os, shutil, subprocess, sys, tempfile, textwrap, unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.abspath(os.path.join(HERE, ".."))
+EMU = os.path.join(ROOT, "tools", "emu.sh")
+GLREAL = os.path.join(HERE, "emu", "gl-real.sh")
+
+
+def can_run():
+    if os.geteuid() != 0 or not shutil.which("unshare"):
+        return False
+    if subprocess.run([EMU, "check"], capture_output=True).returncode != 0:
+        return False
+    return os.path.exists("/proc/sys/fs/binfmt_misc/qemu-aarch64")
+
+
+INNER = textwrap.dedent(r'''
+    import json, os, subprocess, sys, time
+    W, EMU, ROOT = sys.argv[1], sys.argv[2], sys.argv[3]
+    GLR = os.environ["GLR"]; UBUS = os.environ["UBUS"].split()
+    def ubus(obj, m, a):
+        out = subprocess.run(UBUS + ["-t", "20", "call", obj, m, json.dumps(a)], capture_output=True, text=True).stdout
+        return json.loads(out) if out.strip() else None
+    def samples():
+        try:
+            return [json.loads(l) for l in open(os.path.join(W, "hist", "samples.jsonl")) if l.strip()]
+        except OSError:
+            return []
+    for _ in range(60):                                    # GL up and its sampler has a row
+        r = ubus("cellular.collect", "get_signals", {"time": 30, "slot": 1})
+        if r and r.get("signals"):
+            break
+        time.sleep(1)
+    env = dict(os.environ, MUDIMODEM_UBUS_SOCK=os.path.join(GLR, "tmp/run/ubus/ubus.sock"),
+               MUDIMODEM_LIB=os.path.join(ROOT, "src", "lib"), MUDIMODEM_POLL="2",
+               MUDIMODEM_HIST=os.path.join(W, "hist"), MUDIMODEM_HISTORY_CFG=os.path.join(W, "none"),
+               MUDIMODEM_BATT_SYSFS=os.path.join(W, "none"), MUDIMODEM_SUMMARY=os.path.join(W, "summary.jsonl"),
+               MUDIMODEM_LINK_INTERVAL="0", MUDIMODEM_CRASH_INTERVAL="0", MUDIMODEM_NO_WS_PUSH="1")
+    d = subprocess.Popen([EMU, "eco", os.path.join(ROOT, "src", "sbin", "mudimodemd")], env=env,
+                         stdout=subprocess.DEVNULL, stderr=open(os.path.join(W, "daemon.err"), "w"))
+    time.sleep(16)
+    before = samples()
+    h1 = ubus("mudimodem", "health", {})
+    gl_cell = ubus("cellular.network", "cell_info", {"bus": "cpu", "slot": 1})
+    # a handover: the modem now serves another cell (new PCI, new id)
+    line = '+QENG: "servingcell","NOCONN","NR5G-SA","FDD",310,260,187461999,333,870100,127490,71,2,-106,-17,7,0,-'
+    json.dump({"replies": {'AT+QENG="servingcell"': line}}, open(os.path.join(W, "modem-state.json"), "w"))
+    time.sleep(26)
+    after = samples()[len(before):]
+    h2 = ubus("mudimodem", "health", {})
+    gl_cell2 = ubus("cellular.network", "cell_info", {"bus": "cpu", "slot": 1})
+    d.terminate(); d.wait(10)
+    json.dump({"before": before, "after": after, "h1": h1, "h2": h2, "gl_cell": gl_cell, "gl_cell2": gl_cell2},
+              open(os.path.join(W, "result.json"), "w"))
+''')
+
+
+@unittest.skipUnless(can_run(), "needs root, unshare, firmware/rootfs and qemu binfmt (tools/emu.sh check)")
+class AgainstGLsOwnStack(unittest.TestCase):
+    def test_collector_reads_gl_sampler(self):
+        w = tempfile.mkdtemp(prefix="mm-glreal-", dir=os.path.join(ROOT, "build"))
+        self.addCleanup(shutil.rmtree, w, True)
+        inner = os.path.join(w, "inner.py")
+        with open(inner, "w") as f:
+            f.write(INNER)
+        p = subprocess.run([GLREAL, w, "python3", "-I", inner, w, EMU, ROOT], capture_output=True, text=True, timeout=300)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        with open(os.path.join(w, "result.json")) as f:
+            r = json.load(f)
+        before, after, h1, h2 = r["before"], r["after"], r["h1"], r["h2"]
+        self.assertGreaterEqual(len(before), 5, "samples while the cell is steady")
+        s = before[-1]
+        g = r["gl_cell"]["signal"][0]
+        self.assertEqual((s["id"], s["tac"], s["pci"], s["band"], s["tx_channel"]),
+                         (r["gl_cell"]["cell_id"], r["gl_cell"]["tac"], g["pci"], g["band"], g["earfcn"]))
+        self.assertEqual((s["rsrp"], s["rsrq"], s["sinr"]), (g["rsrp"], g["rsrq"], g["sinr"]))
+        self.assertEqual((s["rsrp_level"], s["rsrq_level"], s["sinr_level"]),
+                         (g["rsrp_level"], g["rsrq_level"], g["sinr_level"]), "GL's levels, from GL's rows")
+        self.assertEqual(h1["cell_info_reads"], 1, "steady: one cell_info, the identity")
+        self.assertGreaterEqual(h1["rf_from_gl"], 5)
+        # after the handover, from GL's next sample on: the new cell, its id read once more
+        new = [x for x in after if x["pci"] == 333]
+        self.assertTrue(new, after[-3:])
+        g2 = r["gl_cell2"]
+        self.assertEqual((new[-1]["id"], new[-1]["rsrp"], new[-1]["rsrp_level"], new[-1]["rsrq_level"]),
+                         (g2["cell_id"], -106, g2["signal"][0]["rsrp_level"], g2["signal"][0]["rsrq_level"]))
+        self.assertEqual(h2["cell_info_reads"], 2, "one more cell_info, for the new cell")
+        self.assertTrue(all(x["pci"] in (721, 333) for x in before + after))
+
+
+if __name__ == "__main__":
+    unittest.main()

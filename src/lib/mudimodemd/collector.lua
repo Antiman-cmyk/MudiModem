@@ -10,8 +10,13 @@
 -- What differs is only HOW: the RF tick, the battery cadence and the eMMC flush are three
 -- coroutines sleeping on eco's timers (libev: monotonic, so a wall-clock step cannot stall or
 -- burst them), and ubus is one persistent connection instead of a fork+exec per call.
--- ⚠️ `cellular.network cell_info` runs AT+QENG/AT+QCAINFO on the shared AT channel every call,
--- hence the 10 s default and exactly ONE call per tick.
+-- RF comes from GL's own sampler: `cellular.collect get_signals` (libcmcollect.so) already runs
+-- AT+QENG/AT+QCAINFO for BOTH SIMs every 10 s and keeps the rows in RAM, so reading them costs no
+-- AT. Its rows are cell_info's rows without the levels (added with GL's own thresholds,
+-- cellular_compat.with_levels) and without the cell id / TAC, so `cellular.network cell_info`
+-- (one QENG + QCAINFO) runs only when the serving carrier changes, once a minute, or when GL has no
+-- fresh row (its sampler starting up). All of it measured by running GL's cellular_manager under
+-- emulation (test/emu/gl-real.sh; docs/cellular-api-4.10.md).
 local cjson = require "cjson"
 local time = require "eco.time"
 local cc = require "cellular_compat"
@@ -74,6 +79,8 @@ function M.config()
     event_trim_every = 360,                                -- RF ticks (~1 h)
     ws_name = "mudimodem.collect", ws_batt_name = "mudimodem.battery",
     cell_fail_log_every = 300, ws_fail_log_every = 60,
+    identity_every = envnum("MUDIMODEM_IDENTITY_EVERY", 60),   -- s between cell_info refreshes
+    signals_max_age = envnum("MUDIMODEM_SIGNALS_MAX_AGE", 25), -- s; GL samples every 10
   }
 end
 
@@ -111,6 +118,7 @@ function M.new(conn, cfg, log, event)
   local st = {                                             -- also the `health` reply
     started = os.time(), rf_ticks = 0, rf_samples = 0, rf_failed = 0, rf_last_t = 0,
     batt_samples = 0, push_failures = 0, attached = true, flushed = false, last_error = "",
+    rf_from_gl = 0, cell_info_reads = 0,
     link = "unknown", link_probes = 0, link_lost = 0, outages = 0, modem_crashes = 0, summary_lines = 0,
   }
   self.state = st
@@ -270,15 +278,61 @@ function M.new(conn, cfg, log, event)
     if done then write_summary(done) end
   end
 
-  function self.collect_sample()
-    local modem = call("cellular.modem", "status")
-    local slot = cc.active_slot(modem, cfg.bus)
-    if slot == nil then return nil end
+  -- GL's newest sample for `slot` (get_signals: {signals:[{slot, timestamp (s), signal:[rows]}]}),
+  -- or nil when it has none within signals_max_age.
+  local function gl_rows(slot)
+    local r = call("cellular.collect", "get_signals", { bus = cfg.bus, time = cfg.signals_max_age, slot = slot })
+    local best
+    for _, e in ipairs(r and type(r.signals) == "table" and r.signals or {}) do
+      if type(e) == "table" and tonumber(e.slot) == slot and type(e.signal) == "table" and #e.signal > 0
+         and tonumber(e.timestamp) and (best == nil or e.timestamp > best.timestamp) then best = e end
+    end
+    if best == nil or os.time() - best.timestamp > cfg.signals_max_age then return nil end
+    return best.signal
+  end
+
+  -- the serving carrier as GL reports it: a change means a new cell (refresh the identity)
+  local function pcc_key(rows)
+    local p = rows[1] or {}
+    return table.concat({ tostring(p.network_type), tostring(p.band), tostring(p.pci), tostring(p.earfcn) }, "|")
+  end
+
+  local ident = {}                                         -- per slot: { key, at, network_type, cell_id, tac }
+  local function read_cell_info(slot)
+    st.cell_info_reads = st.cell_info_reads + 1
     local cell = call("cellular.network", "cell_info", { bus = cfg.bus, slot = slot })
     if cc.cell_info_failed(cell) then cell_failure(cell); return nil end
     if cell_fail.n > 0 then
       log(string.format("cell_info recovered after %d failed read(s)", cell_fail.n))
       cell_fail.n, cell_fail.last = 0, nil
+    end
+    return cell
+  end
+
+  function self.collect_sample()
+    local modem = call("cellular.modem", "status")
+    local slot = cc.active_slot(modem, cfg.bus)
+    if slot == nil then return nil end
+    local rows, cell = gl_rows(slot), nil
+    if rows == nil then
+      cell = read_cell_info(slot)                          -- GL's sampler has nothing fresh yet
+      if cell == nil then return nil end
+    else
+      st.rf_from_gl = st.rf_from_gl + 1
+      local key, id, now = pcc_key(rows), ident[slot], mono()
+      local signal = {}
+      for i, row in ipairs(rows) do signal[i] = cc.with_levels(row) end
+      if tonumber(rows[1].network_type) == 0 then
+        -- no service: GL's own cell_info says exactly this (network_type 0, no id, no TAC)
+        cell = { network_type = 0, cell_id = "", tac = "", signal = signal }
+        ident[slot] = nil
+      elseif id and id.key == key and now - id.at < cfg.identity_every then
+        cell = { network_type = id.network_type, cell_id = id.cell_id, tac = id.tac, signal = signal }
+      else
+        cell = read_cell_info(slot)
+        if cell == nil then return nil end
+        ident[slot] = { key = key, at = now, network_type = cell.network_type, cell_id = cell.cell_id, tac = cell.tac }
+      end
     end
     return cc.build_sample(modem, cell, carrier_info(slot), now_ms(), cfg.bus, nil, cjson.empty_array)
   end

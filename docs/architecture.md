@@ -218,10 +218,9 @@ Revert  频段：插件内用 glc 写回快照；锁小区：守护进程的 res
 - 页面按路由器的 deadline 倒数，加载时用 `change_status` 恢复；到期后询问路由器，不自己假设已经回滚（已实现）。
 - 没有做：`mudimodem.change` 推送。另一个浏览器里的 Keep / Revert 要等到期或刷新才会反映出来。
 
-**采样源**（🔴 上机确认之后再切换）：
-- 优先读 GL 的 `cellular.collect get_signals {time:10, slot}`。GL 已经在每 10 秒执行 QENG+QCAINFO（🟡 `libcmcollect.so`），我们没必要再执行一遍。
-- 只在 PCI / EARFCN / 频段变化时，或每 60 秒，调用一次 `cell_info` 补 cell_id / TAC。
-- 两种方式都读不到时，退回现在的做法。
+**采样源**（已实现，行为在模拟里用 GL 的真程序确认过）：
+- 每个周期读 GL 的 `cellular.collect get_signals`。GL 自己每 10 秒对两张卡各跑一遍 QENG+QCAINFO，我们不再重复。
+- `get_signals` 的行就是 `cell_info` 的行去掉等级，没有小区号和 TAC：等级按 GL 的阈值补上（`cellular_compat.with_levels`），小区号和 TAC 只在主载波（制式/频段/PCI/频点）变化、每 60 秒，或 GL 还没有新数据时读一次 `cell_info`；无服务时 GL 的行本身就说明了一切，不读。
 
 ---
 
@@ -254,6 +253,7 @@ Revert  频段：插件内用 glc 写回快照；锁小区：守护进程的 res
 | 安装器 | 在假根目录（`MUDIMODEM_ROOT`）里跑完整的 install / update / uninstall | ✅ `test/installer.test.sh` |
 | **GL 的 ubus 服务** | `test/emu/gl-bus.sh start <dir> <场景.json>`：在 qemu 里跑镜像的 `ubusd -s <sock>`，加上 `test/emu/fake-gl.lua`（eco 写的假 `cellular.*` / `modem.CPU.AT` / `gl-session`，按契约文档的结构返回，支持失败、卡住、换小区的序列），把每次调用和推送记到 jsonl；被测代码通过真正的 ubus 协议调用 | ✅ 采集器的两套实现都在上面跑端到端测试（`test/collectd-emu.test.py`）。顺带用它确认了一个线上事实：推送到浏览器的帧没有 null 键，空数组变成 `{}`（GL 的 gl-session 就是这么转发的） |
 | **页面渲染** | `tools/preview.js`：无头 Chromium + 镜像里 GL 的主题 CSS + Vue 2.6.12 运行时 + 假的 `/ws`、`/rpc` 数据，按 GL SPA 的方式 eval 我们的 chunk；`--matrix` 覆盖所有标签页 × 桌面/手机 × 亮/暗，页面报错或出现横向滚动即失败 | ✅ 接入 test-local；已经抓出并修掉控制台在手机上溢出、存储被禁用时报错这两个问题 |
+| **GL 自己的蜂窝程序** | `test/emu/gl-real.sh <目录> <命令>`：在私有的挂载 + 进程命名空间里，用 overlayfs（镜像在下、可写层在上）+ chroot + binfmt 运行镜像的 `ubusd` 和 `cellular_manager`；`/proc/gl-hw-info` 按设备树的 gl-hw 节点提供；`/dev/smd9` 接 `test/emu/fake-modem.py`（伪终端后面的假 RG650V，回真机抓过的回复，记下收到的每条 AT）；GL 的 syslog 收到 `syslog.txt`。GL 自己拉起 `modem_AT`，整条链路都是 GL 的代码 | ✅ 用它测出了 `get_signals` 的真实结构和频率、GL 的信号等级阈值；`test/gl-real.test.py` 让采集器对着 GL 的真程序跑。QMI（拨号、流量统计）模拟不了 |
 | nginx + oui 插件 | 镜像的 nginx 在 qemu 下用临时配置运行（2026-10-28 已用来检查 alias） | 可用；如果需要端到端测 `/rpc`，再在它上面搭 |
 
 真机只用来确认 🔴 项：射频状态、模组的真实回复、实际耗时。这些项集中列在 `docs/cellular-api-4.10.md` §6，攒在一起统一确认。

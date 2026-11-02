@@ -10,7 +10,10 @@
 --   cell_info: [payload, ...]        cycled one per call (a handover is the next payload);
 --                                    {"fail": true} answers with UBUS_STATUS_UNKNOWN_ERROR,
 --                                    {"hang": s} answers only after s seconds (a wedged modem)
---   collect_signals: {...}           cellular.collect get_signals reply
+--   collect_signals: {...}           cellular.collect get_signals reply, verbatim
+--   gl_signals: [[row, ...], ...]    get_signals as GL builds it: {signals:[{slot (the one asked),
+--                                    timestamp (now - gl_signals_age s), signal: rows}]}, the row
+--                                    lists cycled one per call (a handover is the next list)
 --   has_ws: true|false               gl-session has_websocket
 --   glc: {"set_band_config": {"result": {}}, "get_cell_tower": {"result": {...}}, ...}
 --                                    gl-session call {module, func, params} reply by func
@@ -34,7 +37,7 @@ local function append(name, obj)
 end
 
 local conn = assert(ubus.connect(sock))
-local cell_i = 0
+local cell_i, sig_i = 0, 0
 
 local function fixed(obj, method, key)
   return { function(req, msg)
@@ -64,9 +67,15 @@ conn:add("cellular.network", {
 })
 conn:add("cellular.collect", { get_signals = { function(req, msg)
   append("calls.jsonl", { object = "cellular.collect", method = "get_signals", args = msg or {} })
+  if S.gl_signals then
+    sig_i = sig_i % #S.gl_signals + 1
+    conn:reply(req, { signals = { { slot = msg and msg.slot or 1, timestamp = os.time() - (S.gl_signals_age or 0),
+                                    signal = S.gl_signals[sig_i] } } })
+    return
+  end
   if S.collect_signals == nil then return ubus.STATUS_NOT_FOUND end
   conn:reply(req, S.collect_signals)
-end, { time = ubus.INT32, slot = ubus.INT32 } } })
+end, { bus = ubus.STRING, time = ubus.INT32, slot = ubus.INT32 } } })
 if not S.no_at then
   conn:add("modem.CPU.AT", { get_result_AT = { function(req, msg)
     append("calls.jsonl", { object = "modem.CPU.AT", method = "get_result_AT", args = msg or {} })

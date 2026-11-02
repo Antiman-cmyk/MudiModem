@@ -64,6 +64,10 @@ R4 features built on it, plus the fixes they surfaced.
   spent your time on, with how they performed — "was it like this last week, and where?".
 - **Modem crashes are logged.** When GL saves a modem crash dump (the modem restarted on its own),
   Tracking records a "Modem crash" event at that time.
+- **Half the modem polling for live RF:** GL already samples both SIMs' signal every 10 s; the
+  collector now reads GL's samples instead of asking the modem again, and asks only for the cell
+  id when the serving cell changes (or once a minute). Same samples, same signal levels — verified
+  by running GL's own cellular stack under emulation.
 - **Chinese:** the whole Modem page is available in Simplified Chinese and follows GL's language
   setting (switching GL's language switches the page). Technical terms (RSRP, n71, AT commands)
   stay as they are; the community AT library stays English.

@@ -70,3 +70,17 @@ NETWORK_INFO_410 = {"networks": [
      "mcc": "460", "mnc": "01", "apn": "3gnet"},
     {"bus": "cpu", "slot": 2, "carrier": "", "iccid": ""},
 ]}
+
+
+
+# ---- captured from GL's OWN cellular_manager under emulation (test/emu/gl-real.sh, the fake RG650V
+# replying the live T-Mobile QENG / an EN-DC pair / no service): cell_info exactly as GL built it.
+# The matching `cellular.collect get_signals` rows are these rows without the *_level / strength keys.
+GL_CELL_SA = {"bus": "cpu", "slot": 1, "network_type": 5, "tac": "870100", "cell_id": "187461035", "signal": [{"ca": 0, "network_type": 5, "band": 71, "bandwidth": 15.0, "pci": 721, "earfcn": 127490, "rsrp": -99, "rsrq": -13, "rssi": -32768, "sinr": 4, "rscp": -32768, "ecio": -32768, "snr": -32768, "rsrp_level": 4, "rsrq_level": 3, "rssi_level": 0, "sinr_level": 2, "rscp_level": 0, "ecio_level": 0, "snr_level": 0, "strength": 3}], "ret": 0, "resp": "Success"}
+GL_CELL_NSA = {"bus": "cpu", "slot": 1, "network_type": 51, "tac": "1D2E", "cell_id": "A1B2C03", "signal": [{"ca": 0, "network_type": 4, "band": 66, "bandwidth": 20.0, "pci": 136, "earfcn": 67036, "rsrp": -95, "rsrq": -8, "rssi": -65, "sinr": 12, "rscp": -32768, "ecio": -32768, "snr": -32768, "rsrp_level": 4, "rsrq_level": 3, "rssi_level": 4, "sinr_level": 4, "rscp_level": 0, "ecio_level": 0, "snr_level": 0, "strength": 4}, {"ca": 1, "network_type": 51, "band": 78, "bandwidth": 100.0, "pci": 516, "earfcn": 627264, "rsrp": -90, "rsrq": -11, "rssi": -32768, "sinr": -32768, "rscp": -32768, "ecio": -32768, "snr": -32768, "rsrp_level": 4, "rsrq_level": 4, "rssi_level": 0, "sinr_level": 0, "rscp_level": 0, "ecio_level": 0, "snr_level": 0, "strength": 4}], "ret": 0, "resp": "Success"}
+GL_CELL_NO_SERVICE = {"bus": "cpu", "slot": 1, "network_type": 0, "tac": "", "cell_id": "", "signal": [{"ca": 0, "network_type": 0, "band": 0, "bandwidth": 0.0, "pci": 0, "earfcn": 0, "rsrp": -32768, "rsrq": -32768, "rssi": -32768, "sinr": -32768, "rscp": -32768, "ecio": -32768, "snr": -32768, "rsrp_level": 0, "rsrq_level": 0, "rssi_level": 0, "sinr_level": 0, "rscp_level": 0, "ecio_level": 0, "snr_level": 0, "strength": 0}], "ret": 0, "resp": "Success"}
+
+
+def gl_signal_rows(cell):
+    """get_signals rows for a captured cell_info: the same rows, no levels (GL's libcmcollect)."""
+    return [{k: v for k, v in r.items() if not k.endswith("_level") and k != "strength"} for r in cell["signal"]]

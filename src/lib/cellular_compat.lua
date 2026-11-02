@@ -114,6 +114,30 @@ function M.normalize_signal(row, network_type, index)
   }
 end
 
+-- GL's signal levels, as `cellular.network cell_info` computes them (libcm_network.so). Measured by
+-- running GL's own cellular_manager under emulation (test/emu/gl-real.sh) across every value:
+-- RSRP and SINR use the same thresholds for LTE and NR, RSRQ does not, and each row goes by its
+-- OWN network_type (an EN-DC LTE anchor row uses LTE's). An absent / sentinel value is level 0.
+-- `cellular.collect get_signals` rows are cell_info rows without the levels; this adds them.
+local LEVEL_AT = { rsrp = { -100, -105, -110 }, sinr = { 12, 6, 0 },
+                   rsrq_nr = { -12, -16, -20 }, rsrq_lte = { -6, -10, -14 } }
+local function level(v, at)
+  v = num(v)
+  if v == nil then return 0 end
+  if v >= at[1] then return 4 elseif v >= at[2] then return 3 elseif v >= at[3] then return 2 end
+  return 1
+end
+function M.with_levels(row)
+  local o = {}
+  for k, v in pairs(type(row) == "table" and row or {}) do o[k] = v end
+  local nt = num(o.network_type)
+  local nr = nt == 5 or nt == 51
+  o.rsrp_level = level(o.rsrp, LEVEL_AT.rsrp)
+  o.sinr_level = level(o.sinr, LEVEL_AT.sinr)
+  o.rsrq_level = level(o.rsrq, nr and LEVEL_AT.rsrq_nr or LEVEL_AT.rsrq_lte)
+  return o
+end
+
 -- A FAILED read (nil / an error reply without network_type) vs a reply that says "no service".
 function M.cell_info_failed(payload)
   return type(payload) ~= "table" or isnull(payload.network_type) or payload.network_type == ""

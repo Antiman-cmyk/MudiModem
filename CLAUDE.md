@@ -16,7 +16,9 @@ Rule of scope (owner): ship only what stock 4.10 lacks or does incompletely.
 - **Emulation first.** Run code under the router's own userland on the dev box (`tools/emu.sh`:
   the image's `lua`, `eco`, busybox `ash` + applets, `jsonfilter`, `ubusd`/`ubus`, `nginx` via
   qemu). Fake GL services are eco scripts registering `cellular.*` etc. on the image's `ubusd`
-  (`docs/architecture.md` §6.1); installs run in a fake root (`MUDIMODEM_ROOT`).
+  (`docs/architecture.md` §6.1); installs run in a fake root (`MUDIMODEM_ROOT`). To learn what
+  GL itself does, run GL: `test/emu/gl-real.sh` starts the image's own `cellular_manager` (and the
+  `modem_AT` it spawns) against a fake RG650V (`test/emu/fake-modem.py`, logs every AT command).
   `tools/test-local.sh` runs every suite this way, not on a router.
 - **A real box is the last resort**, only for what is genuinely runtime (RF state, modem replies,
   timing). Mark such items 🔴, batch them, and never make a change wait on one. Never run write
@@ -67,7 +69,8 @@ src/sbin/ src/lib/      daemons + helpers: mudimodemd (eco; src/lib/mudimodemd/:
 src/ws/mudimodem.lua    /ws seed module; src/nginx/ the gl-conf.d alias
 tools/                  build, deploy (ssh), verify (live box), firmware fetch/extract, AT/lib/speedtest tools
 test/                   every suite; tools/test-local.sh runs them all (host + router userland via qemu);
-                        test/emu/gl-bus.sh = the image's ubusd + a fake GL stack, for daemon tests
+                        test/emu/gl-bus.sh = the image's ubusd + a fake GL stack, for daemon tests;
+                        test/emu/gl-real.sh = GL's OWN cellular stack + a fake modem (root, namespaces)
 reference/4.10/         GL files copied from the image + RE notes/tools
 docs/                   architecture.md · cellular-api-4.10.md · knowledge.md · audit · design/ (history)
 ```
