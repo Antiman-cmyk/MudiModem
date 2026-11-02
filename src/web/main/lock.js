@@ -2,6 +2,7 @@
 // no-scan neighbour list).
 import { rpc, hasRpc, rpcJob } from "../kit/rpc.js";
 import { t as T, tp as TP } from "../kit/i18n.js";
+import { copyText } from "../kit/clipboard.js";
 export default {
   data() {
     return {
@@ -17,6 +18,8 @@ export default {
       // scan.towers now to confirm an SCS reading when one is available.
       scan: { towers: [], running: false, error: "", ts: 0, slot: null },
       movedRefetched: "",   // pci/arfcn of the last handover that triggered a re-read (once per cell)
+      copied: null,         // {k, ok}: which identifier was just copied (feedback next to it)
+      copiedTimer: null,
       lockProbeTimer: null, // verifyLockAfterDrop's next probe
     };
   },
@@ -265,6 +268,19 @@ export default {
         .then(function () { self.scan.running = false; self.fetchLock(); });
     },
 
+    // One cell, whatever list it is in: RAT + PCI + channel.
+    cellKey(rat, pci, freq) { return String(rat || "") + "|" + pci + "|" + freq; },
+
+    // Copy one identifier (Cell ID / PCI / ARFCN) and say so next to it for a moment.
+    copyValue(k, v) {
+      var self = this;
+      return copyText(v).then(function (ok) {
+        self.copied = { k: k, ok: ok };
+        if (self.copiedTimer) clearTimeout(self.copiedTimer);
+        self.copiedTimer = setTimeout(function () { self.copied = null; self.copiedTimer = null; }, 1800);
+      });
+    },
+
     // Lock target from a scan row: GL's own values verbatim, whole row as extra.
     scanTarget(row) {
       var isNR = /5G/.test(row.network_type || "");
@@ -283,10 +299,10 @@ export default {
       var l5 = (d.lock && d.lock.l5g) || {}, l4 = (d.lock && d.lock.l4g) || {};
       var locked = !!(l5.locked || l4.locked || (d.gl && d.gl.locked));
       var rows = [];
-      var push = function (k, v) { if (v !== undefined && v !== null && v !== "") rows.push([k, v]); };
-      push("RAT", s.rat); push("PCI", s.pci); push("ARFCN", s.arfcn);
+      var push = function (k, v, copy) { if (v !== undefined && v !== null && v !== "") rows.push([k, v, copy]); };
+      push("RAT", s.rat); push("PCI", s.pci, true); push("ARFCN", s.arfcn, true);
       push(T("Band"), s.band != null ? ((/NR5G/.test(s.rat || "") ? "n" : "B") + s.band) : null);
-      push(T("Cell ID"), s.cell_id);
+      push(T("Cell ID"), s.cell_id, true);
       var moved = this.servingMoved;
       // Live readings belong to the cell the modem is on: after a handover, not to this one.
       if (!moved) {
@@ -364,7 +380,11 @@ export default {
           h("span", { staticClass: "mm-hint" }, locked ? "locked" : "serving now")
         ]),
         h("div", { staticClass: "mm-dl" }, rows.map(function (r, i) {
-          return h("div", { key: i }, [h("span", { staticClass: "k" }, r[0]), h("b", String(r[1]))]);
+          var c = self.copied && self.copied.k === r[0] ? self.copied : null;
+          return h("div", { key: i }, [h("span", { staticClass: "k" }, r[0]), h("b", String(r[1])),
+            r[2] ? h("button", { staticClass: "mm-copy", attrs: { type: "button", title: "Copy" },
+              on: { click: function () { self.copyValue(r[0], String(r[1])); } } },
+              c ? (c.ok ? "copied" : "copy failed") : "⧉") : null]);
         })),
         action
       ]);
@@ -421,7 +441,10 @@ export default {
         });
         var rows = sorted.map(function (tw, i) {
           var q = self.qFromLevel(self.glLevel("rsrp", tw.rsrp));   // GL's scale, as the strip
-          var confirming = self.lockConfirm && self.lockConfirm.scanIdx === i;
+          // armed by the CELL, not the row number: the list re-sorts (a restored scan, a carrier
+          // name arriving) and a row index would then point at another cell
+          var key = self.cellKey(tw.network_type, tw.pci, tw.freq);
+          var confirming = self.lockConfirm && self.lockConfirm.scanKey === key;
           var target = self.scanTarget(tw);
           return h("div", { key: i, staticClass: "mm-scan-row" }, [
             h("span", { staticClass: "mm-scan-badge" }, tw.network_type || "?"),
@@ -440,7 +463,7 @@ export default {
               : h("button", { staticClass: "mm-btn",
                   attrs: { disabled: !!self.pending || self.lockBusy || locked ||
                            (/5G/.test(tw.network_type || "") && tw.scs === undefined) },
-                  on: { click: function () { self.lockConfirm = { scanIdx: i }; } } }, "Lock")
+                  on: { click: function () { self.lockConfirm = { scanKey: key }; } } }, "Lock")
           ]);
         });
         body = h("div", rows);

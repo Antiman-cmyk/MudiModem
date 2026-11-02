@@ -814,11 +814,11 @@ test('Clear empties the transcript; the risk switch is remembered for this sessi
   } finally { delete global.window; }
 });
 
-test('Copy without the clipboard API (plain-http admin) still answers', () => {
+test('Copy without the clipboard API (plain-http admin) still answers', async () => {
   const c = loadChunk();
   const vm = makeVm(c);
   vm.lines.push({ t: '00:00', kind: 'cmd', text: 'ATI' });
-  vm.copyTranscript();            // no navigator.clipboard, no document in node
+  await vm.copyTranscript();      // no navigator.clipboard, no document in node
   assert.match(vm.copyNote, /Copy failed/);
   clearTimeout(vm._copyTimer);
   vm.lines.splice(0);

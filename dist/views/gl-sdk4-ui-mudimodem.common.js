@@ -63,6 +63,16 @@ var __mm = (() => {
 
   // src/web/locales/zh-cn.js
   var zh_cn_default = {
+    "copied": "已复制",
+    "newest first · click one to see it on the chart": "最新的在前 · 点一条在图表上查看",
+    "copy failed": "复制失败",
+    "Tap the chart for the readings at that moment.": "点按图表，查看那一时刻的读数。",
+    "Show this moment on the chart": "在图表上显示这一时刻",
+    "Show or hide these events": "显示或隐藏这类事件",
+    "Every source is hidden - switch one back on above.": "所有来源都已隐藏，请在上方重新打开一个。",
+    "Download these results as CSV": "把这些结果下载为 CSV",
+    "Download the samples in this range as CSV": "把这个时间范围内的采样下载为 CSV",
+    "Download the event log as CSV": "把事件日志下载为 CSV",
     "selected": "已选择",
     "{s} module supports · {p} carrier allows · {a} modem advertises": "模组支持 {s} · 运营商允许 {p} · 模组实际广播 {a}",
     "{b} selected (click to remove)": "{b} 已选择（点击取消）",
@@ -465,7 +475,6 @@ var __mm = (() => {
     "mode {m}": "模式 {m}",
     "modem": "Modem",
     "ms latency": "ms 延迟",
-    "newest first": "最新的在前",
     "no answer": "没有应答",
     "no reply": "无应答",
     "no scan, the link stays up": "无需扫描，连接不中断",
@@ -1352,6 +1361,8 @@ var __mm = (() => {
         // transient feedback from "Apply defaults"
         showBandHelp: false,
         // the "?" next to the Bands title: what each band layer means
+        bandTip: null,
+        // {group, b}: the chip last tapped, explained under its group (touch has no hover)
         resetTimer: null
         // handle clearing resetNote
       };
@@ -1688,7 +1699,7 @@ var __mm = (() => {
         });
         if (supported.length === 0) return null;
         var pre = this.prefixOf(group);
-        var servingHere = {};
+        var servingHere = {}, tips = {};
         self.servingBands.forEach(function(sb) {
           if (sb.group === group) servingHere[sb.band] = sb.role;
         });
@@ -1714,15 +1725,20 @@ var __mm = (() => {
           }
           var clickable = interactive && cls !== "blocked" && !self.pending;
           if (serving) tip += " — " + t("in use now ({role})", { role: servingHere[b] });
+          tips[b] = tip;
           return h("span", {
             key: b,
             staticClass: "mm-band " + cls + (serving ? " serving" : "") + (clickable ? " clickable" : ""),
             attrs: { title: tip },
-            on: clickable ? { click: function() {
-              self.toggleBand(group, b);
-            } } : {}
+            // every chip answers a tap with what it is (a title never shows on touch); a selectable
+            // one also toggles, and the line then describes its new state
+            on: { click: function() {
+              self.bandTip = { group, b };
+              if (clickable) self.toggleBand(group, b);
+            } }
           }, [h("b", pre + b), h("s", f ? String(f) : " ")]);
         });
+        var tipLine = this.bandTip && this.bandTip.group === group && tips[this.bandTip.b] ? h("div", { staticClass: "mm-hint mm-bandtip" }, tips[this.bandTip.b]) : null;
         var actions = null;
         if (interactive && !this.pending) {
           var mkAct = function(label, fn) {
@@ -1767,6 +1783,7 @@ var __mm = (() => {
           interactive ? h("div", { staticClass: "mm-hint", staticStyle: { margin: "-3px 0 6px" } }, counts) : null,
           gate,
           h("div", { staticClass: "mm-wrap" }, chips),
+          tipLine,
           h("div", { staticClass: "mm-axis2" }, [
             h("span", "low band, reaches far"),
             h("span", "high band, fast + short range")
@@ -1969,6 +1986,36 @@ var __mm = (() => {
     }
   };
 
+  // src/web/kit/clipboard.js
+  function copyText(txt) {
+    var legacy = function() {
+      if (typeof document === "undefined" || !document.body) return false;
+      var ta = document.createElement("textarea");
+      ta.value = String(txt);
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try {
+        ok = document.execCommand("copy");
+      } catch (e) {
+        ok = false;
+      }
+      document.body.removeChild(ta);
+      return ok;
+    };
+    if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(String(txt)).then(function() {
+        return true;
+      }, function() {
+        return legacy();
+      });
+    }
+    return Promise.resolve(legacy());
+  }
+
   // src/web/main/lock.js
   var lock_default = {
     data() {
@@ -1992,6 +2039,9 @@ var __mm = (() => {
         scan: { towers: [], running: false, error: "", ts: 0, slot: null },
         movedRefetched: "",
         // pci/arfcn of the last handover that triggered a re-read (once per cell)
+        copied: null,
+        // {k, ok}: which identifier was just copied (feedback next to it)
+        copiedTimer: null,
         lockProbeTimer: null
         // verifyLockAfterDrop's next probe
       };
@@ -2246,6 +2296,22 @@ var __mm = (() => {
           self.fetchLock();
         });
       },
+      // One cell, whatever list it is in: RAT + PCI + channel.
+      cellKey(rat, pci, freq) {
+        return String(rat || "") + "|" + pci + "|" + freq;
+      },
+      // Copy one identifier (Cell ID / PCI / ARFCN) and say so next to it for a moment.
+      copyValue(k, v) {
+        var self = this;
+        return copyText(v).then(function(ok) {
+          self.copied = { k, ok };
+          if (self.copiedTimer) clearTimeout(self.copiedTimer);
+          self.copiedTimer = setTimeout(function() {
+            self.copied = null;
+            self.copiedTimer = null;
+          }, 1800);
+        });
+      },
       // Lock target from a scan row: GL's own values verbatim, whole row as extra.
       scanTarget(row) {
         var isNR = /5G/.test(row.network_type || "");
@@ -2271,14 +2337,14 @@ var __mm = (() => {
         var l5 = d.lock && d.lock.l5g || {}, l4 = d.lock && d.lock.l4g || {};
         var locked = !!(l5.locked || l4.locked || d.gl && d.gl.locked);
         var rows = [];
-        var push = function(k, v) {
-          if (v !== void 0 && v !== null && v !== "") rows.push([k, v]);
+        var push = function(k, v, copy) {
+          if (v !== void 0 && v !== null && v !== "") rows.push([k, v, copy]);
         };
         push("RAT", s.rat);
-        push("PCI", s.pci);
-        push("ARFCN", s.arfcn);
+        push("PCI", s.pci, true);
+        push("ARFCN", s.arfcn, true);
         push(t("Band"), s.band != null ? (/NR5G/.test(s.rat || "") ? "n" : "B") + s.band : null);
-        push(t("Cell ID"), s.cell_id);
+        push(t("Cell ID"), s.cell_id, true);
         var moved = this.servingMoved;
         if (!moved) {
           push("RSRP", this.serving.rsrp != null ? this.serving.rsrp + " dBm" : null);
@@ -2369,7 +2435,22 @@ var __mm = (() => {
             h("span", { staticClass: "mm-hint" }, locked ? "locked" : "serving now")
           ]),
           h("div", { staticClass: "mm-dl" }, rows.map(function(r, i) {
-            return h("div", { key: i }, [h("span", { staticClass: "k" }, r[0]), h("b", String(r[1]))]);
+            var c = self.copied && self.copied.k === r[0] ? self.copied : null;
+            return h("div", { key: i }, [
+              h("span", { staticClass: "k" }, r[0]),
+              h("b", String(r[1])),
+              r[2] ? h(
+                "button",
+                {
+                  staticClass: "mm-copy",
+                  attrs: { type: "button", title: "Copy" },
+                  on: { click: function() {
+                    self.copyValue(r[0], String(r[1]));
+                  } }
+                },
+                c ? c.ok ? "copied" : "copy failed" : "⧉"
+              ) : null
+            ]);
           })),
           action
         ]);
@@ -2418,7 +2499,8 @@ var __mm = (() => {
           });
           var rows = sorted.map(function(tw, i) {
             var q = self.qFromLevel(self.glLevel("rsrp", tw.rsrp));
-            var confirming = self.lockConfirm && self.lockConfirm.scanIdx === i;
+            var key = self.cellKey(tw.network_type, tw.pci, tw.freq);
+            var confirming = self.lockConfirm && self.lockConfirm.scanKey === key;
             var target = self.scanTarget(tw);
             return h("div", { key: i, staticClass: "mm-scan-row" }, [
               h("span", { staticClass: "mm-scan-badge" }, tw.network_type || "?"),
@@ -2448,7 +2530,7 @@ var __mm = (() => {
                 staticClass: "mm-btn",
                 attrs: { disabled: !!self.pending || self.lockBusy || locked || /5G/.test(tw.network_type || "") && tw.scs === void 0 },
                 on: { click: function() {
-                  self.lockConfirm = { scanIdx: i };
+                  self.lockConfirm = { scanKey: key };
                 } }
               }, "Lock")
             ]);
@@ -2624,7 +2706,7 @@ var __mm = (() => {
         // the last read: cells/other from parseNeighbours, the slot it was read for, its time
         nb: { cells: [], running: false, error: "", ts: 0, slot: null, read: false },
         nbConfirm: null
-        // index of the row whose Lock awaits confirm
+        // cellKey of the row whose Lock awaits confirm (not its index: rows re-sort)
       };
     },
     methods: {
@@ -2689,7 +2771,8 @@ var __mm = (() => {
           });
           var rows = sorted.map(function(c, i) {
             var q = self.qFromLevel(self.glLevel("rsrp", c.rsrp));
-            var confirming = self.nbConfirm === i;
+            var key = self.cellKey("LTE", c.pci, c.earfcn);
+            var confirming = self.nbConfirm === key;
             var target = self.nbTarget(c);
             return h("div", { key: "n" + i, staticClass: "mm-scan-row" }, [
               h("span", { staticClass: "mm-scan-badge" }, "LTE"),
@@ -2715,7 +2798,7 @@ var __mm = (() => {
                 staticClass: "mm-btn",
                 attrs: { disabled: !!self.pending || self.lockBusy || locked || c.pci === void 0 },
                 on: { click: function() {
-                  self.nbConfirm = i;
+                  self.nbConfirm = key;
                 } }
               }, "Lock")
             ]);
@@ -3386,7 +3469,7 @@ var __mm = (() => {
       injectStyle() {
         if (typeof document === "undefined") return;
         if (document.getElementById(this.styleId)) return;
-        var css = '.mm{color:var(--text-regular);font-variant-numeric:tabular-nums}.mm-strip{display:flex;align-items:stretch;background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);margin-bottom:11px;overflow:hidden}.mm-trace{flex:1;min-width:0;padding:9px 0 6px 13px}.mm-eyebrow{font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge)}.mm-plot{height:40px;margin-top:3px}.mm-plot svg{display:block;width:100%;height:100%;overflow:visible}.mm-axis{display:flex;justify-content:space-between;font-size:9.5px;color:var(--text-hint);margin-top:2px}.mm-read{flex:none;min-width:120px;padding:10px 14px 9px 15px;text-align:right;border-left:1px solid var(--divider);display:flex;flex-direction:column;justify-content:center}.mm-rsrp{font-size:29px;font-weight:600;line-height:1;letter-spacing:-.025em}.mm-rsrp .u{font-size:11px;font-weight:500;color:var(--text-hint);margin-left:2px}.mm-facts{display:flex;flex-wrap:wrap;gap:5px 13px;justify-content:flex-end;margin-top:7px}.mm-facts .k{display:block;font-size:9px;letter-spacing:.04em;text-transform:uppercase;color:var(--text-badge)}.mm-facts b{font-size:12.5px;font-weight:600}.mm-lockbadges{display:flex;gap:6px;align-items:center}.mm-lockbadge{background:var(--background-badge);border:1px solid transparent;border-radius:9px;padding:1px 8px;font:inherit;font-size:10px;font-weight:600;letter-spacing:.02em;color:var(--text-hint);cursor:pointer;white-space:nowrap}.mm-lockbadge.mode{color:var(--warning);border-color:var(--warning-disabled,var(--warning));background:var(--warning-disabled,transparent)}.mm-lockbadge.lock{color:var(--error);border-color:var(--error);background:transparent}.mm-tabs{display:flex;gap:22px;border-bottom:1px solid var(--divider);margin-bottom:11px;padding:0 4px;overflow-x:auto;scrollbar-width:none}.mm-tabs::-webkit-scrollbar{display:none}.mm-tab{flex:none;white-space:nowrap;background:none;border:0;padding:9px 0 8px;font:inherit;font-size:13px;cursor:pointer;color:var(--text-weak);border-bottom:2px solid transparent;margin-bottom:-1px}.mm-tab.on{color:var(--primary);border-bottom-color:var(--primary);font-weight:600}.mm-tab:disabled{color:var(--text-hint);cursor:default}.mm-card{background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);padding:13px 14px}.mm-sect{font-size:13px;font-weight:600;color:var(--text-title)}.mm-hint{font-size:11.5px;color:var(--text-badge)}.mm-dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px 16px;margin-top:11px}.mm-dl .k{display:block;font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge)}.mm-dl b{font-size:13px;font-weight:600;color:var(--text-title)}.mm-soon{padding:26px 14px;text-align:center;color:var(--text-hint);font-size:12px;line-height:1.6}.mm-empty{padding:30px 14px;text-align:center;color:var(--text-hint);font-size:12.5px}.mm-grp{margin-bottom:15px}.mm-grp:last-child{margin-bottom:2px}.mm-grp-h{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px}.mm-grp-t{font-size:12px;font-weight:600;color:var(--text-title)}.mm-acts{display:flex;gap:2px}.mm-act{background:none;border:0;font:inherit;font-size:10.5px;cursor:pointer;color:var(--primary);padding:2px 6px;border-radius:3px}.mm-act:hover{background:var(--primary-background)}.mm-grp-off .mm-wrap{opacity:.5}.mm-gate{font-size:10.5px;color:var(--warning-hover);background:var(--warning-background);border:1px solid var(--warning-disabled);border-radius:3px;padding:4px 8px;margin-bottom:6px}.mm-seg{display:inline-flex;border:1px solid var(--border);border-radius:4px;overflow:hidden}.mm-seg-b{font:inherit;font-size:12px;background:transparent;border:0;padding:5px 14px;cursor:pointer;color:var(--text-weak);border-right:1px solid var(--border)}.mm-seg-b:last-child{border-right:0}.mm-seg-b.on{background:var(--primary);color:#fff;font-weight:600}.mm-seg-b:disabled{cursor:default;opacity:.6}.mm-wrap{display:flex;gap:4px;flex-wrap:wrap}.mm-band{position:relative;min-width:44px;padding:4px 6px 3px;text-align:center;border:1px solid var(--border);border-radius:4px;background:var(--background-card);transition:border-color .1s,background .1s}.mm-band b{display:block;font-size:12px;font-weight:600;line-height:1.2}.mm-band s{display:block;font-size:9px;line-height:1.2;color:var(--text-hint);text-decoration:none}.mm-band.active{background:var(--success);border-color:var(--success)}.mm-band.active b{color:#fff}.mm-band.active s{color:rgba(255,255,255,.75)}.mm-band.permitted{border-color:var(--primary)}.mm-band.permitted b{color:var(--primary)}.mm-band.sel{background:var(--success);border-color:var(--success)}.mm-band.sel b{color:#fff}.mm-band.sel s{color:rgba(255,255,255,.75)}.mm-band.unsel b{color:var(--text-regular)}.mm-band.blocked{opacity:.5}.mm-band.blocked b{color:var(--text-hint);text-decoration:line-through}.mm-band.clickable{cursor:pointer}.mm-band.clickable:hover{border-color:var(--primary)}.mm-band.serving{box-shadow:0 0 0 2px var(--success)}.mm-band.serving::after{content:"";position:absolute;top:-3px;right:-3px;width:7px;height:7px;border-radius:50%;background:var(--success);border:1.5px solid var(--background-card)}.mm-axis2{display:flex;justify-content:space-between;font-size:9.5px;color:var(--text-hint);margin-top:6px}.mm-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:10.5px;color:var(--text-badge);margin-top:12px;padding-top:10px;border-top:1px solid var(--divider)}.mm-legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}.mm-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;border-top:1px solid var(--divider);padding-top:11px;margin-top:11px}.mm-btn{font:inherit;font-size:11.5px;font-weight:600;border-radius:3px;padding:6px 13px;cursor:pointer;border:1px solid transparent}.mm-btn.primary{background:var(--primary);color:#fff;border-color:var(--primary)}.mm-btn.primary:disabled{background:var(--primary-disabled);border-color:transparent;cursor:default}.mm-btn.keep{background:var(--warning);color:#fff;border-color:var(--warning)}.mm-btn.danger{background:transparent;color:var(--error);border-color:var(--error)}.mm-revert{background:var(--warning-background);border:1px solid var(--warning);border-radius:3px;padding:9px 11px;margin:0 0 12px}.mm-revert-row{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:11.5px;color:var(--warning-hover)}.mm-revert b{font-weight:600}.mm-cd{font-variant-numeric:tabular-nums}.mm-bar{height:2px;background:var(--warning-disabled);border-radius:1px;margin-top:8px;overflow:hidden}.mm-bar i{display:block;height:100%;background:var(--warning);transition:width 1s linear}.mm-help{margin-left:6px;width:15px;height:15px;line-height:13px;border-radius:50%;border:1px solid var(--border);background:transparent;color:var(--text-weak);font-size:10px;font-weight:700;cursor:pointer;padding:0;vertical-align:1px}.mm-gloss{flex-basis:100%;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:4px 16px;font-size:11.5px;color:var(--text-weak);border-top:1px solid var(--divider);padding-top:8px;margin-top:4px}.mm-gloss b{color:var(--text-title)}.mm-scan-row{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;padding:7px 4px;border-bottom:1px solid var(--divider);font-size:12px}.mm-scan-row>span{min-width:0}.mm-scan-row>span:nth-child(2){flex:1}.mm-scan-badge{flex:none;font-size:10px;padding:1px 6px;border:1px solid var(--border);border-radius:3px;color:var(--text-badge)}@media(max-width:640px){.mm-strip{flex-direction:column}.mm-read{border-left:0;border-top:1px solid var(--divider);text-align:left;align-items:flex-start}.mm-facts{justify-content:flex-start}.mm-revert-row{flex-direction:column;align-items:flex-start}}.mm-card+.mm-card{margin-top:11px}.mm-card-h{font-size:13px;font-weight:600;color:var(--text-title);margin-bottom:6px}.mm-kv{display:flex;gap:12px;padding:4px 0;font-size:14px}.mm-k{color:var(--text-hint);min-width:64px}.mm-v{color:var(--text-title)}.mm-link{color:var(--primary);cursor:pointer;text-decoration:underline}.mm-warn{color:var(--warning)}.mm-upd{color:var(--text-hint)}.mm-note{margin-top:8px;color:var(--text-hint);font-size:13px}';
+        var css = '.mm{color:var(--text-regular);font-variant-numeric:tabular-nums}.mm-strip{display:flex;align-items:stretch;background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);margin-bottom:11px;overflow:hidden}.mm-trace{flex:1;min-width:0;padding:9px 0 6px 13px}.mm-eyebrow{font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge)}.mm-plot{height:40px;margin-top:3px}.mm-plot svg{display:block;width:100%;height:100%;overflow:visible}.mm-axis{display:flex;justify-content:space-between;font-size:9.5px;color:var(--text-hint);margin-top:2px}.mm-read{flex:none;min-width:120px;padding:10px 14px 9px 15px;text-align:right;border-left:1px solid var(--divider);display:flex;flex-direction:column;justify-content:center}.mm-rsrp{font-size:29px;font-weight:600;line-height:1;letter-spacing:-.025em}.mm-rsrp .u{font-size:11px;font-weight:500;color:var(--text-hint);margin-left:2px}.mm-facts{display:flex;flex-wrap:wrap;gap:5px 13px;justify-content:flex-end;margin-top:7px}.mm-facts .k{display:block;font-size:9px;letter-spacing:.04em;text-transform:uppercase;color:var(--text-badge)}.mm-facts b{font-size:12.5px;font-weight:600}.mm-lockbadges{display:flex;gap:6px;align-items:center}.mm-lockbadge{background:var(--background-badge);border:1px solid transparent;border-radius:9px;padding:1px 8px;font:inherit;font-size:10px;font-weight:600;letter-spacing:.02em;color:var(--text-hint);cursor:pointer;white-space:nowrap}.mm-lockbadge.mode{color:var(--warning);border-color:var(--warning-disabled,var(--warning));background:var(--warning-disabled,transparent)}.mm-lockbadge.lock{color:var(--error);border-color:var(--error);background:transparent}.mm-tabs{display:flex;gap:22px;border-bottom:1px solid var(--divider);margin-bottom:11px;padding:0 4px;overflow-x:auto;scrollbar-width:none}.mm-tabs::-webkit-scrollbar{display:none}.mm-tab{flex:none;white-space:nowrap;background:none;border:0;padding:9px 0 8px;font:inherit;font-size:13px;cursor:pointer;color:var(--text-weak);border-bottom:2px solid transparent;margin-bottom:-1px}.mm-tab.on{color:var(--primary);border-bottom-color:var(--primary);font-weight:600}.mm-tab:disabled{color:var(--text-hint);cursor:default}.mm-card{background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);padding:13px 14px}.mm-sect{font-size:13px;font-weight:600;color:var(--text-title)}.mm-hint{font-size:11.5px;color:var(--text-badge)}.mm-dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px 16px;margin-top:11px}.mm-dl .k{display:block;font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge)}.mm-dl b{font-size:13px;font-weight:600;color:var(--text-title)}.mm-soon{padding:26px 14px;text-align:center;color:var(--text-hint);font-size:12px;line-height:1.6}.mm-empty{padding:30px 14px;text-align:center;color:var(--text-hint);font-size:12.5px}.mm-grp{margin-bottom:15px}.mm-grp:last-child{margin-bottom:2px}.mm-grp-h{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px}.mm-grp-t{font-size:12px;font-weight:600;color:var(--text-title)}.mm-acts{display:flex;gap:2px}.mm-act{background:none;border:0;font:inherit;font-size:10.5px;cursor:pointer;color:var(--primary);padding:2px 6px;border-radius:3px}.mm-act:hover{background:var(--primary-background)}.mm-grp-off .mm-wrap{opacity:.5}.mm-gate{font-size:10.5px;color:var(--warning-hover);background:var(--warning-background);border:1px solid var(--warning-disabled);border-radius:3px;padding:4px 8px;margin-bottom:6px}.mm-seg{display:inline-flex;border:1px solid var(--border);border-radius:4px;overflow:hidden}.mm-seg-b{font:inherit;font-size:12px;background:transparent;border:0;padding:5px 14px;cursor:pointer;color:var(--text-weak);border-right:1px solid var(--border)}.mm-seg-b:last-child{border-right:0}.mm-seg-b.on{background:var(--primary);color:#fff;font-weight:600}.mm-seg-b:disabled{cursor:default;opacity:.6}.mm-wrap{display:flex;gap:4px;flex-wrap:wrap}.mm-band{position:relative;min-width:44px;padding:4px 6px 3px;text-align:center;border:1px solid var(--border);border-radius:4px;background:var(--background-card);transition:border-color .1s,background .1s}.mm-band b{display:block;font-size:12px;font-weight:600;line-height:1.2}.mm-band s{display:block;font-size:9px;line-height:1.2;color:var(--text-hint);text-decoration:none}.mm-band.active{background:var(--success);border-color:var(--success)}.mm-band.active b{color:#fff}.mm-band.active s{color:rgba(255,255,255,.75)}.mm-band.permitted{border-color:var(--primary)}.mm-band.permitted b{color:var(--primary)}.mm-band.sel{background:var(--success);border-color:var(--success)}.mm-band.sel b{color:#fff}.mm-band.sel s{color:rgba(255,255,255,.75)}.mm-band.unsel b{color:var(--text-regular)}.mm-band.blocked{opacity:.5}.mm-band.blocked b{color:var(--text-hint);text-decoration:line-through}.mm-band.clickable{cursor:pointer}.mm-band.clickable:hover{border-color:var(--primary)}.mm-band.serving{box-shadow:0 0 0 2px var(--success)}.mm-band.serving::after{content:"";position:absolute;top:-3px;right:-3px;width:7px;height:7px;border-radius:50%;background:var(--success);border:1.5px solid var(--background-card)}.mm-axis2{display:flex;justify-content:space-between;font-size:9.5px;color:var(--text-hint);margin-top:6px}.mm-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:10.5px;color:var(--text-badge);margin-top:12px;padding-top:10px;border-top:1px solid var(--divider)}.mm-legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}.mm-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;border-top:1px solid var(--divider);padding-top:11px;margin-top:11px}.mm-btn{font:inherit;font-size:11.5px;font-weight:600;border-radius:3px;padding:6px 13px;cursor:pointer;border:1px solid transparent}.mm-btn.primary{background:var(--primary);color:#fff;border-color:var(--primary)}.mm-btn.primary:disabled{background:var(--primary-disabled);border-color:transparent;cursor:default}.mm-btn.keep{background:var(--warning);color:#fff;border-color:var(--warning)}.mm-btn.danger{background:transparent;color:var(--error);border-color:var(--error)}.mm-revert{background:var(--warning-background);border:1px solid var(--warning);border-radius:3px;padding:9px 11px;margin:0 0 12px}.mm-revert-row{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:11.5px;color:var(--warning-hover)}.mm-revert b{font-weight:600}.mm-cd{font-variant-numeric:tabular-nums}.mm-bar{height:2px;background:var(--warning-disabled);border-radius:1px;margin-top:8px;overflow:hidden}.mm-bar i{display:block;height:100%;background:var(--warning);transition:width 1s linear}.mm-copy{margin-left:6px;border:0;background:transparent;color:var(--text-badge);font:inherit;font-size:11px;cursor:pointer;padding:0 2px}.mm-copy:hover{color:var(--primary)}.mm-bandtip{margin:6px 0 0}.mm-help{margin-left:6px;width:15px;height:15px;line-height:13px;border-radius:50%;border:1px solid var(--border);background:transparent;color:var(--text-weak);font-size:10px;font-weight:700;cursor:pointer;padding:0;vertical-align:1px}.mm-gloss{flex-basis:100%;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:4px 16px;font-size:11.5px;color:var(--text-weak);border-top:1px solid var(--divider);padding-top:8px;margin-top:4px}.mm-gloss b{color:var(--text-title)}.mm-scan-row{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;padding:7px 4px;border-bottom:1px solid var(--divider);font-size:12px}.mm-scan-row>span{min-width:0}.mm-scan-row>span:nth-child(2){flex:1}.mm-scan-badge{flex:none;font-size:10px;padding:1px 6px;border:1px solid var(--border);border-radius:3px;color:var(--text-badge)}@media(max-width:640px){.mm-strip{flex-direction:column}.mm-read{border-left:0;border-top:1px solid var(--divider);text-align:left;align-items:flex-start}.mm-facts{justify-content:flex-start}.mm-revert-row{flex-direction:column;align-items:flex-start}}.mm-card+.mm-card{margin-top:11px}.mm-card-h{font-size:13px;font-weight:600;color:var(--text-title);margin-bottom:6px}.mm-kv{display:flex;gap:12px;padding:4px 0;font-size:14px}.mm-k{color:var(--text-hint);min-width:64px}.mm-v{color:var(--text-title)}.mm-link{color:var(--primary);cursor:pointer;text-decoration:underline}.mm-warn{color:var(--warning)}.mm-upd{color:var(--text-hint)}.mm-note{margin-top:8px;color:var(--text-hint);font-size:13px}';
         var el = document.createElement("style");
         el.id = this.styleId;
         el.textContent = css;
@@ -3571,6 +3654,10 @@ var __mm = (() => {
         }
       },
       tab(t2) {
+        try {
+          window.localStorage.setItem("mudimodem.tab", t2);
+        } catch (e) {
+        }
         if (t2 === "bands" && !this.bands && !this.bandsLoading) this.fetchBands();
         if (t2 === "lock" && !this.lockLoading && (!this.lockData || this.servingMoved)) this.fetchLock();
         if (t2 === "at" && !this.consoleComp && !this.consoleLoading) this.loadConsole();
@@ -3587,6 +3674,10 @@ var __mm = (() => {
     },
     mounted() {
       this.startStrip();
+      var saved = this.savedTab();
+      if (saved === "speedtest") this.openSpeedtest();
+      else if (saved === "battery") this.openBattery();
+      else if (saved && saved !== "tracking") this.tab = saved;
       if (this.tab === "tracking") this.loadTracking();
       if (!this.bands && !this.bandsLoading) this.fetchBands();
     },
@@ -3601,7 +3692,20 @@ var __mm = (() => {
       if (this.updatePollTimer) clearTimeout(this.updatePollTimer);
       if (this.verRefreshTimer) clearTimeout(this.verRefreshTimer);
       if (this.lockProbeTimer) clearTimeout(this.lockProbeTimer);
+      if (this.copiedTimer) clearTimeout(this.copiedTimer);
       this.pollStopped = true;
+    },
+    methods: {
+      // The tab this browser last had open, if it is one of ours.
+      savedTab() {
+        var v = null;
+        try {
+          v = window.localStorage.getItem("mudimodem.tab");
+        } catch (e) {
+          return null;
+        }
+        return ["tracking", "lock", "bands", "at", "speedtest", "battery", "config"].indexOf(v) >= 0 ? v : null;
+      }
     },
     render(h) {
       var self = this, c = this.serving;

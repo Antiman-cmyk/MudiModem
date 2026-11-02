@@ -55,7 +55,7 @@ export default {
     return {
       // the last read: cells/other from parseNeighbours, the slot it was read for, its time
       nb: { cells: [], running: false, error: "", ts: 0, slot: null, read: false },
-      nbConfirm: null,      // index of the row whose Lock awaits confirm
+      nbConfirm: null,      // cellKey of the row whose Lock awaits confirm (not its index: rows re-sort)
     };
   },
   methods: {
@@ -108,7 +108,8 @@ export default {
         });
         var rows = sorted.map(function (c, i) {
           var q = self.qFromLevel(self.glLevel("rsrp", c.rsrp));   // GL's scale, as the strip
-          var confirming = self.nbConfirm === i;
+          var key = self.cellKey("LTE", c.pci, c.earfcn);
+          var confirming = self.nbConfirm === key;
           var target = self.nbTarget(c);
           return h("div", { key: "n" + i, staticClass: "mm-scan-row" }, [
             h("span", { staticClass: "mm-scan-badge" }, "LTE"),
@@ -124,7 +125,7 @@ export default {
                 ])
               : h("button", { staticClass: "mm-btn",
                   attrs: { disabled: !!self.pending || self.lockBusy || locked || c.pci === undefined },
-                  on: { click: function () { self.nbConfirm = i; } } }, "Lock")
+                  on: { click: function () { self.nbConfirm = key; } } }, "Lock")
           ]);
         });
         body = h("div", rows);

@@ -43,6 +43,16 @@ var __mm = (() => {
 
   // src/web/locales/zh-cn.js
   var zh_cn_default = {
+    "copied": "已复制",
+    "newest first · click one to see it on the chart": "最新的在前 · 点一条在图表上查看",
+    "copy failed": "复制失败",
+    "Tap the chart for the readings at that moment.": "点按图表，查看那一时刻的读数。",
+    "Show this moment on the chart": "在图表上显示这一时刻",
+    "Show or hide these events": "显示或隐藏这类事件",
+    "Every source is hidden - switch one back on above.": "所有来源都已隐藏，请在上方重新打开一个。",
+    "Download these results as CSV": "把这些结果下载为 CSV",
+    "Download the samples in this range as CSV": "把这个时间范围内的采样下载为 CSV",
+    "Download the event log as CSV": "把事件日志下载为 CSV",
     "selected": "已选择",
     "{s} module supports · {p} carrier allows · {a} modem advertises": "模组支持 {s} · 运营商允许 {p} · 模组实际广播 {a}",
     "{b} selected (click to remove)": "{b} 已选择（点击取消）",
@@ -445,7 +455,6 @@ var __mm = (() => {
     "mode {m}": "模式 {m}",
     "modem": "Modem",
     "ms latency": "ms 延迟",
-    "newest first": "最新的在前",
     "no answer": "没有应答",
     "no reply": "无应答",
     "no scan, the link stays up": "无需扫描，连接不中断",
@@ -879,6 +888,43 @@ var __mm = (() => {
     ])]);
   }
 
+  // src/web/kit/csv.js
+  function cell(v) {
+    if (v === null || v === void 0) return "";
+    var s = String(v);
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  function csv(rows, cols) {
+    var out = [cols.map(function(c) {
+      return cell(c[0]);
+    }).join(",")];
+    (rows || []).forEach(function(r) {
+      out.push(cols.map(function(c) {
+        return cell(c[1](r));
+      }).join(","));
+    });
+    return out.join("\r\n") + "\r\n";
+  }
+  function isoTime(ms) {
+    var n = Number(ms);
+    return n > 0 ? new Date(n).toISOString() : "";
+  }
+  function download(name, text) {
+    if (typeof document === "undefined" || typeof Blob === "undefined" || typeof URL === "undefined" || !URL.createObjectURL) return false;
+    var url = URL.createObjectURL(new Blob(["\uFEFF" + text], { type: "text/csv;charset=utf-8" }));
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function() {
+      URL.revokeObjectURL(url);
+    }, 1e3);
+    return true;
+  }
+
   // src/web/tabs/tracking.js
   var tracking_default = localize(function() {
     "use strict";
@@ -918,6 +964,8 @@ var __mm = (() => {
     var GAP_MS = 45e3;
     var RETRY_BASE_MS = 2e3, RETRY_MAX_MS = 3e4;
     var PADL = 42, PADR = 36, BUS_H = 20, PLOT_H = 230;
+    var NARROW = 560;
+    var EV_SRC = { user: "User", dog: "Watchdog", net: "Network", link: "Internet", modem: "Modem" };
     var TP_H = 56;
     var PING_H = 30;
     var Y_INTERVALS = 4;
@@ -964,7 +1012,9 @@ var __mm = (() => {
           retryMs: 0,
           missingSince: null,
           // the long-term card (longterm.js): get_summary's lines for the last `days`
-          lt: { days: 7, lines: [], loading: false, err: "", now: 0 }
+          lt: { days: 7, lines: [], loading: false, err: "", now: 0 },
+          // event-log sources switched off ({kind: true}); the chart's ticks are not filtered
+          evHide: {}
         };
       },
       computed: {
@@ -1644,19 +1694,6 @@ var __mm = (() => {
           var doms = LINES.map(function(L) {
             return self.domainFor(L, ss);
           });
-          var lx = PADL;
-          LINES.forEach(function(L, i) {
-            var dom = doms[i];
-            var lab = L.label + "  " + dom[0] + "…" + dom[1];
-            kids.push(h("rect", { attrs: { x: lx, y: 3, width: 13, height: 3, rx: 1.5, fill: L.color } }));
-            kids.push(h("text", { attrs: {
-              x: lx + 18,
-              y: 9,
-              "font-size": 9.5,
-              fill: "var(--text-badge)"
-            } }, lab));
-            lx += 18 + String(lab).length * 5.7 + 20;
-          });
           var plotTop = 22, plotBot = plotTop + PLOT_H;
           [plotTop, plotBot].forEach(function(yy) {
             kids.push(h("line", { attrs: {
@@ -1910,7 +1947,23 @@ var __mm = (() => {
             preserveAspectRatio: "none"
           } }, kids);
         },
-        sliceReadout: function(h) {
+        // One swatch + name + domain range per metric. RSRP has a left y-axis and SINR a right one
+        // (each in its own colour/unit); RSRQ stays legend + readout only — three absolute scales
+        // can't all get an axis. Shows the *effective* domain (base, possibly expanded).
+        renderLegend: function(h, ss) {
+          var self = this;
+          return h("div", { staticClass: "mmt-legend" }, LINES.map(function(L) {
+            var dom = self.domainFor(L, ss);
+            return h("span", { key: L.key }, [
+              h("i", { staticStyle: { background: L.color } }),
+              L.label + "  " + dom[0] + "…" + dom[1]
+            ]);
+          }));
+        },
+        narrow: function() {
+          return this.width < NARROW;
+        },
+        sliceReadout: function(h, below) {
           var s = this.focusSample();
           if (!s) return null;
           var self = this, cx = this.xOf(s.m), near = null, evs = this.winEvents();
@@ -1960,16 +2013,131 @@ var __mm = (() => {
             t(near.label) + " — " + this.evDetail(near)
           ));
           kids.push(h("table", rows));
-          return h("div", { staticClass: "mmt-tip" }, kids);
+          return h("div", { staticClass: below ? "mmt-read" : "mmt-tip" }, kids);
+        },
+        // Bring an event into view and pin the chart on it: the smallest range that reaches it.
+        seekTo: function(t2) {
+          var back = (this.viewNow() - t2) / 6e4;
+          if (back < 0) back = 0;
+          var w = RANGES.map(function(r) {
+            return r[0];
+          }).filter(function(x) {
+            return x >= back + 0.5;
+          })[0];
+          if (!w) return false;
+          if (w > this.winW) this.setRange(w);
+          this.hashPinM = null;
+          this.pinnedT = t2;
+          this.cursor = this.mOf(t2);
+          var el = this.$refs && this.$refs.lanes;
+          if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          return true;
+        },
+        toggleSource: function(k) {
+          var o = Object.assign({}, this.evHide);
+          if (o[k]) delete o[k];
+          else o[k] = true;
+          this.evHide = o;
+        },
+        exportSamples: function() {
+          var self = this;
+          var text = csv(this.winSamples(), [
+            ["time_utc", function(s) {
+              return isoTime(s.t);
+            }],
+            ["t_ms", function(s) {
+              return s.t;
+            }],
+            ["sim", function(s) {
+              return s.slot;
+            }],
+            ["carrier", function(s) {
+              return s.carrier;
+            }],
+            ["mode", function(s) {
+              return s.mode;
+            }],
+            ["band", function(s) {
+              return s.band == null ? "" : self.bandLabel(s);
+            }],
+            ["pci", function(s) {
+              return s.pci;
+            }],
+            ["cell_id", function(s) {
+              return s.id;
+            }],
+            ["channel", function(s) {
+              return s.tx_channel;
+            }],
+            ["rsrp_dbm", function(s) {
+              return s.rsrp;
+            }],
+            ["rsrq_db", function(s) {
+              return s.rsrq;
+            }],
+            ["sinr_db", function(s) {
+              return s.sinr;
+            }],
+            ["down_kbps", function(s) {
+              return s.rx_kbps;
+            }],
+            ["up_kbps", function(s) {
+              return s.tx_kbps;
+            }],
+            ["ping_ms", function(s) {
+              return s.ping_ms;
+            }],
+            ["ping_lost", function(s) {
+              return s.ping_lost ? 1 : "";
+            }]
+          ]);
+          return download("mudimodem-rf-" + this.stamp() + ".csv", text);
+        },
+        exportEvents: function() {
+          var self = this;
+          var text = csv(this.allEvents, [
+            ["time_utc", function(e) {
+              return isoTime(e.t);
+            }],
+            ["t_ms", function(e) {
+              return e.t;
+            }],
+            ["source", function(e) {
+              return EV_SRC[e.kind] || e.kind;
+            }],
+            ["event", function(e) {
+              return e.label;
+            }],
+            ["detail", function(e) {
+              return self.evDetail(e);
+            }]
+          ]);
+          return download("mudimodem-events-" + this.stamp() + ".csv", text);
+        },
+        stamp: function() {
+          return isoTime(this.viewNow()).slice(0, 16).replace(/[-:]/g, "").replace("T", "-");
         },
         renderLog: function(h) {
           var self = this, top = this.frozenAt;
-          var evs = (top == null ? this.allEvents.slice() : this.allEvents.filter(function(e) {
+          var all = (top == null ? this.allEvents.slice() : this.allEvents.filter(function(e) {
             return e.t <= top;
           })).reverse();
+          var kinds = [];
+          all.forEach(function(e) {
+            if (kinds.indexOf(e.kind) === -1) kinds.push(e.kind);
+          });
+          var evs = all.filter(function(e) {
+            return !self.evHide[e.kind];
+          });
           var rows = evs.map(function(e, i) {
-            var src = { user: "User", dog: "Watchdog", net: "Network", link: "Internet", modem: "Modem" }[e.kind];
-            return h("tr", { key: i }, [
+            var src = EV_SRC[e.kind];
+            return h("tr", {
+              key: i,
+              attrs: { title: "Show this moment on the chart" },
+              on: { click: function() {
+                self.seekTo(e.t);
+              } }
+            }, [
               h("td", { staticClass: "tm" }, self.clock(e.t)),
               h("td", [h("span", { staticClass: "mmt-chip " + e.kind }, src)]),
               h("td", { staticStyle: { fontWeight: "600", color: "var(--text-title)" } }, e.label),
@@ -1979,12 +2147,30 @@ var __mm = (() => {
           return h("div", { staticClass: "mmt-card" }, [
             h("div", { staticClass: "mmt-head" }, [
               h("span", { staticClass: "mmt-title" }, "Event log"),
-              h("span", { staticClass: "mmt-hint" }, "newest first")
+              h("span", { staticClass: "mmt-hint" }, "newest first · click one to see it on the chart"),
+              h("span", { staticClass: "mmt-sp" }),
+              kinds.length > 1 ? h("span", { staticClass: "mmt-filter" }, kinds.map(function(k) {
+                return h("button", {
+                  key: k,
+                  staticClass: "mmt-chip " + k + (self.evHide[k] ? " off" : ""),
+                  attrs: { type: "button", title: "Show or hide these events", "aria-pressed": String(!self.evHide[k]) },
+                  on: { click: function() {
+                    self.toggleSource(k);
+                  } }
+                }, EV_SRC[k] || k);
+              })) : null,
+              all.length ? h("button", {
+                staticClass: "mmt-btn",
+                attrs: { type: "button", title: "Download the event log as CSV" },
+                on: { click: function() {
+                  self.exportEvents();
+                } }
+              }, "CSV") : null
             ]),
             rows.length ? h("table", { staticClass: "mmt-log" }, [
               h("thead", [h("tr", [h("th", "Time"), h("th", "Source"), h("th", "Event"), h("th", "Detail")])]),
               h("tbody", rows)
-            ]) : h("div", { staticClass: "mmt-empty" }, "No band changes, handovers or failovers recorded yet.")
+            ]) : h("div", { staticClass: "mmt-empty" }, all.length ? "Every source is hidden - switch one back on above." : "No band changes, handovers or failovers recorded yet.")
           ]);
         },
         renderPage: function(h) {
@@ -2021,20 +2207,30 @@ var __mm = (() => {
                 } }
               },
               [h("span", { staticClass: "d" }), self.live ? "LIVE" : "PAUSED"]
-            )
+            ),
+            hasData ? h("button", {
+              staticClass: "mmt-btn",
+              attrs: { type: "button", title: "Download the samples in this range as CSV" },
+              on: { click: function() {
+                self.exportSamples();
+              } }
+            }, "CSV") : null
           ]);
           var every = Math.round((this.retryMs || RETRY_BASE_MS) / 1e3);
           var body, note = null;
           if (hasData) {
-            body = h(
+            var narrow = this.narrow(), focused = this.cursorM() != null;
+            var lanes = h(
               "div",
               {
                 ref: "lanes",
                 staticClass: "mmt-lanes",
                 on: { mousemove: this.onMove, mouseleave: this.onLeave, click: this.onClick }
               },
-              [this.renderLanes(h), this.cursorM() != null ? this.sliceReadout(h) : null]
+              [this.renderLanes(h), focused && !narrow ? this.sliceReadout(h) : null]
             );
+            var under = narrow ? focused && this.sliceReadout(h, true) || h("div", { staticClass: "mmt-read empty" }, "Tap the chart for the readings at that moment.") : null;
+            body = h("div", [this.renderLegend(h, this.winSamples()), lanes, under]);
             if (this.loadFails > 0)
               note = h("div", { staticClass: "mmt-note" }, t(this.preloaded ? "Couldn't load the wider range yet; retrying every {s} s." : "Earlier history didn't load — showing live samples since the page opened; retrying every {s} s.", { s: every }));
           } else {
@@ -2069,7 +2265,7 @@ var __mm = (() => {
         },
         injectStyle: function() {
           if (typeof document === "undefined" || document.getElementById(this.styleId)) return;
-          var css = ".mmt{color:var(--text-regular);font-variant-numeric:tabular-nums}.mmt-card{background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);margin-bottom:11px}.mmt-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 14px 10px}.mmt-title{font-size:14px;font-weight:600;color:var(--text-title)}.mmt-hint{font-size:11.5px;color:var(--text-badge)}.mmt-sp{flex:1}.mmt-crumb{background:none;border:0;font:inherit;font-size:12px;color:var(--primary);cursor:pointer;padding:0}.mmt-seg{display:inline-flex;border:1px solid var(--border);border-radius:3px;overflow:hidden}.mmt-seg button{font:inherit;font-size:11.5px;background:transparent;border:0;padding:5px 12px;cursor:pointer;color:var(--text-weak);border-right:1px solid var(--border)}.mmt-seg button:last-child{border-right:0}.mmt-seg button.on{background:var(--primary);color:#fff;font-weight:600}.mmt-live{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--success);cursor:pointer;background:none;border:1px solid var(--border);border-radius:3px;padding:5px 10px}.mmt-live .d{width:7px;height:7px;border-radius:50%;background:var(--success)}.mmt-live.off{color:var(--text-badge)}.mmt-live.off .d{background:var(--text-hint)}.mmt-held{font-size:11px;color:var(--text-badge)}.mmt-note{font-size:11.5px;color:var(--warning-hover,#c4851c);padding:0 14px 8px}.mmt-lanes{position:relative;padding:2px 0 6px;cursor:crosshair}.mmt-lanes svg{display:block;width:100%;overflow:visible}.mmt-foot{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:8px 14px 11px;border-top:1px solid var(--divider);font-size:11px;color:var(--text-badge)}.mmt-lg{display:inline-flex;align-items:center;gap:5px}.mmt-tip{position:absolute;top:26px;left:8px;pointer-events:none;z-index:5;background:var(--background-card);border:1px solid var(--border);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.12);padding:8px 10px;width:184px;height:184px;overflow:hidden}.mmt-tip .t{font-size:10.5px;color:var(--text-badge);margin-bottom:5px}.mmt-tip .e{font-size:11px;font-weight:600;margin:-1px 0 5px;padding-bottom:5px;border-bottom:1px solid var(--divider);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mmt-tip table{border-collapse:collapse;width:100%}.mmt-tip td{padding:1px 0;font-size:11.5px}.mmt-tip td.k{color:var(--text-badge);font-size:10px;text-transform:uppercase;letter-spacing:.04em;padding-right:10px}.mmt-tip td.v{font-weight:600;color:var(--text-title);text-align:right;white-space:nowrap}.mmt-empty{padding:30px 14px;text-align:center;color:var(--text-hint);font-size:12.5px;line-height:1.6}.mmt-log{width:100%;border-collapse:collapse}.mmt-cells td b{font-weight:600;color:var(--text-title)}.mmt-cells td.mmt-nw{white-space:nowrap}.mmt-cellswrap{overflow-x:auto;margin-top:8px}@media (max-width:560px){.mmt-cells .mmt-opt{display:none}.mmt-cells td,.mmt-cells th{padding:6px 8px}}.mmt-log th{font-size:10px;font-weight:500;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge);text-align:left;padding:7px 14px 6px;border-bottom:1px solid var(--divider)}.mmt-log td{font-size:12px;padding:6px 14px;border-bottom:1px solid var(--divider);color:var(--text-regular)}.mmt-log td.tm{font-family:var(--mono,ui-monospace,monospace);font-size:11px;color:var(--text-weak);white-space:nowrap}.mmt-chip{display:inline-block;font-size:10px;font-weight:600;border-radius:2px;padding:1px 6px}.mmt-chip.user{background:var(--primary-background,#eef1fe);color:var(--primary)}.mmt-chip.dog{background:var(--warning-background,#fef6e9);color:var(--warning-hover,#c4851c)}.mmt-chip.net{background:var(--background-title,#f2f2f7);color:var(--text-badge)}.mmt-chip.link,.mmt-chip.modem{background:var(--error-background);color:var(--error-hover)}@media(max-width:720px){.mmt-hint{display:none}}";
+          var css = ".mmt{color:var(--text-regular);font-variant-numeric:tabular-nums}.mmt-card{background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);margin-bottom:11px}.mmt-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 14px 10px}.mmt-title{font-size:14px;font-weight:600;color:var(--text-title)}.mmt-hint{font-size:11.5px;color:var(--text-badge)}.mmt-sp{flex:1}.mmt-crumb{background:none;border:0;font:inherit;font-size:12px;color:var(--primary);cursor:pointer;padding:0}.mmt-seg{display:inline-flex;border:1px solid var(--border);border-radius:3px;overflow:hidden}.mmt-seg button{font:inherit;font-size:11.5px;background:transparent;border:0;padding:5px 12px;cursor:pointer;color:var(--text-weak);border-right:1px solid var(--border)}.mmt-seg button:last-child{border-right:0}.mmt-seg button.on{background:var(--primary);color:#fff;font-weight:600}.mmt-live{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--success);cursor:pointer;background:none;border:1px solid var(--border);border-radius:3px;padding:5px 10px}.mmt-live .d{width:7px;height:7px;border-radius:50%;background:var(--success)}.mmt-live.off{color:var(--text-badge)}.mmt-live.off .d{background:var(--text-hint)}.mmt-held{font-size:11px;color:var(--text-badge)}.mmt-note{font-size:11.5px;color:var(--warning-hover,#c4851c);padding:0 14px 8px}.mmt-lanes{position:relative;padding:2px 0 6px;cursor:crosshair}.mmt-lanes svg{display:block;width:100%;overflow:visible}.mmt-legend{display:flex;flex-wrap:wrap;gap:4px 18px;padding:0 14px 2px 42px;font-size:10.5px;color:var(--text-badge);white-space:pre}.mmt-legend i{display:inline-block;width:13px;height:3px;border-radius:1.5px;margin-right:5px;vertical-align:middle}.mmt-read{padding:6px 14px 10px;min-height:44px;font-size:11.5px}.mmt-read.empty{color:var(--text-badge)}.mmt-read .t{font-size:10.5px;color:var(--text-badge);margin-bottom:3px}.mmt-read .e{font-weight:600;margin-bottom:3px}.mmt-read table{display:flex;flex-wrap:wrap;gap:2px 16px}.mmt-read tr{display:flex;gap:6px}.mmt-read td.k{color:var(--text-badge);font-size:10px;text-transform:uppercase;letter-spacing:.04em}.mmt-read td.v{font-weight:600;color:var(--text-title)}.mmt-btn{font:inherit;font-size:11px;background:none;border:1px solid var(--border);border-radius:3px;padding:4px 9px;cursor:pointer;color:var(--text-weak)}.mmt-filter{display:inline-flex;flex-wrap:wrap;gap:4px}.mmt-filter .mmt-chip{cursor:pointer;border:0;font:inherit}.mmt-filter .mmt-chip.off{opacity:.4;text-decoration:line-through}.mmt-log tbody tr{cursor:pointer}.mmt-log tbody tr:hover td{background:var(--background-title,#f2f2f7)}.mmt-foot{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:8px 14px 11px;border-top:1px solid var(--divider);font-size:11px;color:var(--text-badge)}.mmt-lg{display:inline-flex;align-items:center;gap:5px}.mmt-tip{position:absolute;top:26px;left:8px;pointer-events:none;z-index:5;background:var(--background-card);border:1px solid var(--border);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.12);padding:8px 10px;width:184px;height:184px;overflow:hidden}.mmt-tip .t{font-size:10.5px;color:var(--text-badge);margin-bottom:5px}.mmt-tip .e{font-size:11px;font-weight:600;margin:-1px 0 5px;padding-bottom:5px;border-bottom:1px solid var(--divider);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mmt-tip table{border-collapse:collapse;width:100%}.mmt-tip td{padding:1px 0;font-size:11.5px}.mmt-tip td.k{color:var(--text-badge);font-size:10px;text-transform:uppercase;letter-spacing:.04em;padding-right:10px}.mmt-tip td.v{font-weight:600;color:var(--text-title);text-align:right;white-space:nowrap}.mmt-empty{padding:30px 14px;text-align:center;color:var(--text-hint);font-size:12.5px;line-height:1.6}.mmt-log{width:100%;border-collapse:collapse}.mmt-cells td b{font-weight:600;color:var(--text-title)}.mmt-cells td.mmt-nw{white-space:nowrap}.mmt-cellswrap{overflow-x:auto;margin-top:8px}@media (max-width:560px){.mmt-cells .mmt-opt{display:none}.mmt-cells td,.mmt-cells th{padding:6px 8px}}.mmt-log th{font-size:10px;font-weight:500;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge);text-align:left;padding:7px 14px 6px;border-bottom:1px solid var(--divider)}.mmt-log td{font-size:12px;padding:6px 14px;border-bottom:1px solid var(--divider);color:var(--text-regular)}.mmt-log td.tm{font-family:var(--mono,ui-monospace,monospace);font-size:11px;color:var(--text-weak);white-space:nowrap}.mmt-chip{display:inline-block;font-size:10px;font-weight:600;border-radius:2px;padding:1px 6px}.mmt-chip.user{background:var(--primary-background,#eef1fe);color:var(--primary)}.mmt-chip.dog{background:var(--warning-background,#fef6e9);color:var(--warning-hover,#c4851c)}.mmt-chip.net{background:var(--background-title,#f2f2f7);color:var(--text-badge)}.mmt-chip.link,.mmt-chip.modem{background:var(--error-background);color:var(--error-hover)}@media(max-width:720px){.mmt-hint{display:none}}";
           var el = document.createElement("style");
           el.id = this.styleId;
           el.textContent = css;

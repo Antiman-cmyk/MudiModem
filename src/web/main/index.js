@@ -168,6 +168,7 @@ export default localize(compose({
       }
     },
     tab(t) {
+      try { window.localStorage.setItem("mudimodem.tab", t); } catch (e) { /* storage blocked: no memory */ }
       if (t === "bands" && !this.bands && !this.bandsLoading) this.fetchBands();
       // re-read on open too when the modem has moved since the picture was taken
       if (t === "lock" && !this.lockLoading && (!this.lockData || this.servingMoved)) this.fetchLock();
@@ -183,6 +184,12 @@ export default localize(compose({
   created() { this.injectStyle(); this.restoreChange(0); },
   mounted() {
     this.startStrip();       // preload the strip window; live updates arrive as pushes
+    // Back on the tab this browser had open last (a per-viewer convenience: storage may be
+    // blocked, then it is Tracking as before).
+    var saved = this.savedTab();
+    if (saved === "speedtest") this.openSpeedtest();
+    else if (saved === "battery") this.openBattery();
+    else if (saved && saved !== "tracking") this.tab = saved;
     if (this.tab === "tracking") this.loadTracking();
     // Load the band/lock model up front so the banner's mode + tower badges have
     // data whatever tab we land on (the tab watcher only fires on a change).
@@ -198,7 +205,17 @@ export default localize(compose({
     if (this.updatePollTimer) clearTimeout(this.updatePollTimer);
     if (this.verRefreshTimer) clearTimeout(this.verRefreshTimer);
     if (this.lockProbeTimer) clearTimeout(this.lockProbeTimer);
+    if (this.copiedTimer) clearTimeout(this.copiedTimer);
     this.pollStopped = true;
+  },
+
+  methods: {
+    // The tab this browser last had open, if it is one of ours.
+    savedTab() {
+      var v = null;
+      try { v = window.localStorage.getItem("mudimodem.tab"); } catch (e) { return null; }
+      return ["tracking", "lock", "bands", "at", "speedtest", "battery", "config"].indexOf(v) >= 0 ? v : null;
+    },
   },
 
   render(h) {

@@ -18,6 +18,7 @@ export default {
       applyError: "",
       resetNote: "",        // transient feedback from "Apply defaults"
       showBandHelp: false,  // the "?" next to the Bands title: what each band layer means
+      bandTip: null,        // {group, b}: the chip last tapped, explained under its group (touch has no hover)
       resetTimer: null,     // handle clearing resetNote
     };
   },
@@ -355,7 +356,7 @@ export default {
       });
       if (supported.length === 0) return null;
       var pre = this.prefixOf(group);
-      var servingHere = {};
+      var servingHere = {}, tips = {};
       self.servingBands.forEach(function (sb) { if (sb.group === group) servingHere[sb.band] = sb.role; });
       var chips = supported.map(function (b) {
         var serving = servingHere[b] !== undefined;
@@ -376,13 +377,21 @@ export default {
         }
         var clickable = interactive && cls !== "blocked" && !self.pending;
         if (serving) tip += " — " + t("in use now ({role})", { role: servingHere[b] });
+        tips[b] = tip;
         return h("span", {
           key: b,
           staticClass: "mm-band " + cls + (serving ? " serving" : "") + (clickable ? " clickable" : ""),
           attrs: { title: tip },
-          on: clickable ? { click: function () { self.toggleBand(group, b); } } : {}
+          // every chip answers a tap with what it is (a title never shows on touch); a selectable
+          // one also toggles, and the line then describes its new state
+          on: { click: function () {
+            self.bandTip = { group: group, b: b };
+            if (clickable) self.toggleBand(group, b);
+          } }
         }, [h("b", pre + b), h("s", f ? String(f) : " ")]);
       });
+      var tipLine = (this.bandTip && this.bandTip.group === group && tips[this.bandTip.b])
+        ? h("div", { staticClass: "mm-hint mm-bandtip" }, tips[this.bandTip.b]) : null;
       // per-group actions (interactive groups only): All / None / Invert
       var actions = null;
       if (interactive && !this.pending) {
@@ -422,6 +431,7 @@ export default {
         interactive ? h("div", { staticClass: "mm-hint", staticStyle: { margin: "-3px 0 6px" } }, counts) : null,
         gate,
         h("div", { staticClass: "mm-wrap" }, chips),
+        tipLine,
         h("div", { staticClass: "mm-axis2" }, [
           h("span", "low band, reaches far"),
           h("span", "high band, fast + short range")

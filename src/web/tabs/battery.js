@@ -27,6 +27,7 @@ import { hasRpc, rpc, rpcSilent } from "../kit/rpc.js";
 import { hhmm } from "../kit/fmt.js";
 import { localize } from "../kit/i18n.js";
 import { t as T } from "../kit/i18n.js";
+import { csv, isoTime, download } from "../kit/csv.js";
 export default localize((function () {
   "use strict";
 
@@ -551,6 +552,17 @@ export default localize((function () {
       // leave this.samples out of order or with duplicate t — a backward point
       // would draw one long line across the whole plot. Sort/dedupe HERE, the
       // single choke point every consumer goes through.
+      // The samples in the chart's range, as the collector recorded them (units as on the box:
+      // mV, mA signed + charging / - discharging, degrees C).
+      exportSamples: function () {
+        var col = function (k) { return function (s) { return s[k]; }; };
+        var text = csv(this.winSamples(), [
+          ["time_utc", function (s) { return isoTime(s.t); }], ["t_ms", col("t")], ["capacity_pct", col("cap")],
+          ["voltage_mv", col("volt")], ["current_ma", col("cur")], ["temp_c", col("temp")], ["online", col("online")],
+          ["status", col("status")], ["charge_type", col("ctype")], ["limit_pct", col("lim")], ["health", col("health")],
+          ["cycles", col("cycles")]]);
+        return download("mudimodem-battery-" + isoTime(Date.now()).slice(0, 16).replace(/[-:]/g, "").replace("T", "-") + ".csv", text);
+      },
       winSamples: function () {
         var cutoff = this.nowMs() - this.winW * 60000, self = this;
         var win = this.samples.filter(function (s) { return s.t >= cutoff; })
@@ -1356,7 +1368,8 @@ export default localize((function () {
               key: r[0], staticClass: (self.winW === r[0] ? "on" : ""),
               on: { click: function () { self.setRange(r[0]); } }
             }, r[1]);
-          }))
+          }).concat(ss.length ? [h("button", { key: "csv", attrs: { title: "Download the samples in this range as CSV" },
+            on: { click: function () { self.exportSamples(); } } }, "CSV")] : []))
         ])
       ];
       // The failed window load's retry cadence, as the code actually runs it

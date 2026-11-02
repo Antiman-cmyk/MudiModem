@@ -49,6 +49,16 @@ var __mm = (() => {
 
   // src/web/locales/zh-cn.js
   var zh_cn_default = {
+    "copied": "已复制",
+    "newest first · click one to see it on the chart": "最新的在前 · 点一条在图表上查看",
+    "copy failed": "复制失败",
+    "Tap the chart for the readings at that moment.": "点按图表，查看那一时刻的读数。",
+    "Show this moment on the chart": "在图表上显示这一时刻",
+    "Show or hide these events": "显示或隐藏这类事件",
+    "Every source is hidden - switch one back on above.": "所有来源都已隐藏，请在上方重新打开一个。",
+    "Download these results as CSV": "把这些结果下载为 CSV",
+    "Download the samples in this range as CSV": "把这个时间范围内的采样下载为 CSV",
+    "Download the event log as CSV": "把事件日志下载为 CSV",
     "selected": "已选择",
     "{s} module supports · {p} carrier allows · {a} modem advertises": "模组支持 {s} · 运营商允许 {p} · 模组实际广播 {a}",
     "{b} selected (click to remove)": "{b} 已选择（点击取消）",
@@ -451,7 +461,6 @@ var __mm = (() => {
     "mode {m}": "模式 {m}",
     "modem": "Modem",
     "ms latency": "ms 延迟",
-    "newest first": "最新的在前",
     "no answer": "没有应答",
     "no reply": "无应答",
     "no scan, the link stays up": "无需扫描，连接不中断",
@@ -631,6 +640,43 @@ var __mm = (() => {
   function mdhm(t2) {
     var d = new Date(t2);
     return p2(d.getMonth() + 1) + "/" + p2(d.getDate()) + " " + hhmm(t2);
+  }
+
+  // src/web/kit/csv.js
+  function cell(v) {
+    if (v === null || v === void 0) return "";
+    var s = String(v);
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  function csv(rows, cols) {
+    var out = [cols.map(function(c) {
+      return cell(c[0]);
+    }).join(",")];
+    (rows || []).forEach(function(r) {
+      out.push(cols.map(function(c) {
+        return cell(c[1](r));
+      }).join(","));
+    });
+    return out.join("\r\n") + "\r\n";
+  }
+  function isoTime(ms) {
+    var n = Number(ms);
+    return n > 0 ? new Date(n).toISOString() : "";
+  }
+  function download(name, text) {
+    if (typeof document === "undefined" || typeof Blob === "undefined" || typeof URL === "undefined" || !URL.createObjectURL) return false;
+    var url = URL.createObjectURL(new Blob(["\uFEFF" + text], { type: "text/csv;charset=utf-8" }));
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function() {
+      URL.revokeObjectURL(url);
+    }, 1e3);
+    return true;
   }
 
   // src/web/tabs/speedtest.js
@@ -983,6 +1029,43 @@ var __mm = (() => {
           this.clearTimer = setTimeout(function() {
             self.clearArmed = false;
           }, 5e3);
+        },
+        // The results the history shows (interface + SIM filter), one row each.
+        exportResults: function() {
+          var col = function(k) {
+            return function(r) {
+              return r[k];
+            };
+          };
+          var text = csv(this.filtered, [
+            ["time_utc", function(r) {
+              return isoTime(r.t);
+            }],
+            ["t_ms", col("t")],
+            ["interface", col("iface")],
+            ["trigger", col("trigger")],
+            ["down_mbps", col("down_mbps")],
+            ["up_mbps", col("up_mbps")],
+            ["latency_ms", col("latency_ms")],
+            ["jitter_ms", col("jitter_ms")],
+            ["data_mb", col("data_mb")],
+            ["profile", col("profile")],
+            ["streams", col("streams")],
+            ["server", col("server")],
+            ["measure_down", col("measure_down")],
+            ["measure_up", col("measure_up")],
+            ["sim", col("slot")],
+            ["carrier", col("carrier")],
+            ["mode", col("mode")],
+            ["band", col("band")],
+            ["pci", col("pci")],
+            ["rsrp_dbm", col("rsrp")],
+            ["sinr_db", col("sinr")],
+            ["rsrq_db", col("rsrq")],
+            ["ambr_dl_mbps", col("ambr_dl")],
+            ["ambr_ul_mbps", col("ambr_ul")]
+          ]);
+          return download("mudimodem-speedtests-" + isoTime(Date.now()).slice(0, 10).replace(/-/g, "") + ".csv", text);
         },
         clearHistory: function() {
           var self = this;
@@ -1430,6 +1513,13 @@ var __mm = (() => {
                 h("span", "History"),
                 ifaceFilterSel,
                 slotSel,
+                this.filtered.length ? h("button", {
+                  staticClass: "mms-btn",
+                  attrs: { title: "Download these results as CSV" },
+                  on: { click: function() {
+                    self.exportResults();
+                  } }
+                }, "CSV") : null,
                 h(
                   "button",
                   {

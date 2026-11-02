@@ -646,7 +646,13 @@ test('SA band chips are interactive: selected / permitted / blocked', () => {
   assert.match(chip(cs, 'n41').data.staticClass, /\bunsel\b/, 'n41 permitted, not selected');
   assert.match(chip(cs, 'n78').data.staticClass, /\bblocked\b/, 'n78 blocked by policy');
   assert.ok(chip(cs, 'n41').data.on && chip(cs, 'n41').data.on.click, 'permitted chip is clickable');
-  assert.ok(!(chip(cs, 'n78').data.on && chip(cs, 'n78').data.on.click), 'blocked chip is NOT clickable');
+  // a blocked chip never toggles; a tap only explains it (touch has no hover title)
+  assert.doesNotMatch(chip(cs, 'n78').data.staticClass, /clickable/, 'blocked chip is not a toggle');
+  const before = JSON.stringify(vm.sel);
+  chip(cs, 'n78').data.on.click();
+  assert.equal(JSON.stringify(vm.sel), before, 'tapping a blocked chip changes nothing');
+  assert.deepEqual(vm.bandTip, { group: 'sa', b: 78 });
+  assert.match(textOf(c.render.call(vm, h)), /n78 blocked by carrier policy; selecting has no effect/, 'its explanation shows under the group');
 });
 
 test('toggleBand edits the selection and Apply reflects change/empty', () => {
@@ -805,7 +811,10 @@ test('revert countdown banner renders with Keep/Revert and locks chips', () => {
   assert.ok(btns.includes('Keep') && btns.includes('Revert now'), 'Keep + Revert now present');
   // chips must be non-clickable while a revert is pending
   const cs = chips(c, vm);
-  assert.ok(cs.every((n) => !(n.data.on && n.data.on.click)), 'chips locked during pending');
+  const before = JSON.stringify(vm.sel);
+  cs.forEach((n) => n.data.on.click());
+  assert.equal(JSON.stringify(vm.sel), before, 'chips locked during pending: a tap explains, never toggles');
+  assert.ok(cs.every((n) => !/clickable/.test(n.data.staticClass)));
   // no Apply button while pending
   assert.ok(!nodes.some((n) => n.data.staticClass && /mm-btn primary/.test(n.data.staticClass)),
     'Apply hidden during pending');
@@ -1393,6 +1402,56 @@ test('scanCells() no-ops while an experiment is pending (method-level guard)', (
   }
 });
 
+test('lock tab: a scan-row confirm follows the cell when the list re-sorts', () => {
+  const component = loadChunk();
+  const vm = makeVm(component, LIVE);
+  vm.tab = 'lock';
+  vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+  const a = { network_type: 'NR5G', pci: 516, freq: 127490, band: 71, scs: 15, rsrp: -98, carrier: 'T-Mobile' };
+  const b = { network_type: 'NR5G', pci: 300, freq: 127490, band: 71, scs: 15, rsrp: -90, carrier: 'T-Mobile' };
+  vm.scan = { running: false, error: '', ts: 1, slot: 1, towers: [a, b] };
+  const rowOf = () => walk(component.render.call(vm, h)).filter((n) => n.data && n.data.staticClass === 'mm-scan-row');
+  // arm PCI 516 (sorted second: -98 is weaker than -90)
+  const lockBtn = walk(rowOf()[1]).find((n) => n.tag === 'button' && textOf(n) === 'Lock');
+  lockBtn.data.on.click();
+  b.rsrp = -110;                          // now PCI 516 sorts first
+  const rows = rowOf();
+  assert.match(textOf(rows[0]), /PCI 516/);
+  assert.ok(walk(rows[0]).some((n) => textOf(n) === 'Confirm'), 'the confirm moved with PCI 516');
+  assert.ok(!walk(rows[1]).some((n) => textOf(n) === 'Confirm'), 'and not onto the cell now in its old row');
+});
+
+test('lock tab: PCI / ARFCN / Cell ID can be copied, with feedback', async () => {
+  const component = loadChunk();
+  const vm = makeVm(component, LIVE);
+  vm.tab = 'lock';
+  vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+  const copyBtns = () => walk(component.render.call(vm, h)).filter((n) => n.data && n.data.staticClass === 'mm-copy');
+  assert.equal(copyBtns().length, 3, 'PCI, ARFCN and Cell ID');
+  await vm.copyValue('PCI', '516');      // no clipboard in node: says it failed instead of nothing
+  assert.deepEqual(vm.copied, { k: 'PCI', ok: false });
+  assert.ok(copyBtns().some((n) => textOf(n) === 'copy failed'));
+  clearTimeout(vm.copiedTimer);
+});
+
+test('the page reopens on the tab this browser last used (storage permitting)', () => {
+  const component = loadChunk();
+  const vm = makeVm(component, LIVE);
+  const store = {};
+  global.window = { localStorage: { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } } };
+  try {
+    assert.strictEqual(vm.savedTab(), null);
+    vm.fetchBands = () => {};
+    component.watch.tab.call(vm, 'bands');
+    assert.equal(store['mudimodem.tab'], 'bands');
+    assert.equal(vm.savedTab(), 'bands');
+    store['mudimodem.tab'] = 'nonsense';
+    assert.strictEqual(vm.savedTab(), null, 'only our own tabs');
+    global.window = { get localStorage() { throw new Error('blocked'); } };
+    assert.strictEqual(vm.savedTab(), null, 'blocked storage: no memory, no error');
+  } finally { delete global.window; }
+});
+
 test('lock tab: scan-row Confirm button disabled while pending (confirming branch)', () => {
   const component = loadChunk();
   const vm = makeVm(component, LIVE);
@@ -1401,9 +1460,9 @@ test('lock tab: scan-row Confirm button disabled while pending (confirming branc
   vm.scan = { running: false, error: '', ts: 1, towers: [
     { network_type: 'NR5G', pci: 516, freq: 127490, band: 71, scs: 15, cellid: 'B', strength: 4, rsrp: -98 }
   ] };
-  // Puts renderScanCard's row 0 into the confirming branch (Cancel + Confirm),
-  // which only paints when lockConfirm.scanIdx matches the sorted row index.
-  vm.lockConfirm = { scanIdx: 0 };
+  // Puts the row into the confirming branch (Cancel + Confirm): armed by the CELL
+  // (rat|pci|freq), so a re-sort cannot move the confirm onto another row.
+  vm.lockConfirm = { scanKey: 'NR5G|516|127490' };
 
   function findConfirmBtn() {
     const tree = component.render.call(vm, h);

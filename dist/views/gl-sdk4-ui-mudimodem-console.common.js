@@ -72,6 +72,16 @@ var __mm = (() => {
 
   // src/web/locales/zh-cn.js
   var zh_cn_default = {
+    "copied": "已复制",
+    "newest first · click one to see it on the chart": "最新的在前 · 点一条在图表上查看",
+    "copy failed": "复制失败",
+    "Tap the chart for the readings at that moment.": "点按图表，查看那一时刻的读数。",
+    "Show this moment on the chart": "在图表上显示这一时刻",
+    "Show or hide these events": "显示或隐藏这类事件",
+    "Every source is hidden - switch one back on above.": "所有来源都已隐藏，请在上方重新打开一个。",
+    "Download these results as CSV": "把这些结果下载为 CSV",
+    "Download the samples in this range as CSV": "把这个时间范围内的采样下载为 CSV",
+    "Download the event log as CSV": "把事件日志下载为 CSV",
     "selected": "已选择",
     "{s} module supports · {p} carrier allows · {a} modem advertises": "模组支持 {s} · 运营商允许 {p} · 模组实际广播 {a}",
     "{b} selected (click to remove)": "{b} 已选择（点击取消）",
@@ -474,7 +484,6 @@ var __mm = (() => {
     "mode {m}": "模式 {m}",
     "modem": "Modem",
     "ms latency": "ms 延迟",
-    "newest first": "最新的在前",
     "no answer": "没有应答",
     "no reply": "无应答",
     "no scan, the link stays up": "无需扫描，连接不中断",
@@ -641,6 +650,36 @@ var __mm = (() => {
       return render.call(this, wrapH(h, seen));
     };
     return component;
+  }
+
+  // src/web/kit/clipboard.js
+  function copyText(txt) {
+    var legacy = function() {
+      if (typeof document === "undefined" || !document.body) return false;
+      var ta = document.createElement("textarea");
+      ta.value = String(txt);
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try {
+        ok = document.execCommand("copy");
+      } catch (e) {
+        ok = false;
+      }
+      document.body.removeChild(ta);
+      return ok;
+    };
+    if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(String(txt)).then(function() {
+        return true;
+      }, function() {
+        return legacy();
+      });
+    }
+    return Promise.resolve(legacy());
   }
 
   // src/web/tabs/console.js
@@ -1085,43 +1124,19 @@ var __mm = (() => {
             self.push("err", e && (e.message || e.type) || "request failed");
           });
         },
-        // navigator.clipboard exists only on HTTPS; the admin is usually plain http://192.168.8.1, so
-        // fall back to a hidden textarea + execCommand, and always say what happened.
+        // Always says what happened (kit/clipboard falls back to execCommand on plain http).
         copyTranscript() {
           var self = this;
           var txt = this.lines.map(function(l) {
             return l.t + "  " + l.text;
           }).join("\n");
-          var done = function(ok) {
+          return copyText(txt).then(function(ok) {
             self.copyNote = ok ? "Copied" : "Copy failed - select the text to copy it";
             clearTimeout(self._copyTimer);
             self._copyTimer = setTimeout(function() {
               self.copyNote = "";
             }, 2500);
-          };
-          var legacy = function() {
-            if (typeof document === "undefined") return done(false);
-            var ta = document.createElement("textarea");
-            ta.value = txt;
-            ta.setAttribute("readonly", "");
-            ta.style.position = "fixed";
-            ta.style.opacity = "0";
-            document.body.appendChild(ta);
-            ta.select();
-            var ok = false;
-            try {
-              ok = document.execCommand("copy");
-            } catch (e) {
-              ok = false;
-            }
-            document.body.removeChild(ta);
-            done(ok);
-          };
-          if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(txt).then(function() {
-              done(true);
-            }, legacy);
-          } else legacy();
+          });
         },
         clearTranscript() {
           this.lines.splice(0, this.lines.length);

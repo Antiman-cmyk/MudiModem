@@ -22,6 +22,7 @@ import { hhmm, dur } from "../kit/fmt.js";
 import { render as renderLongTerm } from "./longterm.js";
 import { localize } from "../kit/i18n.js";
 import { t as T } from "../kit/i18n.js";
+import { csv, isoTime, download } from "../kit/csv.js";
 export default localize((function () {
   "use strict";
 
@@ -71,6 +72,10 @@ export default localize((function () {
   // PADL / PADR clear the RSRP (left) and SINR (right) y-axis labels. Was 30/12
   // when the overlay had no numeric scale and the legend carried every domain.
   var PADL = 42, PADR = 36, BUS_H = 20, PLOT_H = 230;
+  // Below this chart width (CSS px, a phone) the slice readout sits under the chart instead of
+  // over it: a 184 px box would cover a third of a 360 px plot.
+  var NARROW = 560;
+  var EV_SRC = { user: "User", dog: "Watchdog", net: "Network", link: "Internet", modem: "Modem" };
   // Throughput lane (the cellular device's kbit/s per tick, from the collector): its own scale,
   // drawn only when the window has any — older history and boxes without the counters show none.
   var TP_H = 56;
@@ -107,7 +112,9 @@ export default localize((function () {
         // was dropped mid-flight; the next push asks for it again.
         preloaded: false, loadFails: 0, retryMs: 0, missingSince: null,
         // the long-term card (longterm.js): get_summary's lines for the last `days`
-        lt: { days: 7, lines: [], loading: false, err: "", now: 0 } };
+        lt: { days: 7, lines: [], loading: false, err: "", now: 0 },
+        // event-log sources switched off ({kind: true}); the chart's ticks are not filtered
+        evHide: {} };
     },
 
     computed: {
@@ -761,22 +768,8 @@ export default localize((function () {
         // y-mapping must agree, and walking samples thrice would re-expand thrice.
         var doms = LINES.map(function (L) { return self.domainFor(L, ss); });
 
-        // ---- legend: one swatch + name + domain range per metric. RSRP has a
-        // left y-axis and SINR a right one (each in its own colour/unit); RSRQ
-        // stays legend + hover only — three absolute scales can't all get an
-        // axis without turning the plot into a muddle. Legend shows the
-        // *effective* domain (base, possibly expanded).
-        var lx = PADL;
-        LINES.forEach(function (L, i) {
-          var dom = doms[i];
-          var lab = L.label + "  " + dom[0] + "…" + dom[1];
-          kids.push(h("rect", { attrs: { x: lx, y: 3, width: 13, height: 3, rx: 1.5, fill: L.color } }));
-          kids.push(h("text", { attrs: { x: lx + 18, y: 9, "font-size": 9.5,
-            fill: "var(--text-badge)" } }, lab));
-          lx += 18 + String(lab).length * 5.7 + 20;
-        });
-
-        // ---- one shared plot rectangle; each metric normalized into it.
+        // ---- one shared plot rectangle; each metric normalized into it. (The legend is HTML
+        // above the chart, renderLegend: it wraps on a phone instead of running off the edge.)
         var plotTop = 22, plotBot = plotTop + PLOT_H;
         [plotTop, plotBot].forEach(function (yy) {
           kids.push(h("line", { attrs: { x1: PADL, x2: W - PADR, y1: yy, y2: yy,
@@ -937,7 +930,19 @@ export default localize((function () {
         return h("svg", { ref: "svg", attrs: { viewBox: "0 0 " + W + " " + y,
           width: W, height: y, preserveAspectRatio: "none" } }, kids);
       },
-      sliceReadout: function (h) {
+      // One swatch + name + domain range per metric. RSRP has a left y-axis and SINR a right one
+      // (each in its own colour/unit); RSRQ stays legend + readout only — three absolute scales
+      // can't all get an axis. Shows the *effective* domain (base, possibly expanded).
+      renderLegend: function (h, ss) {
+        var self = this;
+        return h("div", { staticClass: "mmt-legend" }, LINES.map(function (L) {
+          var dom = self.domainFor(L, ss);
+          return h("span", { key: L.key }, [h("i", { staticStyle: { background: L.color } }),
+            L.label + "  " + dom[0] + "…" + dom[1]]);
+        }));
+      },
+      narrow: function () { return this.width < NARROW; },
+      sliceReadout: function (h, below) {
         var s = this.focusSample(); if (!s) return null;
         var self = this, cx = this.xOf(s.m), near = null, evs = this.winEvents();
         for (var i = 0; i < evs.length; i++)
@@ -971,17 +976,64 @@ export default localize((function () {
           T(near.label) + " — " + this.evDetail(near)));
         kids.push(h("table", rows));
         // Fixed at the plot's top-left with a fixed size (see .mmt-tip CSS) — it no
-        // longer follows the cursor or resizes to its content, so it can't jitter.
-        return h("div", { staticClass: "mmt-tip" }, kids);
+        // longer follows the cursor or resizes to its content, so it can't jitter. On a phone it
+        // is a wrapping strip under the chart instead (.mmt-read).
+        return h("div", { staticClass: below ? "mmt-read" : "mmt-tip" }, kids);
       },
+      // Bring an event into view and pin the chart on it: the smallest range that reaches it.
+      seekTo: function (t) {
+        var back = (this.viewNow() - t) / 60000;
+        if (back < 0) back = 0;
+        var w = RANGES.map(function (r) { return r[0]; }).filter(function (x) { return x >= back + 0.5; })[0];
+        if (!w) return false;                        // older than the longest range
+        if (w > this.winW) this.setRange(w);         // setRange drops the pin, so pin after it
+        this.hashPinM = null;
+        this.pinnedT = t;
+        this.cursor = this.mOf(t);
+        var el = this.$refs && this.$refs.lanes;
+        if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        return true;
+      },
+      toggleSource: function (k) {
+        var o = Object.assign({}, this.evHide);
+        if (o[k]) delete o[k]; else o[k] = true;
+        this.evHide = o;
+      },
+      exportSamples: function () {
+        var self = this;
+        var text = csv(this.winSamples(), [
+          ["time_utc", function (s) { return isoTime(s.t); }], ["t_ms", function (s) { return s.t; }],
+          ["sim", function (s) { return s.slot; }], ["carrier", function (s) { return s.carrier; }],
+          ["mode", function (s) { return s.mode; }], ["band", function (s) { return s.band == null ? "" : self.bandLabel(s); }],
+          ["pci", function (s) { return s.pci; }], ["cell_id", function (s) { return s.id; }],
+          ["channel", function (s) { return s.tx_channel; }],
+          ["rsrp_dbm", function (s) { return s.rsrp; }], ["rsrq_db", function (s) { return s.rsrq; }],
+          ["sinr_db", function (s) { return s.sinr; }],
+          ["down_kbps", function (s) { return s.rx_kbps; }], ["up_kbps", function (s) { return s.tx_kbps; }],
+          ["ping_ms", function (s) { return s.ping_ms; }], ["ping_lost", function (s) { return s.ping_lost ? 1 : ""; }]]);
+        return download("mudimodem-rf-" + this.stamp() + ".csv", text);
+      },
+      exportEvents: function () {
+        var self = this;
+        var text = csv(this.allEvents, [
+          ["time_utc", function (e) { return isoTime(e.t); }], ["t_ms", function (e) { return e.t; }],
+          ["source", function (e) { return EV_SRC[e.kind] || e.kind; }], ["event", function (e) { return e.label; }],
+          ["detail", function (e) { return self.evDetail(e); }]]);
+        return download("mudimodem-events-" + this.stamp() + ".csv", text);
+      },
+      stamp: function () { return isoTime(this.viewNow()).slice(0, 16).replace(/[-:]/g, "").replace("T", "-"); },
       renderLog: function (h) {
         var self = this, top = this.frozenAt;
         // Frozen with the graph while PAUSED, so the two never disagree.
-        var evs = (top == null ? this.allEvents.slice()
+        var all = (top == null ? this.allEvents.slice()
           : this.allEvents.filter(function (e) { return e.t <= top; })).reverse();
+        var kinds = [];
+        all.forEach(function (e) { if (kinds.indexOf(e.kind) === -1) kinds.push(e.kind); });
+        var evs = all.filter(function (e) { return !self.evHide[e.kind]; });
         var rows = evs.map(function (e, i) {
-          var src = { user: "User", dog: "Watchdog", net: "Network", link: "Internet", modem: "Modem" }[e.kind];
-          return h("tr", { key: i }, [
+          var src = EV_SRC[e.kind];
+          return h("tr", { key: i, attrs: { title: "Show this moment on the chart" },
+            on: { click: function () { self.seekTo(e.t); } } }, [
             h("td", { staticClass: "tm" }, self.clock(e.t)),
             h("td", [h("span", { staticClass: "mmt-chip " + e.kind }, src)]),
             h("td", { staticStyle: { fontWeight: "600", color: "var(--text-title)" } }, e.label),
@@ -991,13 +1043,22 @@ export default localize((function () {
         return h("div", { staticClass: "mmt-card" }, [
           h("div", { staticClass: "mmt-head" }, [
             h("span", { staticClass: "mmt-title" }, "Event log"),
-            h("span", { staticClass: "mmt-hint" }, "newest first")
+            h("span", { staticClass: "mmt-hint" }, "newest first · click one to see it on the chart"),
+            h("span", { staticClass: "mmt-sp" }),
+            kinds.length > 1 ? h("span", { staticClass: "mmt-filter" }, kinds.map(function (k) {
+              return h("button", { key: k, staticClass: "mmt-chip " + k + (self.evHide[k] ? " off" : ""),
+                attrs: { type: "button", title: "Show or hide these events", "aria-pressed": String(!self.evHide[k]) },
+                on: { click: function () { self.toggleSource(k); } } }, EV_SRC[k] || k);
+            })) : null,
+            all.length ? h("button", { staticClass: "mmt-btn", attrs: { type: "button", title: "Download the event log as CSV" },
+              on: { click: function () { self.exportEvents(); } } }, "CSV") : null
           ]),
           rows.length
             ? h("table", { staticClass: "mmt-log" }, [
                 h("thead", [h("tr", [h("th", "Time"), h("th", "Source"), h("th", "Event"), h("th", "Detail")])]),
                 h("tbody", rows)])
-            : h("div", { staticClass: "mmt-empty" }, "No band changes, handovers or failovers recorded yet.")
+            : h("div", { staticClass: "mmt-empty" }, all.length ? "Every source is hidden - switch one back on above."
+                : "No band changes, handovers or failovers recorded yet.")
         ]);
       },
       renderPage: function (h) {
@@ -1022,15 +1083,23 @@ export default localize((function () {
           })()),
           h("button", { staticClass: "mmt-live" + (self.live ? "" : " off"),
             on: { click: function () { self.togglePause(); } } },
-            [h("span", { staticClass: "d" }), self.live ? "LIVE" : "PAUSED"])
+            [h("span", { staticClass: "d" }), self.live ? "LIVE" : "PAUSED"]),
+          hasData ? h("button", { staticClass: "mmt-btn", attrs: { type: "button", title: "Download the samples in this range as CSV" },
+            on: { click: function () { self.exportSamples(); } } }, "CSV") : null
         ]);
         // How often the failed window load is being retried, as the code does it.
         var every = Math.round((this.retryMs || RETRY_BASE_MS) / 1000);
         var body, note = null;
         if (hasData) {
-          body = h("div", { ref: "lanes", staticClass: "mmt-lanes",
+          var narrow = this.narrow(), focused = this.cursorM() != null;
+          var lanes = h("div", { ref: "lanes", staticClass: "mmt-lanes",
             on: { mousemove: this.onMove, mouseleave: this.onLeave, click: this.onClick } },
-            [this.renderLanes(h), this.cursorM() != null ? this.sliceReadout(h) : null]);
+            [this.renderLanes(h), focused && !narrow ? this.sliceReadout(h) : null]);
+          // On a phone the readout is a strip under the chart; its place is kept while nothing is
+          // pinned, so tapping does not push the page around.
+          var under = narrow ? ((focused && this.sliceReadout(h, true)) ||
+            h("div", { staticClass: "mmt-read empty" }, "Tap the chart for the readings at that moment.")) : null;
+          body = h("div", [this.renderLegend(h, this.winSamples()), lanes, under]);
           // Pushes are drawing, but the window before them never loaded: say
           // so, instead of passing off "since the page opened" as the history.
           if (this.loadFails > 0)
@@ -1086,6 +1155,15 @@ export default localize((function () {
           '.mmt-held{font-size:11px;color:var(--text-badge)}' +
           '.mmt-note{font-size:11.5px;color:var(--warning-hover,#c4851c);padding:0 14px 8px}' +
           '.mmt-lanes{position:relative;padding:2px 0 6px;cursor:crosshair}.mmt-lanes svg{display:block;width:100%;overflow:visible}' +
+          '.mmt-legend{display:flex;flex-wrap:wrap;gap:4px 18px;padding:0 14px 2px 42px;font-size:10.5px;color:var(--text-badge);white-space:pre}' +
+          '.mmt-legend i{display:inline-block;width:13px;height:3px;border-radius:1.5px;margin-right:5px;vertical-align:middle}' +
+          '.mmt-read{padding:6px 14px 10px;min-height:44px;font-size:11.5px}.mmt-read.empty{color:var(--text-badge)}' +
+          '.mmt-read .t{font-size:10.5px;color:var(--text-badge);margin-bottom:3px}.mmt-read .e{font-weight:600;margin-bottom:3px}' +
+          '.mmt-read table{display:flex;flex-wrap:wrap;gap:2px 16px}.mmt-read tr{display:flex;gap:6px}' +
+          '.mmt-read td.k{color:var(--text-badge);font-size:10px;text-transform:uppercase;letter-spacing:.04em}.mmt-read td.v{font-weight:600;color:var(--text-title)}' +
+          '.mmt-btn{font:inherit;font-size:11px;background:none;border:1px solid var(--border);border-radius:3px;padding:4px 9px;cursor:pointer;color:var(--text-weak)}' +
+          '.mmt-filter{display:inline-flex;flex-wrap:wrap;gap:4px}.mmt-filter .mmt-chip{cursor:pointer;border:0;font:inherit}.mmt-filter .mmt-chip.off{opacity:.4;text-decoration:line-through}' +
+          '.mmt-log tbody tr{cursor:pointer}.mmt-log tbody tr:hover td{background:var(--background-title,#f2f2f7)}' +
           '.mmt-foot{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:8px 14px 11px;border-top:1px solid var(--divider);font-size:11px;color:var(--text-badge)}' +
           '.mmt-lg{display:inline-flex;align-items:center;gap:5px}' +
           '.mmt-tip{position:absolute;top:26px;left:8px;pointer-events:none;z-index:5;background:var(--background-card);border:1px solid var(--border);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.12);padding:8px 10px;width:184px;height:184px;overflow:hidden}' +

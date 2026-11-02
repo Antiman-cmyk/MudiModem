@@ -1082,3 +1082,75 @@ test('long term: empty, loading and failed states; the range buttons refetch', a
     assert.strictEqual(vm.lt.lines.length, 6);
   } finally { delete global.window; }
 });
+
+// ---- phone layout, event log filter / seek, CSV (audit §2.3, §2.6) ----
+test('the legend is HTML above the chart, not SVG text that runs off a phone', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { samples: seedSamples(), events: [], winW: 60 });
+  const tree = c.render.call(vm, h);
+  const legend = walk(tree).find((n) => n.data && n.data.staticClass === 'mmt-legend');
+  assert.ok(legend, 'mmt-legend div');
+  assert.match(textOf(legend), /RSRP · dBm {2}-120…-80/);
+  const svgText = walk(walk(tree).find((n) => n.tag === 'svg')).filter((n) => n.tag === 'text').map(textOf).join('|');
+  assert.doesNotMatch(svgText, /RSRP · dBm/, 'no legend inside the SVG');
+});
+
+test('on a phone the slice readout sits under the chart, and keeps its place when nothing is pinned', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { samples: seedSamples(), events: [], winW: 60, width: 360 });
+  let nodes = walk(c.render.call(vm, h));
+  assert.ok(!nodes.some((n) => n.data && n.data.staticClass === 'mmt-tip'), 'no overlay on a phone');
+  const ph = nodes.find((n) => n.data && n.data.staticClass === 'mmt-read empty');
+  assert.match(textOf(ph), /Tap the chart/);
+  vm.cursor = -5;
+  nodes = walk(c.render.call(vm, h));
+  const rd = nodes.find((n) => n.data && n.data.staticClass === 'mmt-read');
+  assert.match(textOf(rd), /RSRP/);
+  vm.width = 900;
+  nodes = walk(c.render.call(vm, h));
+  assert.ok(nodes.some((n) => n.data && n.data.staticClass === 'mmt-tip'), 'the overlay stays on a wide screen');
+});
+
+test('event log: sources can be hidden, and a click pins the chart on the event (widening the range)', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const events = [{ t: now - 3 * 3600e3, kind: 'user', label: 'Bands applied', detail: '' },
+                  { t: now - 5 * 60e3, kind: 'net', label: 'Handover', detail: '' }];
+  const vm = makeVm(c, { samples: seedSamples(), events: events, winW: 15 });
+  vm.fetchHistory = () => {};
+  Object.defineProperty(vm, 'allEvents', { get: () => events, configurable: true });
+  let log = textOf(vm.renderLog(h));
+  assert.match(log, /Bands applied/); assert.match(log, /Handover/);
+  vm.toggleSource('net');
+  log = textOf(vm.renderLog(h));
+  assert.doesNotMatch(log, /Handover/, 'hidden source');
+  assert.match(log, /Bands applied/);
+  vm.toggleSource('net');
+  assert.equal(vm.seekTo(events[0].t), true);
+  assert.equal(vm.winW, 360, 'the smallest range that reaches 3 h back');
+  assert.equal(vm.pinnedT, events[0].t, 'pinned on the event');
+  assert.equal(vm.seekTo(now - 30 * 3600e3), false, 'older than 24 h: nothing to show');
+});
+
+test('CSV export: the samples in range and the event log, quoted properly', () => {
+  const c = loadChunk();
+  const saved = { Blob: global.Blob, URL: global.URL, document: global.document };
+  let got = null, name = null;
+  global.Blob = class { constructor(parts) { this.text = parts.join(''); } };
+  global.URL = { createObjectURL(b) { got = b.text; return 'blob:x'; }, revokeObjectURL() {} };
+  global.document = { createElement() { return { style: {}, click() {}, set download(v) { name = v; } }; },
+                      body: { appendChild() {}, removeChild() {} } };
+  try {
+    const vm = makeVm(c, { samples: seedSamples(), events: [], winW: 60 });
+    assert.equal(vm.exportSamples(), true);
+    const lines = got.replace(/^﻿/, '').trim().split('\r\n');
+    assert.equal(lines[0], 'time_utc,t_ms,sim,carrier,mode,band,pci,cell_id,channel,rsrp_dbm,rsrq_db,sinr_db,down_kbps,up_kbps,ping_ms,ping_lost');
+    assert.equal(lines.length, 22, 'header + 21 samples');
+    assert.match(lines[1], /^\d{4}-\d\d-\d\dT.*,1,T-Mobile,NR5G-SA FDD,n71,,A1,127490,-120,-13,5,,,,$/);
+    assert.match(name, /^mudimodem-rf-\d{8}-\d{4}\.csv$/);
+    const evs = [{ t: 1, kind: 'user', label: 'Bands applied', detail: 'mode "LTE", B66' }];
+    Object.defineProperty(vm, 'allEvents', { get: () => evs, configurable: true });
+    vm.exportEvents();
+    assert.match(got, /User,Bands applied,"mode ""LTE"", B66"/, 'commas and quotes quoted');
+  } finally { Object.assign(global, saved); }
+});

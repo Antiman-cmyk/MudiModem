@@ -3,6 +3,16 @@
 // Technical tokens (RSRP, SINR, RSRQ, PCI, ARFCN, n71, B66, AT commands) stay as they are.
 // Keys must match the English in src/web exactly; tools/i18n-keys.mjs --check zh-cn lists gaps.
 export default {
+  "copied": "已复制",
+  "newest first · click one to see it on the chart": "最新的在前 · 点一条在图表上查看",
+  "copy failed": "复制失败",
+  "Tap the chart for the readings at that moment.": "点按图表，查看那一时刻的读数。",
+  "Show this moment on the chart": "在图表上显示这一时刻",
+  "Show or hide these events": "显示或隐藏这类事件",
+  "Every source is hidden - switch one back on above.": "所有来源都已隐藏，请在上方重新打开一个。",
+  "Download these results as CSV": "把这些结果下载为 CSV",
+  "Download the samples in this range as CSV": "把这个时间范围内的采样下载为 CSV",
+  "Download the event log as CSV": "把事件日志下载为 CSV",
   "selected": "已选择",
   "{s} module supports · {p} carrier allows · {a} modem advertises": "模组支持 {s} · 运营商允许 {p} · 模组实际广播 {a}",
   "{b} selected (click to remove)": "{b} 已选择（点击取消）",
@@ -405,7 +415,6 @@ export default {
   "mode {m}": "模式 {m}",
   "modem": "Modem",
   "ms latency": "ms 延迟",
-  "newest first": "最新的在前",
   "no answer": "没有应答",
   "no reply": "无应答",
   "no scan, the link stays up": "无需扫描，连接不中断",

@@ -20,6 +20,7 @@ import { hasRpc, rpc, rpcSilent } from "../kit/rpc.js";
 import { mdhm } from "../kit/fmt.js";
 import { localize } from "../kit/i18n.js";
 import { t as T } from "../kit/i18n.js";
+import { csv, isoTime, download } from "../kit/csv.js";
 export default localize((function () {
   "use strict";
 
@@ -334,6 +335,20 @@ export default localize((function () {
         if (this.clearArmed) { this.clearArmed = false; clearTimeout(this.clearTimer); this.clearHistory(); return; }
         this.clearArmed = true;
         this.clearTimer = setTimeout(function () { self.clearArmed = false; }, 5000);
+      },
+      // The results the history shows (interface + SIM filter), one row each.
+      exportResults: function () {
+        var col = function (k) { return function (r) { return r[k]; }; };
+        var text = csv(this.filtered, [
+          ["time_utc", function (r) { return isoTime(r.t); }], ["t_ms", col("t")], ["interface", col("iface")],
+          ["trigger", col("trigger")], ["down_mbps", col("down_mbps")], ["up_mbps", col("up_mbps")],
+          ["latency_ms", col("latency_ms")], ["jitter_ms", col("jitter_ms")], ["data_mb", col("data_mb")],
+          ["profile", col("profile")], ["streams", col("streams")], ["server", col("server")],
+          ["measure_down", col("measure_down")], ["measure_up", col("measure_up")],
+          ["sim", col("slot")], ["carrier", col("carrier")], ["mode", col("mode")], ["band", col("band")],
+          ["pci", col("pci")], ["rsrp_dbm", col("rsrp")], ["sinr_db", col("sinr")], ["rsrq_db", col("rsrq")],
+          ["ambr_dl_mbps", col("ambr_dl")], ["ambr_ul_mbps", col("ambr_ul")]]);
+        return download("mudimodem-speedtests-" + isoTime(Date.now()).slice(0, 10).replace(/-/g, "") + ".csv", text);
       },
       clearHistory: function () {
         var self = this;
@@ -703,6 +718,8 @@ export default localize((function () {
           h("div", { staticClass: "mms-card" }, [
             h("div", { staticClass: "mms-controls" }, [
               h("span", "History"), ifaceFilterSel, slotSel,
+              this.filtered.length ? h("button", { staticClass: "mms-btn", attrs: { title: "Download these results as CSV" },
+                on: { click: function () { self.exportResults(); } } }, "CSV") : null,
               h("button", { staticClass: "mms-btn" + (self.clearArmed ? " danger" : ""),
                 on: { click: function () { self.armClear(); } } },
                 self.clearArmed ? "Click again to delete all results" : "Clear history")

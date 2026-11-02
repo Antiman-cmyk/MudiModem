@@ -49,6 +49,16 @@ var __mm = (() => {
 
   // src/web/locales/zh-cn.js
   var zh_cn_default = {
+    "copied": "已复制",
+    "newest first · click one to see it on the chart": "最新的在前 · 点一条在图表上查看",
+    "copy failed": "复制失败",
+    "Tap the chart for the readings at that moment.": "点按图表，查看那一时刻的读数。",
+    "Show this moment on the chart": "在图表上显示这一时刻",
+    "Show or hide these events": "显示或隐藏这类事件",
+    "Every source is hidden - switch one back on above.": "所有来源都已隐藏，请在上方重新打开一个。",
+    "Download these results as CSV": "把这些结果下载为 CSV",
+    "Download the samples in this range as CSV": "把这个时间范围内的采样下载为 CSV",
+    "Download the event log as CSV": "把事件日志下载为 CSV",
     "selected": "已选择",
     "{s} module supports · {p} carrier allows · {a} modem advertises": "模组支持 {s} · 运营商允许 {p} · 模组实际广播 {a}",
     "{b} selected (click to remove)": "{b} 已选择（点击取消）",
@@ -451,7 +461,6 @@ var __mm = (() => {
     "mode {m}": "模式 {m}",
     "modem": "Modem",
     "ms latency": "ms 延迟",
-    "newest first": "最新的在前",
     "no answer": "没有应答",
     "no reply": "无应答",
     "no scan, the link stays up": "无需扫描，连接不中断",
@@ -627,6 +636,43 @@ var __mm = (() => {
   function hhmm(t2) {
     var d = new Date(t2);
     return p2(d.getHours()) + ":" + p2(d.getMinutes());
+  }
+
+  // src/web/kit/csv.js
+  function cell(v) {
+    if (v === null || v === void 0) return "";
+    var s = String(v);
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  function csv(rows, cols) {
+    var out = [cols.map(function(c) {
+      return cell(c[0]);
+    }).join(",")];
+    (rows || []).forEach(function(r) {
+      out.push(cols.map(function(c) {
+        return cell(c[1](r));
+      }).join(","));
+    });
+    return out.join("\r\n") + "\r\n";
+  }
+  function isoTime(ms) {
+    var n = Number(ms);
+    return n > 0 ? new Date(n).toISOString() : "";
+  }
+  function download(name, text) {
+    if (typeof document === "undefined" || typeof Blob === "undefined" || typeof URL === "undefined" || !URL.createObjectURL) return false;
+    var url = URL.createObjectURL(new Blob(["\uFEFF" + text], { type: "text/csv;charset=utf-8" }));
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function() {
+      URL.revokeObjectURL(url);
+    }, 1e3);
+    return true;
   }
 
   // src/web/tabs/battery.js
@@ -1158,6 +1204,32 @@ var __mm = (() => {
         // leave this.samples out of order or with duplicate t — a backward point
         // would draw one long line across the whole plot. Sort/dedupe HERE, the
         // single choke point every consumer goes through.
+        // The samples in the chart's range, as the collector recorded them (units as on the box:
+        // mV, mA signed + charging / - discharging, degrees C).
+        exportSamples: function() {
+          var col = function(k) {
+            return function(s) {
+              return s[k];
+            };
+          };
+          var text = csv(this.winSamples(), [
+            ["time_utc", function(s) {
+              return isoTime(s.t);
+            }],
+            ["t_ms", col("t")],
+            ["capacity_pct", col("cap")],
+            ["voltage_mv", col("volt")],
+            ["current_ma", col("cur")],
+            ["temp_c", col("temp")],
+            ["online", col("online")],
+            ["status", col("status")],
+            ["charge_type", col("ctype")],
+            ["limit_pct", col("lim")],
+            ["health", col("health")],
+            ["cycles", col("cycles")]
+          ]);
+          return download("mudimodem-battery-" + isoTime(Date.now()).slice(0, 16).replace(/[-:]/g, "").replace("T", "-") + ".csv", text);
+        },
         winSamples: function() {
           var cutoff = this.nowMs() - this.winW * 6e4, self = this;
           var win = this.samples.filter(function(s) {
@@ -2011,7 +2083,13 @@ var __mm = (() => {
                   self.setRange(r[0]);
                 } }
               }, r[1]);
-            }))
+            }).concat(ss.length ? [h("button", {
+              key: "csv",
+              attrs: { title: "Download the samples in this range as CSV" },
+              on: { click: function() {
+                self.exportSamples();
+              } }
+            }, "CSV")] : []))
           ])
         ];
         var every = Math.round((this.retryMs || RETRY_BASE_MS) / 1e3);

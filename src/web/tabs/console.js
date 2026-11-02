@@ -26,6 +26,7 @@
 import { hasRpc, rpc, rpcSilent, rpcJob, rpcSilentJob } from "../kit/rpc.js";
 import { localize } from "../kit/i18n.js";
 import { t as T } from "../kit/i18n.js";
+import { copyText } from "../kit/clipboard.js";
 export default localize((function () {
   var HISTORY_MAX = 100;
   var STORE = {
@@ -412,29 +413,15 @@ export default localize((function () {
           self.push("err", (e && (e.message || e.type)) || "request failed");
         });
     },
-    // navigator.clipboard exists only on HTTPS; the admin is usually plain http://192.168.8.1, so
-    // fall back to a hidden textarea + execCommand, and always say what happened.
+    // Always says what happened (kit/clipboard falls back to execCommand on plain http).
     copyTranscript() {
       var self = this;
       var txt = this.lines.map(function (l) { return l.t + "  " + l.text; }).join("\n");
-      var done = function (ok) {
+      return copyText(txt).then(function (ok) {
         self.copyNote = ok ? "Copied" : "Copy failed - select the text to copy it";
         clearTimeout(self._copyTimer);
         self._copyTimer = setTimeout(function () { self.copyNote = ""; }, 2500);
-      };
-      var legacy = function () {
-        if (typeof document === "undefined") return done(false);
-        var ta = document.createElement("textarea");
-        ta.value = txt; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
-        document.body.appendChild(ta); ta.select();
-        var ok = false;
-        try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
-        document.body.removeChild(ta);
-        done(ok);
-      };
-      if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(txt).then(function () { done(true); }, legacy);
-      } else legacy();
+      });
     },
     clearTranscript() { this.lines.splice(0, this.lines.length); this.stickBottom = true; },
     onTermScroll(e) {
