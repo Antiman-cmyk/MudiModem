@@ -63,6 +63,16 @@ var __mm = (() => {
 
   // src/web/locales/zh-cn.js
   var zh_cn_default = {
+    "waiting for the next sample...": "等待下一个采样……",
+    "scanned {age} ago · SIM {slot}": "{age}前扫描 · SIM {slot}",
+    "scanned {age} ago": "{age}前扫描",
+    "no service": "无服务",
+    "Writes GL's default to the modem now: band filtering off + Auto mode (60s revert)": "立即把 GL 的默认设置写入 Modem：关闭频段过滤 + 自动模式（60 秒内可回滚）",
+    "The link drops for a few seconds while the modem re-registers.": "Modem 重新注册期间，连接会中断几秒。",
+    "Now {n}": "现在 {n}",
+    "Before {b}  →  now {n}": "之前 {b}  →  现在 {n}",
+    "Apply defaults": "应用默认设置",
+    "Applied {what}. Reverting in {s} unless you keep it.": "已应用 {what}。{s} 后自动回滚，除非你选择保留。",
     "The modem has moved to PCI {pci} / ARFCN {arfcn} since this was read. Refresh before locking.": "读取之后 Modem 已切换到 PCI {pci} / ARFCN {arfcn}。请先刷新再锁定。",
     "The modem has moved to PCI {pci} / ARFCN {arfcn} since this was read - re-reading...": "读取之后 Modem 已切换到 PCI {pci} / ARFCN {arfcn}，正在重新读取……",
     "(carrier change)": "（载波变化）",
@@ -90,7 +100,6 @@ var __mm = (() => {
     "All": "全选",
     "All SIMs": "所有 SIM 卡",
     "Already at the default - re-sending 'filtering off + Auto' to the modem anyway.": "已经是默认设置 - 仍然向 Modem 重新发送“关闭过滤 + 自动”。",
-    "Applied {what}. Reverting in {s} unless you keep it - watch the trace above.": "已应用 {what}。{s} 后自动恢复，除非你选择保留 - 请观察上方的信号曲线。",
     "Applied {what}. Time's up - the auto-revert is restoring your previous settings...": "已应用 {what}。时间到 - 自动恢复正在还原之前的设置…",
     "Apply": "应用",
     "Applying...": "正在应用…",
@@ -306,7 +315,6 @@ var __mm = (() => {
     "Refresh now": "立即更新",
     "Refreshing…": "正在更新…",
     "Remote sessions:": "远程连接：",
-    "Reset to default": "恢复默认",
     "Restored previous bands": "已还原之前的频段",
     "Retry": "重试",
     "Revert": "恢复",
@@ -475,7 +483,6 @@ var __mm = (() => {
     "download at the cap": "下载已达上限",
     "upload at the cap": "上传已达上限",
     "gave up waiting for the router": "等待路由器超时，已放弃",
-    "scanned {n} min ago": "{n} 分钟前扫描",
     "serving now": "当前服务",
     "serving now ({role})": "当前服务（{role}）",
     "set": "设置",
@@ -924,6 +931,30 @@ var __mm = (() => {
           return p.v;
         }));
       },
+      // x (0..320) of a BOX-clock instant on the strip, or null when it is outside the window.
+      stripX(tBox) {
+        if (tBox == null) return null;
+        var span = this.STRIP_MIN * 6e4, end = this.stripEnd(), start = end - span;
+        if (tBox < start || tBox > end) return null;
+        return (tBox - start) / span * 320;
+      },
+      // The pending change's moment on the trace: a dashed line, so "did it get better after
+      // this?" is answered where the eye already is.
+      applyMark(h) {
+        var p = this.pending;
+        var x = p && !p.done ? this.stripX(p.appliedBox) : null;
+        if (x == null) return null;
+        return h("line", { attrs: {
+          x1: x.toFixed(1),
+          x2: x.toFixed(1),
+          y1: "0",
+          y2: "40",
+          stroke: "var(--warning)",
+          "stroke-width": "1",
+          "stroke-dasharray": "3 2",
+          "vector-effect": "non-scaling-stroke"
+        } });
+      },
       tracePath() {
         var pts = this.stripPoints();
         return pts.length >= 2 ? this.tracePathTimed(pts) : "";
@@ -981,14 +1012,20 @@ var __mm = (() => {
         this.clearCountdown();
         var w = window_s || 60;
         var end = Date.now() + w * 1e3;
-        if (clock && typeof clock.deadline === "number" && typeof clock.now === "number")
+        var appliedBox = null;
+        if (clock && typeof clock.deadline === "number" && typeof clock.now === "number") {
           end = Date.now() + (clock.deadline - clock.now) * 1e3;
+          appliedBox = (clock.deadline - w) * 1e3;
+        } else if (this.histNow) appliedBox = Date.now() + (this.histNow - this.histNowAt);
+        var before = clock && clock.before || this.pictureOf(this.serving);
         this.pending = {
           kind: kind || "bands",
           window: w,
           applied,
           done: false,
           end,
+          appliedBox,
+          before,
           remaining: Math.max(0, Math.ceil((end - Date.now()) / 1e3)),
           keeping: false,
           reverting: false,
@@ -1074,7 +1111,7 @@ var __mm = (() => {
                 q.window || 60,
                 q.applied || p && p.applied || {},
                 q.kind,
-                { deadline: q.deadline, now: res.now }
+                { deadline: q.deadline, now: res.now, before: q.before }
               );
             else if (!p)
               self.pending = { kind: q.kind, applied: q.applied || {}, uncertain: true, window: 60, remaining: 60 };
@@ -1129,6 +1166,48 @@ var __mm = (() => {
             { err: e && (e.type || e.message) || "error" }
           ) });
         });
+      },
+      // A sample reduced to what the banner compares: {t, registered, rat, band, pci, rsrp, sinr},
+      // or null when there is none. Same shape as the router's BEFORE record.
+      pictureOf(s) {
+        if (!s || !s.t) return null;
+        var num = function(v) {
+          return v === null || v === void 0 || v === "" || isNaN(Number(v)) ? void 0 : Number(v);
+        };
+        return {
+          t: s.t,
+          registered: num(s.rsrp) !== void 0,
+          rat: s.pcc_rat || s.mode,
+          mode: s.mode,
+          band: num(s.band),
+          pci: num(s.pci),
+          rsrp: num(s.rsrp),
+          sinr: num(s.sinr)
+        };
+      },
+      pictureText(x) {
+        if (!x.registered) return t("no service");
+        return [
+          this.formatBand(x.rat, x.band),
+          x.rsrp !== void 0 ? "RSRP " + x.rsrp : "",
+          x.sinr !== void 0 ? "SINR " + x.sinr : "",
+          x.pci !== void 0 ? "PCI " + x.pci : ""
+        ].filter(function(v) {
+          return v && v !== "—";
+        }).join(" · ");
+      },
+      // "Before n71 · RSRP -99 · SINR 4 → now B66 · RSRP -105 · SINR 2": the change's effect in one
+      // line, so judging Keep vs Revert needs no reading of the trace. "Now" is a sample taken
+      // AFTER the change went out (until one arrives, the line says so).
+      renderBeforeNow(h) {
+        var p = this.pending, before = p.before;
+        var s = this.serving, live = s && s.t && !s.stale && (p.appliedBox == null || s.t > p.appliedBox) ? this.pictureOf(s) : null;
+        var now = live ? this.pictureText(live) : t("waiting for the next sample...");
+        return h(
+          "div",
+          { staticClass: "mm-hint mm-beforenow", staticStyle: { marginTop: "6px" } },
+          before ? tp("Before {b}  →  now {n}", { b: h("b", this.pictureText(before)), n: h("b", now) }) : tp("Now {n}", { n: h("b", now) })
+        );
       },
       // Confirm-or-revert banner: page-wide, above the tab bar (render in index.js).
       revertButtons(h) {
@@ -1217,7 +1296,7 @@ var __mm = (() => {
               "Applied {what}. Time's up - the auto-revert is restoring your previous settings...",
               { what: h("b", bits.join("; ") || t("band change")) }
             ) : tp(
-              "Applied {what}. Reverting in {s} unless you keep it - watch the trace above.",
+              "Applied {what}. Reverting in {s} unless you keep it.",
               {
                 what: h("b", bits.join("; ") || t("band change")),
                 s: h("b", { staticClass: "mm-cd" }, String(p.remaining) + "s")
@@ -1226,6 +1305,7 @@ var __mm = (() => {
             this.revertButtons(h)
           ]),
           h("div", { staticClass: "mm-bar" }, [h("i", { staticStyle: { width: pct.toFixed(1) + "%" } })]),
+          this.renderBeforeNow(h),
           this.revertErrors(h)
         ]);
       }
@@ -1258,7 +1338,7 @@ var __mm = (() => {
         // Apply in flight
         applyError: "",
         resetNote: "",
-        // transient feedback from "Reset to default"
+        // transient feedback from "Apply defaults"
         resetTimer: null
         // handle clearing resetNote
       };
@@ -1471,7 +1551,7 @@ var __mm = (() => {
         return this.sendable("sa") && this.sel.sa.length === 0 || this.sendable("nsa") && this.sel.nsa.length === 0 || this.sendable("LTE") && this.sel.LTE.length === 0;
       },
       // opts.reset=true sends GL's default (filtering off + AUTO) instead of the
-      // grid — the "Reset to default" contract: press it and the modem is written,
+      // grid — the "Apply defaults" contract: press it and the modem is written,
       // so the result is never ambiguous. Still confirm-or-revert. Otherwise only
       // the changed groups + mode go out; the backend keeps the rest as-is.
       applyBands(opts) {
@@ -1797,18 +1877,18 @@ var __mm = (() => {
             if (this.changed("nsa")) parts.push(this.sel.nsa.length + " NSA");
             if (this.changed("LTE")) parts.push(this.sel.LTE.length + " LTE");
             if (this.nr5gChanged()) parts.push(t({ both: "5G SA + NSA", nsa: "5G NSA only", sa: "5G SA only" }[this.selNr5g]));
-            status = this.bandSlot != null ? t("{what} changed; stored for SIM {n}", { what: parts.join(" + "), n: this.bandSlot }) : t("{what} changed; applies with a 60s revert", { what: parts.join(" + ") });
+            status = this.bandSlot != null ? t("{what} changed; stored for SIM {n}", { what: parts.join(" + "), n: this.bandSlot }) : t("{what} changed; applies with a 60s revert", { what: parts.join(" + ") }) + " " + t("The link drops for a few seconds while the modem re-registers.");
           } else status = "No changes";
           footer.push(h("div", { staticClass: "mm-foot" }, [
             h("span", { staticClass: "mm-hint" }, [status]),
             h("span", { staticStyle: { display: "flex", gap: "6px" } }, [
               h("button", {
                 staticClass: "mm-btn",
-                attrs: { disabled: this.applying },
+                attrs: { disabled: this.applying, title: "Writes GL's default to the modem now: band filtering off + Auto mode (60s revert)" },
                 on: { click: function() {
                   self.resetDefault();
                 } }
-              }, "Reset to default"),
+              }, "Apply defaults"),
               h("button", {
                 staticClass: "mm-btn primary",
                 attrs: { disabled: !changed || this.applying || empty },
@@ -1915,6 +1995,9 @@ var __mm = (() => {
             return;
           }
           self.lockData = res;
+          var ls = res.last_scan;
+          if (ls && Array.isArray(ls.towers) && !self.scan.running && (ls.ts || 0) > (self.scan.ts || 0))
+            self.scan = { towers: ls.towers, running: false, error: "", ts: ls.ts || 0, slot: ls.slot != null ? Number(ls.slot) : null };
         }).catch(function(e) {
           if (seq === self.lockSeq) self.lockError = e && (e.type || e.message) || "request failed";
         }).then(function() {
@@ -2191,7 +2274,7 @@ var __mm = (() => {
               h(
                 "span",
                 { staticClass: "mm-hint", staticStyle: { color: "var(--warning-hover)" } },
-                t(target.rat === "5g" ? "Lock to PCI {pci}? Network mode switches to 5G-only until unlocked." : "Lock to PCI {pci}? Network mode switches to 4G-preferred until unlocked.", { pci: target.pci }) + (target.scsAssumed ? " " + t("SCS {scs} kHz is assumed from the band.", { scs: target.scs }) : "") + " " + t("Auto-reverts in 60s unless kept.")
+                t(target.rat === "5g" ? "Lock to PCI {pci}? Network mode switches to 5G-only until unlocked." : "Lock to PCI {pci}? Network mode switches to 4G-preferred until unlocked.", { pci: target.pci }) + (target.scsAssumed ? " " + t("SCS {scs} kHz is assumed from the band.", { scs: target.scs }) : "") + " " + t("Auto-reverts in 60s unless kept.") + " " + t("The link drops for a few seconds while the modem re-registers.")
               ),
               h("span", { staticStyle: { flex: "none", display: "flex", gap: "6px" } }, [
                 h("button", { staticClass: "mm-btn", on: { click: function() {
@@ -2242,11 +2325,7 @@ var __mm = (() => {
         var locked = this.lockData && ((this.lockData.lock.l5g || {}).locked || (this.lockData.lock.l4g || {}).locked);
         var head = h("div", { staticClass: "mm-grp-h" }, [
           h("span", { staticClass: "mm-grp-t" }, "Nearby cells"),
-          this.scan.ts ? h(
-            "span",
-            { staticClass: "mm-hint" },
-            t("scanned {n} min ago", { n: Math.max(1, Math.round((Date.now() - this.scan.ts) / 6e4)) })
-          ) : h("span", { staticClass: "mm-hint" }, "requires a scan")
+          this.scan.ts ? h("span", { staticClass: "mm-hint" }, this.scan.slot != null ? t("scanned {age} ago · SIM {slot}", { age: this.fmtAge(Math.max(60, (Date.now() - this.scan.ts) / 1e3)), slot: this.scan.slot }) : t("scanned {age} ago", { age: this.fmtAge(Math.max(60, (Date.now() - this.scan.ts) / 1e3)) })) : h("span", { staticClass: "mm-hint" }, "requires a scan")
         ]);
         var body;
         if (this.scan.running) {
@@ -3483,6 +3562,7 @@ var __mm = (() => {
             ]),
             h("div", { staticClass: "mm-plot" }, [
               h("svg", { attrs: { viewBox: "0 0 320 40", preserveAspectRatio: "none" } }, [
+                this.applyMark(h),
                 h("path", { attrs: {
                   d: this.tracePath(),
                   fill: "none",

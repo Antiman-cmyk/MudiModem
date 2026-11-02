@@ -187,7 +187,24 @@ function M.scan(args, cfg, event)
   local res = obj.result
   if type(res) ~= "table" then return { error = "scan failed: no result" } end
   if event then event("user", "Cell scan", "") end
-  return { towers = type(res.towers) == "table" and res.towers or {}, ts = os.time() * 1000, slot = slot }
+  local out = { towers = type(res.towers) == "table" and res.towers or {}, ts = os.time() * 1000, slot = slot }
+  M.keep_scan(out)
+  return out
+end
+
+-- The finished scan, kept in RAM (/tmp) so the 5-10 minutes offline it cost survive a reload or
+-- another browser: get_lock hands it back for the same SIM. Written whole, then renamed.
+function M.scan_file()
+  return os.getenv("MUDIMODEM_LAST_SCAN") or ((os.getenv("MUDIMODEM_HIST") or "/tmp/mudimodem") .. "/last-scan.json")
+end
+
+function M.keep_scan(scan)
+  local path = M.scan_file()
+  local f = io.open(path .. ".tmp", "w")
+  if not f then return false end
+  f:write(cjson.encode(scan))
+  f:close()
+  return os.rename(path .. ".tmp", path) and true or false
 end
 
 -- The plugin's append_event, for events the daemon now owns: one line in events.jsonl (others

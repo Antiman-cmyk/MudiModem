@@ -24,9 +24,18 @@ export default {
       this.clearCountdown();
       var w = window_s || 60;
       var end = Date.now() + w * 1000;
-      if (clock && typeof clock.deadline === "number" && typeof clock.now === "number")
+      // When the change went out, on the BOX clock (sample timestamps): the deadline minus the
+      // window when the box said so, else "now" corrected by the strip's box-clock offset.
+      var appliedBox = null;
+      if (clock && typeof clock.deadline === "number" && typeof clock.now === "number") {
         end = Date.now() + (clock.deadline - clock.now) * 1000;
+        appliedBox = (clock.deadline - w) * 1000;
+      } else if (this.histNow) appliedBox = Date.now() + (this.histNow - this.histNowAt);
+      // The radio picture just before the change: the router's own record (the pending file's
+      // BEFORE), else the last sample this page saw.
+      var before = (clock && clock.before) || this.pictureOf(this.serving);
       this.pending = { kind: kind || "bands", window: w, applied: applied, done: false, end: end,
+                       appliedBox: appliedBox, before: before,
                        remaining: Math.max(0, Math.ceil((end - Date.now()) / 1000)),
                        keeping: false, reverting: false, expiring: false, keepError: "", revertError: "" };
       this.cdTimer = setInterval(function () {
@@ -93,7 +102,7 @@ export default {
           if (p && !p.done && p.end != null) return;          // already counting down
           if (typeof q.deadline === "number")
             self.startCountdown(q.window || 60, q.applied || (p && p.applied) || {}, q.kind,
-                                { deadline: q.deadline, now: res.now });
+                                { deadline: q.deadline, now: res.now, before: q.before });
           else if (!p)                                          // pending from an older version: no timer
             self.pending = { kind: q.kind, applied: q.applied || {}, uncertain: true, window: 60, remaining: 60 };
         } else if (p && p.uncertain) {
@@ -151,6 +160,35 @@ export default {
           self.patchPending({ reverting: false, revertError: t("Couldn't reach the router to revert ({err}). The auto-revert is still armed.",
             { err: (e && (e.type || e.message)) || "error" }) });
         });
+    },
+
+    // A sample reduced to what the banner compares: {t, registered, rat, band, pci, rsrp, sinr},
+    // or null when there is none. Same shape as the router's BEFORE record.
+    pictureOf(s) {
+      if (!s || !s.t) return null;
+      var num = function (v) { return (v === null || v === undefined || v === "" || isNaN(Number(v))) ? undefined : Number(v); };
+      return { t: s.t, registered: num(s.rsrp) !== undefined, rat: s.pcc_rat || s.mode, mode: s.mode,
+               band: num(s.band), pci: num(s.pci), rsrp: num(s.rsrp), sinr: num(s.sinr) };
+    },
+
+    pictureText(x) {
+      if (!x.registered) return t("no service");
+      return [this.formatBand(x.rat, x.band), x.rsrp !== undefined ? "RSRP " + x.rsrp : "",
+              x.sinr !== undefined ? "SINR " + x.sinr : "", x.pci !== undefined ? "PCI " + x.pci : ""]
+        .filter(function (v) { return v && v !== "—"; }).join(" · ");
+    },
+
+    // "Before n71 · RSRP -99 · SINR 4 → now B66 · RSRP -105 · SINR 2": the change's effect in one
+    // line, so judging Keep vs Revert needs no reading of the trace. "Now" is a sample taken
+    // AFTER the change went out (until one arrives, the line says so).
+    renderBeforeNow(h) {
+      var p = this.pending, before = p.before;
+      var s = this.serving, live = (s && s.t && !s.stale && (p.appliedBox == null || s.t > p.appliedBox))
+        ? this.pictureOf(s) : null;
+      var now = live ? this.pictureText(live) : t("waiting for the next sample...");
+      return h("div", { staticClass: "mm-hint mm-beforenow", staticStyle: { marginTop: "6px" } },
+        before ? tp("Before {b}  →  now {n}", { b: h("b", this.pictureText(before)), n: h("b", now) })
+               : tp("Now {n}", { n: h("b", now) }));
     },
 
     // Confirm-or-revert banner: page-wide, above the tab bar (render in index.js).
@@ -229,12 +267,13 @@ export default {
           h("span", p.expiring
             ? tp("Applied {what}. Time's up - the auto-revert is restoring your previous settings...",
                  { what: h("b", bits.join("; ") || t("band change")) })
-            : tp("Applied {what}. Reverting in {s} unless you keep it - watch the trace above.",
+            : tp("Applied {what}. Reverting in {s} unless you keep it.",
                  { what: h("b", bits.join("; ") || t("band change")),
                    s: h("b", { staticClass: "mm-cd" }, String(p.remaining) + "s") })),
           this.revertButtons(h)
         ]),
         h("div", { staticClass: "mm-bar" }, [h("i", { staticStyle: { width: pct.toFixed(1) + "%" } })]),
+        this.renderBeforeNow(h),
         this.revertErrors(h)
       ]);
     },

@@ -411,6 +411,32 @@ assert(st.pending.kind == "bands" and st.pending.deadline == r.deadline and st.p
 assert(st.pending.applied and st.pending.applied.sa == r.applied.sa, "change_status must return what was applied")
 print("  ok  - deadline + applied survive a page reload (change_status)")
 
+-- 9b. The radio picture just before the change is recorded with it (the banner's "before"):
+--     from the collector's fresh sample of the same slot only.
+do
+  local lp = assert(os.getenv("MUDIMODEM_LATEST"), "runner sets MUDIMODEM_LATEST")
+  local function latest(slot, age)
+    local lf = assert(io.open(lp, "w"))
+    lf:write(string.format('{"t":%.0f,"slot":%d,"mode":"NR5G-SA","pcc_rat":"NR5G-SA","band":71,"pci":516,'
+      .. '"rsrp":-99,"sinr":4,"rsrq":-13,"carrier":"T-Mobile \'x\'"}', (os.time() - age) * 1000, slot))
+    lf:close()
+  end
+  reset(); latest(1, 5)
+  r = M.set_bands({ sa = { 78 } })
+  assert(r.ok and type(r.before) == "table", "set_bands must answer with the before-picture")
+  assert(r.before.rsrp == -99 and r.before.sinr == 4 and r.before.band == 71 and r.before.pci == 516
+         and r.before.rat == "NR5G-SA" and r.before.registered == true, "before-picture fields")
+  assert(pget("BEFORE"), "pending file must carry BEFORE")
+  assert(M.change_status({}).pending.before.rsrp == -99, "change_status must return the before-picture")
+  reset(); latest(2, 5)
+  assert(M.set_bands({ sa = { 78 } }).before == nil, "another SIM's sample is not this change's before")
+  reset(); latest(1, 300)
+  assert(M.set_bands({ sa = { 78 } }).before == nil, "a stale sample is not a before-picture")
+  os.remove(lp)
+  reset()
+end
+print("  ok  - the before-picture rides with the pending change (same slot, fresh sample only)")
+
 -- 10. Keep after the watchdog already reverted: say so, log no "Kept".
 local f2 = io.open(PENDING, "r"); if f2 then f2:close(); os.remove(PENDING) end
 local hist = os.getenv("MUDIMODEM_HIST")

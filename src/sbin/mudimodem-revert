@@ -43,6 +43,7 @@
 # Pending file (key=value, sourced by sh):
 #   KIND=bands  SLOT=<n>  SUB_ID=<n>  PREV_BAND_CONFIG='<json: get_band_config snapshot>'
 #   KIND=cell   SLOT=<n>  SUB_ID=<n>  RAT=4g|5g  PREV_SAVE_CTRL=  PREV_mode_pref=  PREV_nr5g_disable_mode=
+#   plus the page's own DEADLINE=<epoch s>  APPLIED='<json>'  BEFORE='<json>' (unused here)
 #
 # Env overrides:
 #   MUDIMODEM_SUB_ID="<n> [<n>]"  sub_ids for panic's AT clears (default "1 2":

@@ -250,6 +250,24 @@ export default {
       return this.stripRsrpDomain(this.stripPoints().map(function (p) { return p.v; }));
     },
 
+    // x (0..320) of a BOX-clock instant on the strip, or null when it is outside the window.
+    stripX(tBox) {
+      if (tBox == null) return null;
+      var span = this.STRIP_MIN * 60000, end = this.stripEnd(), start = end - span;
+      if (tBox < start || tBox > end) return null;
+      return ((tBox - start) / span) * 320;
+    },
+
+    // The pending change's moment on the trace: a dashed line, so "did it get better after
+    // this?" is answered where the eye already is.
+    applyMark(h) {
+      var p = this.pending;
+      var x = (p && !p.done) ? this.stripX(p.appliedBox) : null;
+      if (x == null) return null;
+      return h("line", { attrs: { x1: x.toFixed(1), x2: x.toFixed(1), y1: "0", y2: "40", stroke: "var(--warning)",
+        "stroke-width": "1", "stroke-dasharray": "3 2", "vector-effect": "non-scaling-stroke" } });
+    },
+
     tracePath() {
       var pts = this.stripPoints();
       return pts.length >= 2 ? this.tracePathTimed(pts) : "";

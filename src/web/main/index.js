@@ -227,6 +227,7 @@ export default localize(compose({
           ]),
           h("div", { staticClass: "mm-plot" }, [
             h("svg", { attrs: { viewBox: "0 0 320 40", preserveAspectRatio: "none" } }, [
+              this.applyMark(h),
               h("path", { attrs: {
                 d: this.tracePath(), fill: "none", stroke: rsrpColor,
                 "stroke-width": "1.75", "stroke-linejoin": "round", "stroke-linecap": "round"

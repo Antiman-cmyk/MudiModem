@@ -16,7 +16,7 @@ export default {
       storedNote: "",       // the note shown after a standby write
       applying: false,      // Apply in flight
       applyError: "",
-      resetNote: "",        // transient feedback from "Reset to default"
+      resetNote: "",        // transient feedback from "Apply defaults"
       resetTimer: null,     // handle clearing resetNote
     };
   },
@@ -241,7 +241,7 @@ export default {
     },
 
     // opts.reset=true sends GL's default (filtering off + AUTO) instead of the
-    // grid — the "Reset to default" contract: press it and the modem is written,
+    // grid — the "Apply defaults" contract: press it and the modem is written,
     // so the result is never ambiguous. Still confirm-or-revert. Otherwise only
     // the changed groups + mode go out; the backend keeps the rest as-is.
     applyBands(opts) {
@@ -548,16 +548,17 @@ export default {
           if (this.nr5gChanged()) parts.push(t({ both: "5G SA + NSA", nsa: "5G NSA only", sa: "5G SA only" }[this.selNr5g]));
           status = this.bandSlot != null
             ? t("{what} changed; stored for SIM {n}", { what: parts.join(" + "), n: this.bandSlot })
-            : t("{what} changed; applies with a 60s revert", { what: parts.join(" + ") });
+            : t("{what} changed; applies with a 60s revert", { what: parts.join(" + ") }) + " " +
+              t("The link drops for a few seconds while the modem re-registers.");
         } else status = "No changes";
         footer.push(h("div", { staticClass: "mm-foot" }, [
           h("span", { staticClass: "mm-hint" }, [status]),
           h("span", { staticStyle: { display: "flex", gap: "6px" } }, [
             h("button", {
               staticClass: "mm-btn",
-              attrs: { disabled: this.applying },
+              attrs: { disabled: this.applying, title: "Writes GL's default to the modem now: band filtering off + Auto mode (60s revert)" },
               on: { click: function () { self.resetDefault(); } }
-            }, "Reset to default"),
+            }, "Apply defaults"),
             h("button", {
               staticClass: "mm-btn primary",
               attrs: { disabled: !changed || this.applying || empty },

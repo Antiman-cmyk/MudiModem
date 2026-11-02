@@ -31,6 +31,7 @@ local BUS        = "cpu"                      -- the built-in modem's bus
 -- pending state. samples.jsonl is written by mudimodem-collectd; events.jsonl by
 -- us (user events) + the watchdog (dog events). get_history serves both.
 local HIST_DIR   = os.getenv("MUDIMODEM_HIST") or "/tmp/mudimodem"
+local LAST_SCAN  = os.getenv("MUDIMODEM_LAST_SCAN") or (HIST_DIR .. "/last-scan.json")   -- mudimodemd tasks.keep_scan
 local SAMPLES    = HIST_DIR .. "/samples.jsonl"
 local EVENTS     = HIST_DIR .. "/events.jsonl"
 local BATTERY    = HIST_DIR .. "/battery.jsonl"
@@ -198,25 +199,29 @@ end
 local WINDOW = tonumber(os.getenv("MUDIMODEM_WINDOW") or "") or 60
 
 -- Lines that let a page restore its countdown after a reload / on another tab: when the
--- watchdog fires (box clock) and what the page showed as applied. The pending file is
--- sourced by sh, so the JSON is single-quoted and must not contain a single quote itself.
-local function pending_meta(applied)
-  local js = cjson.encode(applied or {}):gsub("'", "")
-  return { "DEADLINE=" .. tostring(os.time() + WINDOW), "APPLIED='" .. js .. "'" }
+-- watchdog fires (box clock), what the page showed as applied, and the radio picture just
+-- before the change (the banner compares it with the live one). The pending file is sourced
+-- by sh, so each JSON is single-quoted and must not contain a single quote itself.
+local function pending_meta(applied, before)
+  local lines = { "DEADLINE=" .. tostring(os.time() + WINDOW),
+                  "APPLIED='" .. cjson.encode(applied or {}):gsub("'", "") .. "'" }
+  if type(before) == "table" then lines[#lines + 1] = "BEFORE='" .. cjson.encode(before):gsub("'", "") .. "'" end
+  return lines
 end
 
 -- The pending change as the page needs it, or nil. Shared by change_status, confirm and the
 -- write paths' answers.
 local function pending_info()
   if not file_exists(PENDING) then return nil end
-  local applied
-  local raw = pending_get("APPLIED")
-  if raw then
+  local function decoded(key)
+    local raw = pending_get(key)
+    if not raw then return nil end
     local ok, v = pcall(cjson.decode, raw)      -- pure C decode; cannot yield
-    if ok and type(v) == "table" then applied = v end
+    return (ok and type(v) == "table") and v or nil
   end
   return { kind = pending_get("KIND") or "bands", slot = tonumber(pending_get("SLOT") or ""),
-           deadline = tonumber(pending_get("DEADLINE") or ""), applied = applied, window = WINDOW }
+           deadline = tonumber(pending_get("DEADLINE") or ""), applied = decoded("APPLIED"),
+           before = decoded("BEFORE"), window = WINDOW }
 end
 
 -- The collector's newest sample (cellular_compat schema) when it is fresh,
@@ -231,6 +236,17 @@ local function read_latest(max_age_s)
   if not ok or type(obj) ~= "table" or type(obj.t) ~= "number" then return nil end
   if os.time() - obj.t / 1000 > (max_age_s or 30) then return nil end
   return obj
+end
+
+-- The radio picture just before a change, for the confirm banner's "before -> now": the
+-- collector's sample of THIS slot if it is under a minute old, else nil (the page then shows
+-- the live picture alone). Numbers and the RAT only; nil fields are left out.
+local function before_snapshot(slot)
+  local s = read_latest(60)
+  if not s or tonumber(nn(s.slot)) ~= slot then return nil end
+  return { t = nn(s.t), registered = nn(s.rsrp) ~= nil, rat = nn(s.pcc_rat) or nn(s.mode), mode = nn(s.mode),
+           band = tonumber(nn(s.band)), pci = tonumber(nn(s.pci)), rsrp = tonumber(nn(s.rsrp)),
+           sinr = tonumber(nn(s.sinr)), rsrq = tonumber(nn(s.rsrq)) }
 end
 
 -- The built-in modem's object out of `cellular.modem status/info` called WITHOUT
@@ -734,8 +750,21 @@ local function serving_from_sample(latest)
            band = tonumber(nn(latest.band)), source = "collector" }
 end
 
+-- The last scan mudimodemd finished, if it was for `slot`: {towers, ts, slot}, else nil. A scan
+-- of the other SIM describes cells this one may not even see.
+local function last_scan(slot)
+  local f = io.open(LAST_SCAN, "r")
+  if not f then return nil end
+  local body = f:read("*a") or ""
+  f:close()
+  local ok, obj = pcall(cjson.decode, body)          -- pure C decode; cannot yield
+  if not ok or type(obj) ~= "table" or type(obj.towers) ~= "table" then return nil end
+  if tonumber(obj.slot) ~= slot then return nil end
+  return obj
+end
+
 -- READ: cell-lock picture — modem truth (QNWLOCK), GL's store (get_cell_tower),
--- the serving cell (lock target for pin-current), and stale/pending flags.
+-- the serving cell (lock target for pin-current), the last scan of this SIM, and stale/pending flags.
 function M.get_lock(args)
   local sub_id, plmn, matched, slot = resolve_active()
   -- Same rule as every other resolve_active() caller: with no active slot
@@ -772,6 +801,7 @@ function M.get_lock(args)
     stale = (gl_locked and not modem_locked),
     pending_kind = pending_get("KIND") or (file_exists(PENDING) and "bands" or nil),
     operator_config = opcfg,
+    last_scan = last_scan(slot),
     meta = { sub_id = sub_id, slot = slot, plmn = plmn, plmn_matched = matched },
   }
 end
@@ -863,7 +893,7 @@ function M.set_cell_lock(args)
     "PREV_SAVE_CTRL=" .. ((sc and sc.raw) or ""),
     "PREV_mode_pref=" .. pmode,
     "PREV_nr5g_disable_mode=" .. pdis,
-    table.concat(pending_meta({ rat = rat, pci = pci, freq = freq, scs = scs, band = band }), "\n"),
+    table.concat(pending_meta({ rat = rat, pci = pci, freq = freq, scs = scs, band = band }, before_snapshot(slot)), "\n"),
   }, "\n") .. "\n")
   f:close()
 
@@ -894,6 +924,7 @@ function M.set_cell_lock(args)
     rat .. " pci " .. pci .. " freq " .. freq .. (band and (" band " .. band) or ""))
   local pend = pending_info()
   return { ok = true, window = WINDOW, sub_id = sub_id, now = os.time(), deadline = pend and pend.deadline,
+           before = pend and pend.before,
            applied = { rat = rat, pci = pci, freq = freq, scs = scs, band = band } }
 end
 
@@ -1130,7 +1161,7 @@ function M.set_bands(args)
     "KIND=bands", "SLOT=" .. tostring(slot),
     "PREV_BAND_CONFIG='" .. cjson.encode(prev_payload) .. "'",
     "APPLIED_BAND_CONFIG='" .. cjson.encode(payload) .. "'",
-    table.concat(pending_meta(applied), "\n"),
+    table.concat(pending_meta(applied, before_snapshot(slot)), "\n"),
   }, "\n") .. "\n")
   f:close()
 
@@ -1159,7 +1190,7 @@ function M.set_bands(args)
 
   local pend = pending_info()
   return { ok = true, window = WINDOW, applied = applied, slot = slot, now = os.time(),
-           deadline = pend and pend.deadline }
+           deadline = pend and pend.deadline, before = pend and pend.before }
 end
 
 -- READ: the recorded history (samples + user/dog events) for the Tracking page.

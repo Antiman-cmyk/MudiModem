@@ -768,6 +768,10 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         self.assertEqual(len(seen), 1, "one AT+QSCAN, not two")
         self.assertEqual(seen[0]["glinet"], "1")
         self.assertEqual(seen[0]["body"]["params"], ["", "modem", "scan_cell_tower", {"bus": "cpu", "slot": 2}])
+        # kept for get_lock: a reload or another browser gets this scan back
+        with open(os.path.join(env["MUDIMODEM_HIST"], "last-scan.json")) as f:
+            kept = json.load(f)
+        self.assertEqual((kept["towers"], kept["slot"], kept["ts"]), (towers, 2, r["ts"]))
         ev = jsonl(os.path.join(env["MUDIMODEM_HIST"], "events.jsonl"))
         self.assertEqual([(e["kind"], e["label"]) for e in ev], [("user", "Cell scan")])
         self.assertEqual([n["data"]["label"] for n in jsonl(os.path.join(bus, "notify.jsonl"))
@@ -783,6 +787,8 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         self.wait_health(bus)
         self.assertEqual(self.job(bus, "scan", {"slot": 1}).get("error"), "scan failed: 20002044")
         self.assertEqual(len(jsonl(os.path.join(env["MUDIMODEM_HIST"], "events.jsonl"))), 1)
+        with open(os.path.join(env["MUDIMODEM_HIST"], "last-scan.json")) as f:
+            self.assertEqual(json.load(f)["slot"], 2, "a refused scan keeps the last good one")
         p.send_signal(signal.SIGTERM); p.wait(timeout=20)
 
     def test_eco_health_and_single_instance(self):

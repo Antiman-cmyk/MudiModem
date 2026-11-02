@@ -35,7 +35,7 @@ test("t / tp / tr / localize", async () => {
     assert.strictEqual(i18n.t("Scan failed: {err}", { err: "x" }), "扫描失败：x");
     assert.strictEqual(i18n.tr("  Apply "), "  应用 ", "padding around a static string survives");
     assert.strictEqual(i18n.t("no such key {a}", { a: 1 }), "no such key 1", "untranslated stays English");
-    const parts = i18n.tp("Applied {what}. Reverting in {s} unless you keep it - watch the trace above.", { what: { b: 1 }, s: { b: 2 } });
+    const parts = i18n.tp("Applied {what}. Reverting in {s} unless you keep it.", { what: { b: 1 }, s: { b: 2 } });
     assert.ok(parts.some((p) => p && p.b === 1) && parts.some((p) => p && p.b === 2), "VNode parts kept");
     assert.ok(parts.some((p) => typeof p === "string" && p.includes("已应用")), "text around them translated");
     for (const [l, want] of [["zh", "zh-cn"], ["zh-Hans-CN", "zh-cn"], ["zh-TW", "zh-tw"], ["de", "de"]]) {

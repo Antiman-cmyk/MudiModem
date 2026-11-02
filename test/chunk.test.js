@@ -1026,6 +1026,60 @@ test('a change pending on the box is restored on load, counting to the BOX deadl
   } finally { unstubRpc(); }
 });
 
+test('the banner compares the picture before the change with a sample taken after it', async () => {
+  // box clock: the change went out at 1700000000 - 1 s (deadline - window); SAMPLE.t is after it
+  const before = { t: 1699999990000, registered: true, rat: 'NR5G-SA', band: 41, pci: 7, rsrp: -92, sinr: 9 };
+  const calls = stubRpc([{ now: 1699999999, pending: { kind: 'bands', deadline: 1700000059, window: 60,
+                                                       applied: { sa: '71' }, before } }]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.restoreChange(0);
+    await tick(); await tick();
+    assert.deepEqual(vm.pending.before, before, "the router's BEFORE record, kept across a reload");
+    assert.equal(vm.pending.appliedBox, 1699999999000);
+    const text = textOf(c.render.call(vm, h));
+    assert.match(text, /Before n41 · RSRP -92 · SINR 9 · PCI 7\s+→\s+now n71 · RSRP -101 · SINR 4 · PCI 516/);
+    // the strip marks the moment of the change
+    vm.histNow = 1700000000000; vm.histNowAt = Date.now();
+    const marks = walk(c.render.call(vm, h)).filter((n) => n.tag === 'line');
+    assert.equal(marks.length, 1, 'one apply mark on the strip');
+    vm.clearCountdown();
+  } finally { unstubRpc(); }
+});
+
+test('the banner waits for a sample after the change, and says "no service" plainly', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, LIVE);
+  vm.startCountdown(60, { sa: '71' }, 'bands', { now: 1700000005, deadline: 1700000065,
+    before: { registered: false } });
+  let text = textOf(c.render.call(vm, h));
+  assert.match(text, /Before no service\s+→\s+now waiting for the next sample/, 'SAMPLE.t predates the change');
+  vm.clearCountdown();
+  // no router record: the page's own last sample stands in for "before"
+  const vm2 = makeVm(c, LIVE);
+  vm2.startCountdown(60, { sa: '71' }, 'bands');
+  assert.equal(vm2.pending.before.rsrp, -101);
+  vm2.clearCountdown();
+});
+
+test('lock tab: the scan the router kept comes back with its age and SIM', async () => {
+  const kept = { towers: [{ pci: 101, freq: 627264, network_type: '5G SA', band: 78, scs: 30, rsrp: -90 }],
+                 ts: Date.now() - 12 * 60000, slot: 1 };
+  stubRpc([Object.assign(JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED)), { last_scan: kept })]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.tab = 'lock';
+    vm.fetchLock();
+    await tick(); await tick();
+    assert.equal(vm.scan.towers.length, 1, 'kept scan restored');
+    const text = textOf(c.render.call(vm, h));
+    assert.match(text, /scanned 12 min ago · SIM 1/);
+    assert.match(text, /PCI 101/);
+  } finally { unstubRpc(); }
+});
+
 test('Keep that arrives after the watchdog reverted says "too late" instead of "kept"', async () => {
   stubRpc([{ ok: false, was_pending: false, error: 'nothing to keep' }, {}]);
   try {

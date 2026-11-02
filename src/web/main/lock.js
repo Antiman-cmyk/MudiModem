@@ -74,6 +74,11 @@ export default {
           // and say why instead of rendering the error object as a lock state.
           if (!res || res.error) { self.lockError = (res && res.error) || "request failed"; return; }
           self.lockData = res;
+          // The router keeps the last scan of this SIM: a reload or another browser gets it back
+          // instead of paying another 5-10 minutes offline. A newer one already here wins.
+          var ls = res.last_scan;
+          if (ls && Array.isArray(ls.towers) && !self.scan.running && (ls.ts || 0) > (self.scan.ts || 0))
+            self.scan = { towers: ls.towers, running: false, error: "", ts: ls.ts || 0, slot: ls.slot != null ? Number(ls.slot) : null };
         })
         .catch(function (e) { if (seq === self.lockSeq) self.lockError = (e && (e.type || e.message)) || "request failed"; })
         .then(function () { if (seq === self.lockSeq) self.lockLoading = false; });
@@ -332,7 +337,7 @@ export default {
                 ? "Lock to PCI {pci}? Network mode switches to 5G-only until unlocked."
                 : "Lock to PCI {pci}? Network mode switches to 4G-preferred until unlocked.", { pci: target.pci }) +
               (target.scsAssumed ? " " + T("SCS {scs} kHz is assumed from the band.", { scs: target.scs }) : "") +
-              " " + T("Auto-reverts in 60s unless kept.")),
+              " " + T("Auto-reverts in 60s unless kept.") + " " + T("The link drops for a few seconds while the modem re-registers.")),
             h("span", { staticStyle: { flex: "none", display: "flex", gap: "6px" } }, [
               h("button", { staticClass: "mm-btn", on: { click: function () { self.lockConfirm = null; } } }, "Cancel"),
               h("button", {
@@ -375,8 +380,9 @@ export default {
       var head = h("div", { staticClass: "mm-grp-h" }, [
         h("span", { staticClass: "mm-grp-t" }, "Nearby cells"),
         this.scan.ts
-          ? h("span", { staticClass: "mm-hint" },
-              T("scanned {n} min ago", { n: Math.max(1, Math.round((Date.now() - this.scan.ts) / 60000)) }))
+          ? h("span", { staticClass: "mm-hint" }, this.scan.slot != null
+              ? T("scanned {age} ago · SIM {slot}", { age: this.fmtAge(Math.max(60, (Date.now() - this.scan.ts) / 1000)), slot: this.scan.slot })
+              : T("scanned {age} ago", { age: this.fmtAge(Math.max(60, (Date.now() - this.scan.ts) / 1000)) }))
           : h("span", { staticClass: "mm-hint" }, "requires a scan")
       ]);
       var body;
