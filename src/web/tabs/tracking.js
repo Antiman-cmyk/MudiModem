@@ -17,6 +17,8 @@
 // The middle bus is CELL ID + ARFCN (4.10 collector samples also carry PCI) — over
 // ubus. Metrics arrive as numbers already (parsed by the collector); _level
 // buckets drive the GL quality ramp. All colour is GL theme tokens.
+import { rpcSilent } from "../kit/rpc.js";
+import { hhmm } from "../kit/fmt.js";
 export default (function () {
   "use strict";
 
@@ -173,16 +175,7 @@ export default (function () {
       // background poll on a flaky cellular link (GL exempts only its own "alive"
       // heartbeat). We handle the envelope ourselves and fail silently: a bad
       // poll just retries next tick. Returns the result object, or null.
-      rpcSilent: function (method, params) {
-        if (typeof window === "undefined" || !window.$axios) return Promise.resolve(null);
-        var sid = (window.$getCookie && window.$getCookie("Admin-Token")) || "";
-        return window.$axios.post("/rpc", {
-          jsonrpc: "2.0", id: 1, method: "call",
-          params: [sid, "mudimodem", method, params || {}]
-        }, { timeout: 20000 })
-          .then(function (r) { return (r && r.data && r.data.result) || null; })
-          .catch(function () { return null; });
-      },
+      rpcSilent: function (method, params, timeout) { return rpcSilent(method, params, timeout || 20000); },
       // opts = { window, since, merge }. Default (no opts) = the initial load:
       // fetch the visible window, replacing. A poll passes { since: lastT,
       // merge: true } to append just the new tail. Backfill (a wider range)
@@ -483,10 +476,7 @@ export default (function () {
         return ({ poor:"var(--error)", fair:"var(--warning)", good:"var(--secondary)",
           excellent:"var(--success)", none:"var(--text-hint)" })[q];
       },
-      clock: function (t) {
-        var d = new Date(t), p = function (n) { return (n < 10 ? "0" : "") + n; };
-        return p(d.getHours()) + ":" + p(d.getMinutes());
-      },
+      clock: function (t) { return hhmm(t); },
       freqOf: function (b) { return FREQ_N[b]; },
       // The PRIMARY carrier's own RAT — "LTE" for an NSA anchor, while `mode`
       // is the cell's (NR5G-NSA). Same rule as the parent's servingRat():

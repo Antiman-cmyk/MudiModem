@@ -24,6 +24,33 @@ var __mm = (() => {
   __export(tracking_exports, {
     default: () => tracking_default
   });
+
+  // src/web/kit/rpc.js
+  function rpcSilent(method, params, timeoutMs) {
+    if (typeof window === "undefined" || !window.$axios || !window.$axios.post) return Promise.resolve(null);
+    var sid = window.$getCookie && window.$getCookie("Admin-Token") || "";
+    return window.$axios.post("/rpc", {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "call",
+      params: [sid, "mudimodem", method, params || {}]
+    }, { timeout: timeoutMs || 15e3 }).then(function(r) {
+      return r && r.data && r.data.result || null;
+    }).catch(function() {
+      return null;
+    });
+  }
+
+  // src/web/kit/fmt.js
+  function p2(n) {
+    return (n < 10 ? "0" : "") + n;
+  }
+  function hhmm(t) {
+    var d = new Date(t);
+    return p2(d.getHours()) + ":" + p2(d.getMinutes());
+  }
+
+  // src/web/tabs/tracking.js
   var tracking_default = function() {
     "use strict";
     var LINES = [
@@ -188,19 +215,8 @@ var __mm = (() => {
         // background poll on a flaky cellular link (GL exempts only its own "alive"
         // heartbeat). We handle the envelope ourselves and fail silently: a bad
         // poll just retries next tick. Returns the result object, or null.
-        rpcSilent: function(method, params) {
-          if (typeof window === "undefined" || !window.$axios) return Promise.resolve(null);
-          var sid = window.$getCookie && window.$getCookie("Admin-Token") || "";
-          return window.$axios.post("/rpc", {
-            jsonrpc: "2.0",
-            id: 1,
-            method: "call",
-            params: [sid, "mudimodem", method, params || {}]
-          }, { timeout: 2e4 }).then(function(r) {
-            return r && r.data && r.data.result || null;
-          }).catch(function() {
-            return null;
-          });
+        rpcSilent: function(method, params, timeout) {
+          return rpcSilent(method, params, timeout || 2e4);
         },
         // opts = { window, since, merge }. Default (no opts) = the initial load:
         // fetch the visible window, replacing. A poll passes { since: lastT,
@@ -513,10 +529,7 @@ var __mm = (() => {
           }[q];
         },
         clock: function(t) {
-          var d = new Date(t), p = function(n) {
-            return (n < 10 ? "0" : "") + n;
-          };
-          return p(d.getHours()) + ":" + p(d.getMinutes());
+          return hhmm(t);
         },
         freqOf: function(b) {
           return FREQ_N[b];

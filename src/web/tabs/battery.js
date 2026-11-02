@@ -23,6 +23,8 @@
 // partial-window stretch, per-lane value+observed range, richer hover readout
 // with sample dots, binary-search nearest sample, stale-fetch ignore, frozen
 // sample arrays. Data plane and chargeState model are unchanged.
+import { hasRpc, rpc, rpcSilent } from "../kit/rpc.js";
+import { hhmm } from "../kit/fmt.js";
 export default (function () {
   "use strict";
 
@@ -202,16 +204,7 @@ export default (function () {
       // so a dead /rpc showed "No battery history yet" forever). Silent to GL's
       // banner is NOT the same as silent to the user: the caller must treat a
       // `null` resolution as the failure it is. See fetchHistory.
-      rpcSilent: function (method, params) {
-        if (typeof window === "undefined" || !window.$axios) return Promise.resolve(null);
-        var sid = (window.$getCookie && window.$getCookie("Admin-Token")) || "";
-        return window.$axios.post("/rpc", {
-          jsonrpc: "2.0", id: 1, method: "call",
-          params: [sid, "mudimodem", method, params || {}]
-        }, { timeout: 20000 })
-          .then(function (r) { return (r && r.data && r.data.result) || null; })
-          .catch(function () { return null; });
-      },
+      rpcSilent: function (method, params, timeout) { return rpcSilent(method, params, timeout || 20000); },
 
       // opts = { window: <minutes>, since: <ms>, merge: <bool> }.
       // ⚠️ A window goes to the box as a DURATION (window_ms), never as a
@@ -382,9 +375,9 @@ export default (function () {
       clampDraft: function (v) { return Math.max(LIMIT_MIN, Math.min(LIMIT_MAX, v)); },
       fetchBattLimit: function () {
         var self = this;
-        if (typeof window === "undefined" || !window.$rpcRequest) return Promise.resolve();
+        if (!hasRpc()) return Promise.resolve();
         this.blFetchedAt = Date.now();
-        return window.$rpcRequest("call", ["sid", "mudimodem", "get_battlimit", {}], { timeout: 8000 })
+        return rpc("get_battlimit", {}, { timeout: 8000 })
           .then(function (r) {
             self.bl = r || null;
             if (r && typeof r.limit_gui === "number") self.blDraft = self.clampDraft(r.limit_gui);
@@ -422,7 +415,7 @@ export default (function () {
       },
       applyBattLimit: function (patch) {
         var self = this;
-        if (this.blBusy || typeof window === "undefined" || !window.$rpcRequest) return;
+        if (this.blBusy || !hasRpc()) return;
         var cur = this.bl || { enabled: false, limit_gui: 80 };
         var enabled = (patch && typeof patch.enabled === "boolean") ? patch.enabled : !!cur.enabled;
         var limit_gui = (patch && patch.limit_gui != null)
@@ -446,8 +439,8 @@ export default (function () {
           return;
         }
         this.blBusy = true; this.blErr = ""; this._blErrBg = false;
-        return window.$rpcRequest("call", ["sid", "mudimodem", "set_battlimit",
-          { enabled: enabled, limit_gui: limit_gui }], { timeout: 15000 })
+        return rpc("set_battlimit",
+          { enabled: enabled, limit_gui: limit_gui }, { timeout: 15000 })
           .then(function (r) {
             self.blBusy = false; self.blFetchedAt = Date.now();
             // An error payload without available/limit_gui must not wipe UI state.
@@ -882,10 +875,7 @@ export default (function () {
         return best;
       },
       nearestSample: function (m) { return this.nearestSampleIn(this.winSamples(), m); },
-      clock: function (t) {
-        var d = new Date(t), p = function (n) { return (n < 10 ? "0" : "") + n; };
-        return p(d.getHours()) + ":" + p(d.getMinutes());
-      },
+      clock: function (t) { return hhmm(t); },
       clockFull: function (t) {
         var d = new Date(t), p = function (n) { return (n < 10 ? "0" : "") + n; };
         return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());

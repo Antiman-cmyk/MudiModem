@@ -1,0 +1,480 @@
+// Bands tab: the three-layer band model (module / carrier policy / config), mode, Apply.
+import { rpc, hasRpc } from "../kit/rpc.js";
+export default {
+  data() {
+    return {
+      bands: null,          // get_bands result, once fetched
+      bandsLoading: false,
+      bandsSeq: 0,          // bumps per fetch; a reply from an older one is dropped
+      seenSlot: null,       // last real active slot (current_sim_slot) this page saw
+      bandsError: "",
+      sel: { sa: null, nsa: null, LTE: null },   // desired allowlists per editable RAT
+      selMode: null,        // desired network mode (AUTO | NR5G | LTE)
+      applying: false,      // Apply in flight
+      applyError: "",
+      resetNote: "",        // transient feedback from "Reset to default"
+      resetTimer: null,     // handle clearing resetNote
+    };
+  },
+  methods: {
+    // Fetch the three-layer band model from our backend.
+    // opts.light: after a cell-lock action only GL's store can have changed
+    // (network_mode, the tower badge) — policy/capability (2-3 AT reads) cannot
+    // — so ask for config+meta only (zero AT) and merge them into the model
+    // already held. Falls back to a full fetch when there is no model yet.
+    fetchBands(opts) {
+      var self = this;
+      var light = !!(opts && opts.light) && !!this.bands;
+      if (!hasRpc()) {
+        this.bandsError = "RPC helper unavailable";
+        return;
+      }
+      if (!light) { this.bandsLoading = true; this.bandsError = ""; }
+      this.clearResetNote();
+      var seq = ++this.bandsSeq;
+      rpc("get_bands", light ? { light: 1 } : {}, { timeout: 15000 })
+        .then(function (res) {
+          // A newer fetch (e.g. after a SIM switch) owns the model now.
+          if (seq !== self.bandsSeq) return;
+          // A soft error ({error}) RESOLVES through $rpcRequest (it only rejects
+          // on err_msg/err_code). Storing it as `bands` would make renderGroup
+          // dereference d.supported and throw — freezing the tab on the
+          // loading text with no message and no refresh button.
+          if (!res || res.error || !res.config) {   // a reply without a config is not a band model
+            if (!light) self.bandsError = (res && res.error) || "request failed";
+            return;
+          }
+          if (light) {
+            if (!self.bands) return;
+            self.bands.config = res.config;
+            self.bands.meta = Object.assign({}, self.bands.meta, res.meta);
+          } else {
+            self.bands = res;
+          }
+          // Seed each editable selection from the current config; an empty config
+          // means "unrestricted", so start from everything the carrier permits.
+          self.sel = { sa: self.seedFor("sa"), nsa: self.seedFor("nsa"), LTE: self.seedFor("LTE") };
+          self.selMode = (res.meta && res.meta.mode) || "AUTO";
+        })
+        .catch(function (e) {
+          if (seq !== self.bandsSeq) return;
+          if (!light) self.bandsError = (e && (e.type || e.message)) || "request failed";
+        })
+        .then(function () { if (!light && seq === self.bandsSeq) self.bandsLoading = false; });
+    },
+
+    seedFor(group) {
+      var cfg = (this.bands.config && this.bands.config[group]) || [];
+      var pol = (this.bands.policy && this.bands.policy[group]) || [];
+      return (cfg.length ? cfg : pol).slice();
+    },
+
+    // The interactive RATs (each maps to a set_bands arg).
+    interactive(group) { return group === "sa" || group === "nsa" || group === "LTE"; },
+
+    argKey(group) { return group === "LTE" ? "lte" : group; },   // set_bands arg name,
+
+    // Which RATs a given network mode actually enables (NSA needs an LTE anchor).
+    modeEnables(group, mode) {
+      if (group === "sa") return mode === "AUTO" || mode === "NR5G";
+      if (group === "nsa") return mode === "AUTO";
+      if (group === "LTE") return mode === "AUTO" || mode === "LTE";
+      return false;
+    },
+
+    ratActive(group) { return this.modeEnables(group, this.selMode); },
+
+    appliedMode() { return (this.bands && this.bands.meta && this.bands.meta.mode) || "AUTO"; },
+
+    // Would `mode` strand the active lock? Reuse the band-group RAT gate:
+    // a 4g lock needs LTE enabled, a 5g lock needs SA enabled.
+    modeStrands(mode) {
+      var lk = this.lockInfo();
+      if (!lk) return false;
+      return !this.modeEnables(lk.rat === "4g" ? "LTE" : "sa", mode);
+    },
+
+    lockConflict() { return this.modeStrands(this.appliedMode()); },
+
+    setMode(m) {
+      // Block moving INTO a mode that would strand the lock. The mode the modem
+      // is already in is exempt — we never auto-write it away; only a NEW
+      // stranding selection is refused (the banner tells the user how to fix it).
+      if (this.pending) return;
+      if (this.modeStrands(m) && m !== this.appliedMode()) return;
+      this.clearResetNote();
+      this.selMode = m;
+    },
+
+    modeChanged() { return this.bands && this.selMode !== ((this.bands.meta && this.bands.meta.mode) || "AUTO"); },
+
+    // Only policy-permitted bands are selectable; blocked ones never take.
+    selectable(group, b) {
+      if (!this.interactive(group) || !this.bands) return false;
+      return (this.bands.policy[group] || []).indexOf(b) !== -1;
+    },
+
+    isSelected(group, b) {
+      var s = this.sel[group];
+      return s && s.indexOf(b) !== -1;
+    },
+
+    toggleBand(group, b) {
+      if (this.pending || !this.sel[group]) return;   // locked during a pending revert
+      this.clearResetNote();
+      var i = this.sel[group].indexOf(b);
+      if (i === -1) this.sel[group].push(b); else this.sel[group].splice(i, 1);
+    },
+
+    selectAll(group) {
+      if (this.pending || !this.bands) return;
+      this.clearResetNote();
+      this.sel[group] = (this.bands.policy[group] || []).slice();   // all permitted
+    },
+
+    selectNone(group) {
+      if (this.pending) return;
+      this.clearResetNote();
+      this.sel[group] = [];
+    },
+
+    invertSel(group) {
+      if (this.pending || !this.bands) return;
+      this.clearResetNote();
+      var perm = this.bands.policy[group] || [], cur = this.sel[group] || [];
+      this.sel[group] = perm.filter(function (b) { return cur.indexOf(b) === -1; });
+    },
+
+    resetDefault() {
+      // GL's TRUE default: band filtering OFF + Auto mode (set_band_config
+      // {band_enable:false, network_mode:"AUTO"}) — not "every permitted band"
+      // re-listed. Always written, still through confirm-or-revert.
+      if (this.applying) return;
+      if (this.pending) return this.flashReset("A change is already pending - Keep or Revert it first.");
+      if (!this.bands) return this.flashReset("Bands haven't loaded yet - hit refresh.");
+      this.applyError = "";
+      this.applyBands({ reset: true });   // clears the note, so flash AFTER it
+      this.flashReset(this.bands.config && this.bands.config.enable === false && this.appliedMode() === "AUTO"
+        ? "Already at the default - re-sending 'filtering off + Auto' to the modem anyway."
+        : "Sending the default to the modem: band filtering off + Auto mode.");
+    },
+
+    // Transient one-line feedback under the Bands footer. Any later edit clears
+    // it, so the note never describes a state the user has since moved off.
+    flashReset(msg) {
+      var self = this;
+      this.clearResetNote();
+      this.resetNote = msg;
+      this.resetTimer = setTimeout(function () {
+        self.resetNote = ""; self.resetTimer = null;
+      }, 8000);
+    },
+
+    clearResetNote() {
+      if (this.resetTimer) { clearTimeout(this.resetTimer); this.resetTimer = null; }
+      this.resetNote = "";
+    },
+
+    changed(group) {
+      if (!this.bands || !this.sel[group]) return false;
+      var cur = this.seedFor(group).sort(function (a, b) { return a - b; });
+      var sel = this.sel[group].slice().sort(function (a, b) { return a - b; });
+      if (cur.length !== sel.length) return true;
+      for (var i = 0; i < cur.length; i++) if (cur[i] !== sel[i]) return true;
+      return false;
+    },
+
+    // A group edit that would actually be SENT: under 4G-only the NR groups are
+    // never sent (GL empties them in its store under LTE mode, so "applying"
+    // them would be a lie the countdown then repeats). They stay edited in the
+    // grid and go out once the mode includes them.
+    sendable(group) { return this.changed(group) && !(this.selMode === "LTE" && group !== "LTE"); },
+
+    changedAny() {
+      return this.sendable("sa") || this.sendable("nsa") || this.sendable("LTE") || this.modeChanged();
+    },
+
+    emptyChange() {
+      // an edited RAT with zero bands selected — not allowed (would drop the RAT)
+      return (this.sendable("sa") && this.sel.sa.length === 0) ||
+             (this.sendable("nsa") && this.sel.nsa.length === 0) ||
+             (this.sendable("LTE") && this.sel.LTE.length === 0);
+    },
+
+    // opts.reset=true sends GL's default (filtering off + AUTO) instead of the
+    // grid — the "Reset to default" contract: press it and the modem is written,
+    // so the result is never ambiguous. Still confirm-or-revert. Otherwise only
+    // the changed groups + mode go out; the backend keeps the rest as-is.
+    applyBands(opts) {
+      var self = this;
+      var reset = !!(opts && opts.reset);
+      if (this.applying || this.pending) return;
+      if (!reset && (!this.changedAny() || this.emptyChange())) return;
+      if (!hasRpc()) return;
+      var payload = {};
+      if (reset) payload.reset = true;
+      else {
+        var include = function (group, key) {
+          if (self.sendable(group)) payload[key] = (self.sel[group] || []).slice();
+        };
+        include("sa", "sa");
+        include("nsa", "nsa");
+        include("LTE", "lte");
+        if (this.modeChanged()) payload.mode = this.selMode;
+      }
+      var slot = this.slotOf(this.bands);
+      if (slot !== undefined) payload.slot = slot;
+      this.applying = true;
+      this.applyError = "";
+      this.clearResetNote();
+      rpc("set_bands", payload, { timeout: 20000 })
+        .then(function (res) {
+          if (!res || res.error) {
+            self.applyError = (res && res.error) || "apply failed";
+            if (self.onStaleSlot(res)) self.applyError = res.error;   // onSlotChange cleared it; keep the why
+            return;
+          }
+          self.startCountdown(res.window || 60, res.applied, "bands", res);
+        })
+        .catch(function (e) {
+          var t = e && (e.type || e.message);
+          // Auth/param errors mean nothing was written. Anything else (timeout,
+          // rpcCancel, network reset) is AMBIGUOUS: GL's set_band_config may
+          // re-register the modem and drop this very reply after the write took
+          // and the watchdog armed. Offer Keep/Revert without a false timer —
+          // confirm() on a non-pending state is a harmless no-op.
+          if (t === "invalidParams" || t === "accessDenied") { self.applyError = t; return; }
+          var a = { mode: payload.mode };
+          if (payload.reset) a.reset = true;
+          if (payload.sa) a.sa = payload.sa.join(":");
+          if (payload.nsa) a.nsa = payload.nsa.join(":");
+          if (payload.lte) a.lte = payload.lte.join(":");
+          self.clearCountdown();
+          self.pending = { kind: "bands", applied: a, uncertain: true, window: 60, remaining: 60 };
+          self.restoreChange(24);     // ~60 s: once the box answers, show the real countdown (or nothing)
+        })
+        .then(function () { self.applying = false; });
+    },
+
+    // Classify one band for the read-only groups: active / permitted / blocked.
+    bandState(group, b) {
+      var d = this.bands;
+      var has = function (list, x) { return (list || []).indexOf(x) !== -1; };
+      if (has(d.capability[group], b)) return "active";
+      if (has(d.policy[group], b)) return "permitted";
+      return "blocked";
+    },
+    // ---- strip trace, fed by mudimodem-collectd via get_history ----,
+
+    // ---- band grid render helpers ----
+    // sa + LTE are interactive (set_bands writes them); nsa stays read-only.
+    renderGroup(h, group, title) {
+      var self = this, d = this.bands;
+      var interactive = this.interactive(group);
+      var supported = (d.supported[group] || []).slice();
+      supported.sort(function (a, b) {
+        var fa = self.freqOf(group, a), fb = self.freqOf(group, b);
+        if (fa === undefined) fa = 1e9; if (fb === undefined) fb = 1e9;
+        return (fa - fb) || (a - b);
+      });
+      if (supported.length === 0) return null;
+      var pre = this.prefixOf(group);
+      var servingHere = {};
+      self.servingBands.forEach(function (sb) { if (sb.group === group) servingHere[sb.band] = sb.role; });
+      var chips = supported.map(function (b) {
+        var serving = servingHere[b] !== undefined;
+        var f = self.freqOf(group, b);
+        var cls, tip;
+        if (interactive) {
+          if (!self.selectable(group, b)) {
+            cls = "blocked"; tip = pre + b + " blocked by carrier policy; selecting has no effect";
+          } else if (self.isSelected(group, b)) {
+            cls = "sel"; tip = pre + b + " allowed (click to remove)";
+          } else {
+            cls = "unsel"; tip = pre + b + " permitted (click to allow)";
+          }
+        } else {
+          var st = self.bandState(group, b);
+          cls = st;
+          tip = pre + b + " " + ({ active: "in use", permitted: "permitted, not active", blocked: "blocked by carrier policy" })[st];
+        }
+        var clickable = interactive && cls !== "blocked" && !self.pending;
+        if (serving) tip += " — serving now (" + servingHere[b] + ")";
+        return h("span", {
+          key: b,
+          staticClass: "mm-band " + cls + (serving ? " serving" : "") + (clickable ? " clickable" : ""),
+          attrs: { title: tip },
+          on: clickable ? { click: function () { self.toggleBand(group, b); } } : {}
+        }, [h("b", pre + b), h("s", f ? String(f) : " ")]);
+      });
+      // per-group actions (interactive groups only): All / None / Invert
+      var actions = null;
+      if (interactive && !this.pending) {
+        var mkAct = function (label, fn) {
+          return h("button", { staticClass: "mm-act", on: { click: fn } }, label);
+        };
+        actions = h("span", { staticClass: "mm-acts" }, [
+          mkAct("All", function () { self.selectAll(group); }),
+          mkAct("None", function () { self.selectNone(group); }),
+          mkAct("Invert", function () { self.invertSel(group); })
+        ]);
+      }
+      var counts = (d.supported[group] || []).length + " supported / " +
+        (d.policy[group] || []).length + " permitted / " + (d.capability[group] || []).length + " active";
+      // Mode gate: if the selected mode doesn't enable this RAT, say so — the
+      // selections are inert until the mode includes it.
+      var gate = null;
+      if (interactive && !this.ratActive(group)) {
+        var need = group === "nsa" ? "Auto" : (group === "LTE" ? "Auto or 4G only" : "Auto or 5G only");
+        gate = h("div", { staticClass: "mm-gate" },
+          this.selMode === "LTE" && group !== "LTE"
+            ? "Off under " + this.selMode + " mode - 5G selections are not sent (GL clears them under 4G-only). Set mode to " + need + " to use them."
+            : "Off under " + this.selMode + " mode - these won't apply. Set mode to " + need + " to use them.");
+      }
+      return h("div", { staticClass: "mm-grp" + (gate ? " mm-grp-off" : ""), key: group }, [
+        h("div", { staticClass: "mm-grp-h" }, [
+          h("span", { staticClass: "mm-grp-t" }, title + (interactive ? "" : "  (read-only)")),
+          actions || h("span", { staticClass: "mm-hint" }, counts)
+        ]),
+        interactive ? h("div", { staticClass: "mm-hint", staticStyle: { margin: "-3px 0 6px" } }, counts) : null,
+        gate,
+        h("div", { staticClass: "mm-wrap" }, chips),
+        h("div", { staticClass: "mm-axis2" }, [
+          h("span", "low band, reaches far"),
+          h("span", "high band, fast + short range")
+        ])
+      ]);
+    },
+
+    // The network-mode selector (Auto / 5G only / 4G only).
+    renderMode(h) {
+      var self = this, cur = this.selMode;
+      var opts = [["AUTO", "Auto"], ["NR5G", "5G only"], ["LTE", "4G only"]];
+      return h("div", { staticClass: "mm-grp" }, [
+        h("div", { staticClass: "mm-grp-h" }, [
+          h("span", { staticClass: "mm-grp-t" }, "Network mode"),
+          this.modeChanged()
+            ? h("span", { staticClass: "mm-hint", staticStyle: { color: "var(--warning)" } }, "changed")
+            : h("span", { staticClass: "mm-hint" }, "which radios the modem may use")
+        ]),
+        h("div", { staticClass: "mm-seg" }, opts.map(function (o) {
+          // Block the mode that would strand an active cell lock — but never the
+          // mode the modem is already in (greying the current option reads as broken).
+          var blocked = self.modeStrands(o[0]) && o[0] !== self.appliedMode();
+          return h("button", {
+            key: o[0],
+            staticClass: "mm-seg-b" + (cur === o[0] ? " on" : ""),
+            attrs: {
+              disabled: !!self.pending || blocked,
+              title: blocked
+                ? ("Would strand your " + (self.lockInfo().rat === "4g" ? "LTE" : "5G") +
+                   " cell lock - clear the lock first")
+                : undefined
+            },
+            on: { click: function () { self.setMode(o[0]); } }
+          }, o[1]);
+        }))
+      ]);
+    },
+
+    renderBands(h) {
+      if (this.bandsLoading) return h("div", { staticClass: "mm-empty" }, "Reading band configuration from the modem...");
+      if (this.bandsError) return h("div", { staticClass: "mm-empty" }, "Couldn't read bands: " + this.bandsError);
+      if (!this.bands) return h("div", { staticClass: "mm-empty" }, "...");
+      var d = this.bands, self = this;
+      var groups = [
+        this.renderMode(h),
+        this.renderGroup(h, "sa", "5G NR standalone"),
+        this.renderGroup(h, "nsa", "5G NR non-standalone"),
+        this.renderGroup(h, "LTE", "LTE")
+      ].filter(Boolean);
+      var op = (d.meta && d.meta.plmn) ? d.meta.plmn : "carrier";
+      var warn = (d.meta && d.meta.plmn_matched === false)
+        ? h("div", { staticClass: "mm-hint", staticStyle: { color: "var(--warning)", marginTop: "2px" } },
+            "Couldn't confirm which SIM answered - values may be for the other slot")
+        : null;
+      // GL stores a network mode outside Auto/5G/4G (e.g. the LTE:NR5G a GL 4G
+      // tower lock leaves behind): shown as-is; a band-only apply passes it
+      // through untouched, only an explicit mode pick here replaces it.
+      var modeWarn = (d.meta && d.meta.mode_known === false)
+        ? h("div", { staticClass: "mm-hint", staticStyle: { color: "var(--warning)", marginTop: "2px" } },
+            "GL reports network mode \"" + d.meta.mode_raw + "\", which this panel doesn't offer - it stays as it is unless you pick a mode below.")
+        : null;
+      // Network-type lock conflict: the modem is cell-locked to a RAT the current
+      // mode excludes, so the lock can't take effect. Name the lock + the fix.
+      var lockWarn = this.lockConflict()
+        ? h("div", { staticClass: "mm-revert" }, [
+            h("div", { staticClass: "mm-revert-row", staticStyle: { display: "block", color: "var(--warning-hover)" } }, [
+              h("b", "⚠ Modem is cell-locked to " + this.lockLabel() + ", "),
+              "but network mode is " +
+                ({ NR5G: "5G only", LTE: "4G only", AUTO: "Auto" }[this.appliedMode()] || this.appliedMode()) +
+                " - the lock can't take effect. Set mode to " +
+                (this.lockInfo().rat === "4g" ? "Auto or 4G only" : "Auto or 5G only") +
+                ", or clear the lock on the Cell Lock tab."
+            ])
+          ])
+        : null;
+      var head = [
+        h("div", { staticStyle: { display: "flex", justifyContent: "space-between", alignItems: "baseline" } }, [
+          h("span", { staticClass: "mm-sect" }, "Bands"),
+          h("span", [
+            h("span", { staticClass: "mm-hint", staticStyle: { marginRight: "10px" } }, "carrier " + op),
+            h("button", {
+              staticClass: "mm-tab", staticStyle: { fontSize: "11.5px", padding: "2px 0", borderBottom: "0" },
+              attrs: { disabled: !!this.pending },
+              on: { click: function () { if (!self.pending) self.fetchBands(); } }
+            }, self.bandsLoading ? "refreshing..." : "refresh")
+          ])
+        ]),
+        h("div", { staticClass: "mm-hint", staticStyle: { margin: "3px 0 12px" } },
+          "Choose the network mode and which 5G/LTE bands the modem may use. Blocked bands are ones " +
+          "the module supports but your carrier forbids - they can't be selected because they never take."),
+        warn,
+        modeWarn,
+        lockWarn,
+        null   // the pending banner is page-wide (render), not per tab
+      ];
+      var footer = [];
+      if (!this.pending) {
+        var changed = this.changedAny();
+        var empty = this.emptyChange();
+        var status;
+        if (this.applyError) status = h("span", { staticStyle: { color: "var(--error)" } }, this.applyError);
+        else if (empty) status = h("span", { staticStyle: { color: "var(--error)" } }, "Each edited band group needs at least one band");
+        else if (changed) {
+          var parts = [];
+          if (this.modeChanged()) parts.push("mode -> " + this.selMode);
+          if (this.selMode === "LTE" && (this.changed("sa") || this.changed("nsa")))
+            parts.push("5G selections held back under 4G-only");
+          if (this.changed("sa")) parts.push(this.sel.sa.length + " SA");
+          if (this.changed("nsa")) parts.push(this.sel.nsa.length + " NSA");
+          if (this.changed("LTE")) parts.push(this.sel.LTE.length + " LTE");
+          status = parts.join(" + ") + " changed; applies with a 60s revert";
+        } else status = "No changes";
+        footer.push(h("div", { staticClass: "mm-foot" }, [
+          h("span", { staticClass: "mm-hint" }, [status]),
+          h("span", { staticStyle: { display: "flex", gap: "6px" } }, [
+            h("button", {
+              staticClass: "mm-btn",
+              attrs: { disabled: this.applying },
+              on: { click: function () { self.resetDefault(); } }
+            }, "Reset to default"),
+            h("button", {
+              staticClass: "mm-btn primary",
+              attrs: { disabled: !changed || this.applying || empty },
+              on: { click: function () { self.applyBands(); } }
+            }, this.applying ? "Applying..." : "Apply")
+          ])
+        ]));
+        if (this.resetNote) footer.push(h("div", { staticClass: "mm-note" }, this.resetNote));
+      }
+      var legend = [h("div", { staticClass: "mm-legend" }, [
+        h("span", [h("i", { staticStyle: { background: "var(--success)" } }), "allowed"]),
+        h("span", [h("i", { staticStyle: { background: "transparent", border: "1px solid var(--border)" } }), "permitted, not selected"]),
+        h("span", [h("i", { staticStyle: { background: "var(--text-hint)" } }), "blocked by policy"]),
+        h("span", "ring = serving now (every carrier: PCC + SCCs)")
+      ])];
+      return h("div", { staticClass: "mm-card" }, head.filter(Boolean).concat(groups).concat(footer).concat(legend));
+    },
+  }
+};

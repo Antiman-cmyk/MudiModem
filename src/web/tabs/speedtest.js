@@ -16,6 +16,8 @@
 // user-initiated calls (run, schedule save, clear) stay on $rpcRequest.
 //
 // Vue is runtime-only here too: render(h) only, never template:.
+import { hasRpc, rpc, rpcSilent } from "../kit/rpc.js";
+import { mdhm } from "../kit/fmt.js";
 export default (function () {
   "use strict";
 
@@ -130,22 +132,13 @@ export default (function () {
       },
       // User-initiated one-shots: a failure there is real, GL's banner is fine.
       rpc: function (method, params) {
-        if (typeof window === "undefined" || !window.$rpcRequest) return Promise.reject(new Error("RPC unavailable"));
-        return window.$rpcRequest("call", ["sid", "mudimodem", method, params || {}]);
+        if (!hasRpc()) return Promise.reject(new Error("RPC unavailable"));
+        return rpc(method, params || {});
       },
       // Background calls: POST to /rpc via $axios DIRECTLY. Resolves the
       // result, or null on ANY failure (it never rejects) — the caller treats
       // null as "try again next tick".
-      rpcSilent: function (method, params, timeout) {
-        if (typeof window === "undefined" || !window.$axios || !window.$axios.post) return Promise.resolve(null);
-        var sid = (window.$getCookie && window.$getCookie("Admin-Token")) || "";
-        return window.$axios.post("/rpc", {
-          jsonrpc: "2.0", id: 1, method: "call",
-          params: [sid, "mudimodem", method, params || {}]
-        }, { timeout: timeout || 8000 })
-          .then(function (r) { return (r && r.data && r.data.result) || null; })
-          .catch(function () { return null; });
-      },
+      rpcSilent: function (method, params, timeout) { return rpcSilent(method, params, timeout || 8000); },
       fetchInterfaces: function () {
         var self = this;
         this.rpc("get_speedtest_interfaces", {})
@@ -274,10 +267,7 @@ export default (function () {
           .then(function () { if (!self._dead) self.results = []; })
           .catch(function () { /* $rpcRequest already reported it */ });
       },
-      clock: function (t) {
-        var d = new Date(t), p = function (n) { return (n < 10 ? "0" : "") + n; };
-        return p(d.getMonth() + 1) + "/" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
-      },
+      clock: function (t) { return mdhm(t); },
 
       // ---- render ----
       renderControls: function (h) {

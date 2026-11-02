@@ -21,6 +21,7 @@
 // component — so anything that must outlive a tab switch (the transcript,
 // the command history, the once-per-page library status) lives in STORE,
 // bounded, not in the instance.
+import { hasRpc, rpc, rpcSilent } from "../kit/rpc.js";
 export default (function () {
   var HISTORY_MAX = 100;
   var STORE = {
@@ -155,16 +156,7 @@ export default (function () {
     // DIRECTLY. $rpcRequest's interceptor raises GL's global banner on any
     // failure — e.g. its own timeout while the router waits on GitHub — before
     // our .catch can run. Resolves the result, or null on any failure.
-    rpcSilent(method, params, timeout) {
-      if (typeof window === "undefined" || !window.$axios || !window.$axios.post) return Promise.resolve(null);
-      var sid = (window.$getCookie && window.$getCookie("Admin-Token")) || "";
-      return window.$axios.post("/rpc", {
-        jsonrpc: "2.0", id: 1, method: "call",
-        params: [sid, "mudimodem", method, params || {}]
-      }, { timeout: timeout || 15000 })
-        .then(function (r) { return (r && r.data && r.data.result) || null; })
-        .catch(function () { return null; });
-    },
+    rpcSilent(method, params, timeoutMs) { return rpcSilent(method, params, timeoutMs || 15000); },
     fetchLib() {
       var self = this;
       if (this.libLoading) return;
@@ -194,9 +186,9 @@ export default (function () {
     },
     refreshLibrary() {
       var self = this;
-      if (this.refreshing || typeof window === "undefined" || !window.$rpcRequest) return Promise.resolve();
+      if (this.refreshing || !hasRpc()) return Promise.resolve();
       this.refreshing = true; this.refreshMsg = "";
-      return window.$rpcRequest("call", ["sid", "mudimodem", "refresh_library", {}], { timeout: 30000 })
+      return rpc("refresh_library", {}, { timeout: 30000 })
         .then(function (r) {
           self.refreshing = false;
           if (r && r.ok) {
@@ -355,13 +347,13 @@ export default (function () {
       this.history.push(wire); this.histIdx = null;
       if (this.history.length > HISTORY_MAX) this.history.splice(0, this.history.length - HISTORY_MAX);
       this.decodeRows = null;
-      if (typeof window === "undefined" || !window.$rpcRequest) {
+      if (!hasRpc()) {
         this.push("err", "RPC unavailable"); return;
       }
       var TOOL_T = 8;   // per-step deadline; rpc timeout = TOOL_T*steps + 10 s
       this.sending = true;
-      return window.$rpcRequest("call", ["sid", "mudimodem", "at_console",
-                                         { cmd: wire, timeout: TOOL_T }],
+      return rpc("at_console",
+                                         { cmd: wire, timeout: TOOL_T },
                          { timeout: (TOOL_T * steps.length + 10) * 1000 })
         .then(function (r) {
           self.sending = false;

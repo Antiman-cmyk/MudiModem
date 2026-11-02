@@ -24,6 +24,39 @@ var __mm = (() => {
   __export(battery_exports, {
     default: () => battery_default
   });
+
+  // src/web/kit/rpc.js
+  function hasRpc() {
+    return typeof window !== "undefined" && !!window.$rpcRequest;
+  }
+  function rpc(method, params, opts) {
+    return window.$rpcRequest("call", ["sid", "mudimodem", method, params || {}], opts);
+  }
+  function rpcSilent(method, params, timeoutMs) {
+    if (typeof window === "undefined" || !window.$axios || !window.$axios.post) return Promise.resolve(null);
+    var sid = window.$getCookie && window.$getCookie("Admin-Token") || "";
+    return window.$axios.post("/rpc", {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "call",
+      params: [sid, "mudimodem", method, params || {}]
+    }, { timeout: timeoutMs || 15e3 }).then(function(r) {
+      return r && r.data && r.data.result || null;
+    }).catch(function() {
+      return null;
+    });
+  }
+
+  // src/web/kit/fmt.js
+  function p2(n) {
+    return (n < 10 ? "0" : "") + n;
+  }
+  function hhmm(t) {
+    var d = new Date(t);
+    return p2(d.getHours()) + ":" + p2(d.getMinutes());
+  }
+
+  // src/web/tabs/battery.js
   var battery_default = function() {
     "use strict";
     var LANES = [
@@ -217,19 +250,8 @@ var __mm = (() => {
         // so a dead /rpc showed "No battery history yet" forever). Silent to GL's
         // banner is NOT the same as silent to the user: the caller must treat a
         // `null` resolution as the failure it is. See fetchHistory.
-        rpcSilent: function(method, params) {
-          if (typeof window === "undefined" || !window.$axios) return Promise.resolve(null);
-          var sid = window.$getCookie && window.$getCookie("Admin-Token") || "";
-          return window.$axios.post("/rpc", {
-            jsonrpc: "2.0",
-            id: 1,
-            method: "call",
-            params: [sid, "mudimodem", method, params || {}]
-          }, { timeout: 2e4 }).then(function(r) {
-            return r && r.data && r.data.result || null;
-          }).catch(function() {
-            return null;
-          });
+        rpcSilent: function(method, params, timeout) {
+          return rpcSilent(method, params, timeout || 2e4);
         },
         // opts = { window: <minutes>, since: <ms>, merge: <bool> }.
         // ⚠️ A window goes to the box as a DURATION (window_ms), never as a
@@ -393,9 +415,9 @@ var __mm = (() => {
         },
         fetchBattLimit: function() {
           var self = this;
-          if (typeof window === "undefined" || !window.$rpcRequest) return Promise.resolve();
+          if (!hasRpc()) return Promise.resolve();
           this.blFetchedAt = Date.now();
-          return window.$rpcRequest("call", ["sid", "mudimodem", "get_battlimit", {}], { timeout: 8e3 }).then(function(r) {
+          return rpc("get_battlimit", {}, { timeout: 8e3 }).then(function(r) {
             self.bl = r || null;
             if (r && typeof r.limit_gui === "number") self.blDraft = self.clampDraft(r.limit_gui);
             self.blErr = r && r.error || "";
@@ -433,7 +455,7 @@ var __mm = (() => {
         },
         applyBattLimit: function(patch) {
           var self = this;
-          if (this.blBusy || typeof window === "undefined" || !window.$rpcRequest) return;
+          if (this.blBusy || !hasRpc()) return;
           var cur = this.bl || { enabled: false, limit_gui: 80 };
           var enabled = patch && typeof patch.enabled === "boolean" ? patch.enabled : !!cur.enabled;
           var limit_gui = patch && patch.limit_gui != null ? Number(patch.limit_gui) : Number(this.blDraft || cur.limit_gui);
@@ -449,12 +471,11 @@ var __mm = (() => {
           this.blBusy = true;
           this.blErr = "";
           this._blErrBg = false;
-          return window.$rpcRequest("call", [
-            "sid",
-            "mudimodem",
+          return rpc(
             "set_battlimit",
-            { enabled, limit_gui }
-          ], { timeout: 15e3 }).then(function(r) {
+            { enabled, limit_gui },
+            { timeout: 15e3 }
+          ).then(function(r) {
             self.blBusy = false;
             self.blFetchedAt = Date.now();
             if (r && (typeof r.available === "boolean" || typeof r.limit_gui === "number")) {
@@ -895,10 +916,7 @@ var __mm = (() => {
           return this.nearestSampleIn(this.winSamples(), m);
         },
         clock: function(t) {
-          var d = new Date(t), p = function(n) {
-            return (n < 10 ? "0" : "") + n;
-          };
-          return p(d.getHours()) + ":" + p(d.getMinutes());
+          return hhmm(t);
         },
         clockFull: function(t) {
           var d = new Date(t), p = function(n) {

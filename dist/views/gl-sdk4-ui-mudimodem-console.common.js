@@ -24,6 +24,30 @@ var __mm = (() => {
   __export(console_exports, {
     default: () => console_default
   });
+
+  // src/web/kit/rpc.js
+  function hasRpc() {
+    return typeof window !== "undefined" && !!window.$rpcRequest;
+  }
+  function rpc(method, params, opts) {
+    return window.$rpcRequest("call", ["sid", "mudimodem", method, params || {}], opts);
+  }
+  function rpcSilent(method, params, timeoutMs) {
+    if (typeof window === "undefined" || !window.$axios || !window.$axios.post) return Promise.resolve(null);
+    var sid = window.$getCookie && window.$getCookie("Admin-Token") || "";
+    return window.$axios.post("/rpc", {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "call",
+      params: [sid, "mudimodem", method, params || {}]
+    }, { timeout: timeoutMs || 15e3 }).then(function(r) {
+      return r && r.data && r.data.result || null;
+    }).catch(function() {
+      return null;
+    });
+  }
+
+  // src/web/tabs/console.js
   var console_default = /* @__PURE__ */ function() {
     var HISTORY_MAX = 100;
     var STORE = {
@@ -179,19 +203,8 @@ var __mm = (() => {
         // DIRECTLY. $rpcRequest's interceptor raises GL's global banner on any
         // failure — e.g. its own timeout while the router waits on GitHub — before
         // our .catch can run. Resolves the result, or null on any failure.
-        rpcSilent(method, params, timeout) {
-          if (typeof window === "undefined" || !window.$axios || !window.$axios.post) return Promise.resolve(null);
-          var sid = window.$getCookie && window.$getCookie("Admin-Token") || "";
-          return window.$axios.post("/rpc", {
-            jsonrpc: "2.0",
-            id: 1,
-            method: "call",
-            params: [sid, "mudimodem", method, params || {}]
-          }, { timeout: timeout || 15e3 }).then(function(r) {
-            return r && r.data && r.data.result || null;
-          }).catch(function() {
-            return null;
-          });
+        rpcSilent(method, params, timeoutMs) {
+          return rpcSilent(method, params, timeoutMs || 15e3);
         },
         fetchLib() {
           var self = this;
@@ -221,10 +234,10 @@ var __mm = (() => {
         },
         refreshLibrary() {
           var self = this;
-          if (this.refreshing || typeof window === "undefined" || !window.$rpcRequest) return Promise.resolve();
+          if (this.refreshing || !hasRpc()) return Promise.resolve();
           this.refreshing = true;
           this.refreshMsg = "";
-          return window.$rpcRequest("call", ["sid", "mudimodem", "refresh_library", {}], { timeout: 3e4 }).then(function(r) {
+          return rpc("refresh_library", {}, { timeout: 3e4 }).then(function(r) {
             self.refreshing = false;
             if (r && r.ok) {
               self.refreshMsg = "updated — rev " + (r.revision || "");
@@ -413,20 +426,15 @@ var __mm = (() => {
           this.histIdx = null;
           if (this.history.length > HISTORY_MAX) this.history.splice(0, this.history.length - HISTORY_MAX);
           this.decodeRows = null;
-          if (typeof window === "undefined" || !window.$rpcRequest) {
+          if (!hasRpc()) {
             this.push("err", "RPC unavailable");
             return;
           }
           var TOOL_T = 8;
           this.sending = true;
-          return window.$rpcRequest(
-            "call",
-            [
-              "sid",
-              "mudimodem",
-              "at_console",
-              { cmd: wire, timeout: TOOL_T }
-            ],
+          return rpc(
+            "at_console",
+            { cmd: wire, timeout: TOOL_T },
             { timeout: (TOOL_T * steps.length + 10) * 1e3 }
           ).then(function(r) {
             self.sending = false;
