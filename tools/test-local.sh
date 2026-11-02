@@ -54,16 +54,20 @@ if [ -n "${MM_ROOTFS:-}" ] && command -v qemu-aarch64-static >/dev/null && [ -x 
 else
   echo "== lua (ROUTER lua) SKIPPED: set MM_ROOTFS=<extracted 4.10 rootfs> and install qemu-user-static =="
 fi
+SH_SUITES="revert.test.sh:src/sbin/mudimodem-revert selfupdate.test.sh:src/sbin/mudimodem-selfupdate deps.test.sh:src/lib/mudimodem-deps battlimit-hotplug.test.sh: manifest.test.sh: static.test.sh: installer.test.sh:"
 echo "== sh (dash + busybox ash) =="
 for shell in sh "busybox sh"; do
-  run "$shell test/revert.test.sh" $shell test/revert.test.sh src/sbin/mudimodem-revert
-  run "$shell test/selfupdate.test.sh" $shell test/selfupdate.test.sh src/sbin/mudimodem-selfupdate
-  run "$shell test/deps.test.sh" $shell test/deps.test.sh src/lib/mudimodem-deps
-  run "$shell test/test_install_wiring.sh" $shell test/test_install_wiring.sh
-  run "$shell test/battlimit-hotplug.test.sh" $shell test/battlimit-hotplug.test.sh
+  for s in $SH_SUITES; do run "$shell test/${s%%:*}" $shell "test/${s%%:*}" ${s#*:}; done
 done
+if [ -z "${MM_SKIP_ROUTER_SH:-}" ] && tools/emu.sh check >/dev/null 2>&1; then
+  echo "== sh (ROUTER busybox ash + applets via qemu; MM_SKIP_ROUTER_SH=1 skips) =="
+  for s in $SH_SUITES; do run "router:test/${s%%:*}" tools/emu.sh sh "test/${s%%:*}" ${s#*:}; done
+else
+  echo "== sh (ROUTER busybox) SKIPPED: tools/emu.sh check fails (no rootfs or qemu) =="
+fi
 command -v shellcheck >/dev/null && run "shellcheck" shellcheck -s sh -S warning -e SC2086,SC2034,SC1090,SC2016,SC3043 \
   src/sbin/mudimodem-revert src/sbin/mudimodem-selfupdate install.sh uninstall.sh src/lib/mudimodem-detach \
-  src/sbin/glbattlimit src/hotplug/20-glbattlimit src/etc/init.d/* tools/deploy.sh \
-  src/lib/mudimodem-deps
+  src/sbin/glbattlimit src/hotplug/20-glbattlimit src/etc/init.d/* src/lib/mudimodem-deps \
+  src/installer/mudimodem-install tools/deploy.sh tools/build.sh tools/firmware.sh tools/emu.sh \
+  test/installer.test.sh test/manifest.test.sh test/static.test.sh
 exit $rc

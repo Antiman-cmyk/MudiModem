@@ -1,0 +1,73 @@
+# MudiModem manifest — the ONE list of what ships where.
+#
+# Read by src/installer/mudimodem-install (install, uninstall, keep.d generation), by install.sh
+# (which files to fetch), by tools/deploy.sh (which files to pack) and by the tests. Order matters:
+# files are placed top to bottom, services are started top to bottom and stopped bottom to top.
+#
+#   file    <src> <dest> <mode>   copy
+#   gz      <src> <dest> <mode>   gzip -9 (page chunks: nginx serves them with gzip_static)
+#   cache   <src> <dest> <mode>   gzip, but only when <dest> is not already a readable AT-library
+#                                 cache (a refreshed library must survive an update)
+#   default <src> <dest> <mode>   copy only when <dest> does not exist (user settings)
+#   own     <dir>/                wholly ours: kept across firmware upgrades, removed on uninstall
+#   keepd   <path>                where the generated firmware-upgrade keep list goes
+#   service <name> <actions>      /etc/init.d/<name> actions after install (comma-separated);
+#                                 uninstall runs stop,disable in reverse order
+#
+# Every <dest> must be under /etc /usr /lib /bin /sbin (abfota_update keeps nothing else) and
+# never under /www (a firmware upgrade never restores it). test/manifest.test.sh enforces this and
+# that every file under src/ is either listed here or deliberately unshipped.
+
+own     /usr/share/mudimodem/
+own     /usr/lib/mudimodem/
+own     /etc/mudimodem/
+keepd   /lib/upgrade/keep.d/mudimodem
+
+# The installer and this list ride along, so an uninstall (or the next update) knows what is here.
+file    src/installer/mudimodem-install   /usr/lib/mudimodem/mudimodem-install   0755
+file    manifest.txt                      /usr/lib/mudimodem/manifest.txt        0644
+
+# Web payload (served from /usr/share/mudimodem/www by the gl-conf.d alias) + menu entries.
+gz      src/views/mudimodem.js            /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem.common.js.gz            0644
+gz      src/views/mudimodem-tracking.js   /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-tracking.common.js.gz   0644
+gz      src/views/mudimodem-console.js    /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-console.common.js.gz    0644
+gz      src/views/mudimodem-speedtest.js  /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-speedtest.common.js.gz  0644
+gz      src/views/mudimodem-battery.js    /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz    0644
+cache   src/at-library.snapshot.json      /usr/share/mudimodem/www/mudimodem/at-library.json.gz                       0644
+file    src/nginx/mudimodem.conf          /etc/nginx/gl-conf.d/mudimodem.conf             0644
+file    src/menu/mudimodem.json           /usr/share/oui/menu.d/mudimodem.json            0644
+file    src/menu/mudimodem-tracking.json  /usr/share/oui/menu.d/mudimodem-tracking.json   0644
+file    src/menu/mudimodem-speedtest.json /usr/share/oui/menu.d/mudimodem-speedtest.json  0644
+
+# Shared helpers, the /ws seed module, tools.
+file    src/lib/cellular_compat.py        /usr/lib/mudimodem/cellular_compat.py          0644
+file    src/lib/mudimodem-detach          /usr/lib/mudimodem/mudimodem-detach            0755
+file    src/lib/mudimodem-deps            /usr/lib/mudimodem/mudimodem-deps              0755
+file    src/ws/mudimodem.lua              /usr/share/gl-ngx/websocket/mudimodem.lua      0644
+file    tools/mudimodem-at.py             /usr/lib/mudimodem/mudimodem-at.py             0644
+file    tools/mudimodem-lib               /usr/lib/mudimodem/mudimodem-lib               0755
+file    tools/mudimodem-speedtest.py      /usr/lib/mudimodem/mudimodem-speedtest.py      0755
+
+# Daemons + their services. The watchdog and the validator come before the RPC plugin: a write
+# needs the watchdog, and the plugin must never run without its validator.
+file    src/sbin/mudimodem-revert         /usr/sbin/mudimodem-revert                     0755
+file    src/etc/init.d/mudimodem-revert   /etc/init.d/mudimodem-revert                   0755
+file    src/sbin/mudimodem-selfupdate     /usr/sbin/mudimodem-selfupdate                 0755
+file    src/sbin/mudimodem-collectd       /usr/sbin/mudimodem-collectd                   0755
+file    src/etc/init.d/mudimodem-collectd /etc/init.d/mudimodem-collectd                 0755
+file    src/sbin/mudimodem-speedtestd     /usr/sbin/mudimodem-speedtestd                 0755
+file    src/etc/init.d/mudimodem-speedtestd /etc/init.d/mudimodem-speedtestd             0755
+file    src/sbin/glbattlimit              /usr/bin/glbattlimit                           0755
+file    src/hotplug/20-glbattlimit        /etc/hotplug.d/i2c/20-glbattlimit              0755
+file    src/etc/init.d/glbattlimit        /etc/init.d/glbattlimit                        0755
+file    src/validator/mudimodem.lua       /usr/share/gl-validator.d/mudimodem.lua        0644
+file    src/rpc/mudimodem                 /usr/lib/oui-httpd/rpc/mudimodem               0644
+
+# Settings defaults — never clobber what the user chose.
+default src/etc/mudimodem/battlimit.json  /etc/mudimodem/battlimit.json                  0644
+default src/etc/mudimodem/history.json    /etc/mudimodem/history.json                    0644
+
+service mudimodem-revert     enable
+service mudimodem-collectd   enable,restart
+service mudimodem-speedtestd enable,restart
+service glbattlimit          enable,start

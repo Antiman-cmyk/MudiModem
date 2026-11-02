@@ -51,16 +51,9 @@ onbox_lua() {  # $1 = test/onbox/<name>.lua, $2.. = args
   ssh -o BatchMode=yes "root@$HOST" "lua $_n $*; rc=\$?; rm -f $_n; exit \$rc"
 }
 
-echo "0. firmware is 4.10+ (MudiModem 2.x is 4.10-only)"
-# Numeric major.minor compare — the same expression install.sh uses (a glob
-# like `4.[2-9]*` would accept 4.8.5).
-GLVER=$(ssh -o BatchMode=yes "root@$HOST" 'cat /etc/glversion' 2>/dev/null | tr -d '\r\n')
-GLMAJ=${GLVER%%.*}; GLREST=${GLVER#*.}; GLMIN=${GLREST%%.*}
-case "$GLMAJ$GLMIN" in *[!0-9]*|"") GLMAJ=0; GLMIN=0 ;; esac
-if [ -z "${GLVER:-}" ] || [ "${GLMAJ:-0}" -lt 4 ] || { [ "${GLMAJ:-0}" -eq 4 ] && [ "${GLMIN:-0}" -lt 10 ]; }; then
-  fail "firmware '${GLVER:-unknown}' is not 4.10+"
-fi
-echo "   firmware $GLVER"
+echo "0. firmware is 4.10+ and the box is an E5800 (the installer's own preflight)"
+ssh -o BatchMode=yes "root@$HOST" 'sh -s preflight' < src/installer/mudimodem-install \
+  || fail "preflight refused this box"
 ssh -o BatchMode=yes "root@$HOST" 'ubus list gl-session >/dev/null && test -f /usr/share/gl-ngx/websocket/cellular.lua' \
   || fail "4.10 ws stack (gl-session + websocket/cellular.lua) not present"
 
@@ -79,8 +72,10 @@ ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/oui/menu.d/mudimodem.json'
   || fail "menu json missing"
 
 echo "1b. survives a firmware upgrade (keep.d, nginx alias, python3 runtime)"
-ssh -o BatchMode=yes "root@$HOST" 'cat /lib/upgrade/keep.d/mudimodem' | cmp -s - src/upgrade/keep.d/mudimodem \
-  || fail "/lib/upgrade/keep.d/mudimodem missing or stale (run ./tools/deploy.sh)"
+KEEP_WANT=$(mktemp); sh src/installer/mudimodem-install keepd --from . > "$KEEP_WANT"
+ssh -o BatchMode=yes "root@$HOST" 'cat /lib/upgrade/keep.d/mudimodem' | cmp -s - "$KEEP_WANT" \
+  || { rm -f "$KEEP_WANT"; fail "/lib/upgrade/keep.d/mudimodem missing or stale (run ./tools/deploy.sh)"; }
+rm -f "$KEEP_WANT"
 # abfota_update silently skips a listed path that does not exist, so a typo or
 # a renamed rc.d link would only surface as a file missing after the upgrade.
 MISSING=$(ssh -o BatchMode=yes "root@$HOST" 'grep "^/" /lib/upgrade/keep.d/mudimodem | while read -r p; do [ -e "$p" ] || echo "$p"; done')

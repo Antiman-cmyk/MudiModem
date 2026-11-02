@@ -44,10 +44,11 @@ case "\$*" in
 esac
 EOF
   chmod +x "$FAKE/ubus"
-  # A stand-in for libubox's jsonfilter (absent on the dev box, present in the
-  # 4.10 image): `-e '@.a.b'` prints the value at that path — objects as JSON,
-  # nothing when the path is missing — which is all the watchdog relies on.
-  cat > "$FAKE/jsonfilter" <<'EOF'
+  # libubox's jsonfilter: the real one when it is on PATH (the router's own, under
+  # tools/emu.sh), else a stand-in: `-e '@.a.b'` prints the value at that path —
+  # objects as JSON, nothing when the path is missing — which is all the watchdog
+  # relies on.
+  command -v jsonfilter >/dev/null 2>&1 || cat > "$FAKE/jsonfilter" <<'EOF'
 #!/bin/sh
 expr=""; while [ $# -gt 0 ]; do case "$1" in -e) expr="$2"; shift;; esac; shift; done
 # (script via -c, so the JSON body stays on stdin)
@@ -61,7 +62,7 @@ for k in path:
     else: sys.exit(1)
 print(json.dumps(v) if isinstance(v, (dict, list)) else v)' "$expr"
 EOF
-  chmod +x "$FAKE/jsonfilter"
+  [ -f "$FAKE/jsonfilter" ] && chmod +x "$FAKE/jsonfilter"
   P="$WORK/pending"; L="$WORK/log"
   PATH="$FAKE:$PATH" env -u MUDIMODEM_DRY MUDIMODEM_PENDING="$P" MUDIMODEM_LOG="$L" \
       MUDIMODEM_ARMED="$WORK/armed" MUDIMODEM_WINDOW="${WIN:-1}" MUDIMODEM_HIST="$WORK/hist" \
