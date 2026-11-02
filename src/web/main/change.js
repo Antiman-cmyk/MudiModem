@@ -1,5 +1,5 @@
 // Confirm-or-revert: the pending change as the router reports it (change_status), countdown, Keep / Revert, banner.
-import { rpc } from "../kit/rpc.js";
+import { rpc, rpcJob } from "../kit/rpc.js";
 import { t, tp } from "../kit/i18n.js";
 
 // GL's network_mode codes in the selector's own words.
@@ -134,7 +134,8 @@ export default {
       if (!p || p.done || p.keeping || p.reverting) return;
       var k = p.kind;
       this.patchPending({ reverting: true, revertError: "" });
-      rpc("revert_now", {}, { timeout: 20000 })
+      // A cell revert is a router job (restore-now in mudimodemd): followed through job_result.
+      rpcJob("revert_now", {})
         .then(function (res) {
           if (res && res.error) {
             // Nothing was restored; the watchdog stays armed and retries at the deadline.

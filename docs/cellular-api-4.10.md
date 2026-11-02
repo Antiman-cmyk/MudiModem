@@ -242,7 +242,9 @@ Settled from the image (second pass, 2026-09-02):
    ~6/min (`tools/verify.sh` steps 7, 8c, 8d1, read-only). Everything it calls and writes is
    covered in emulation on the image's own eco/ubusd; only the live process is runtime — plus
    the scan's loop-back into GL's real `/rpc` (emulated by a fake HTTP endpoint), which the
-   next scan someone runs on a box confirms.
+   next scan someone runs on a box confirms, and the first Apply / Revert now on a box after
+   3.0 (the daemon arming the watchdog; restore-now --reconcile clearing GL's store) — both
+   drilled end to end in emulation (`test/change-emu.test.py`).
 
 Closed by binary analysis (was "needs `ubus -v list`"): **band config has no dotted ubus
 object to call directly** — `get/set_band_config` are in-process C functions reached through

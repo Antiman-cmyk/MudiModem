@@ -944,6 +944,25 @@ test('a refused Revert now is shown, and the banner stays (watchdog still armed)
   } finally { unstubRpc(); }
 });
 
+test('a cell Revert now still running on the router is followed through job_result', async () => {
+  const calls = stubRpc([
+    { done: false, pending: true, id: 12, kind: 'restore' },                 // revert_now: first slice
+    { done: true, id: 12, ok: true, reverted: true, gl_reconciled: true },   // job_result
+    {}, {}, {}, {}                                                           // refetches afterwards
+  ]);
+  try {
+    const c = loadChunk();
+    const vm = bandsVm(c);
+    vm.startCountdown(60, { rat: '5g', pci: 516 }, 'cell', { now: 0, deadline: 60 });
+    vm.revertBands();
+    for (let i = 0; i < 12; i++) await tick();
+    assert.deepStrictEqual(calls.slice(0, 2).map((x) => x.params[2]), ['revert_now', 'job_result']);
+    assert.deepStrictEqual(calls[1].params[3], { id: 12 });
+    assert.ok(vm.pending && vm.pending.done && vm.pending.reverted, 'shown as reverted once the job finished');
+    vm.clearCountdown();
+  } finally { unstubRpc(); }
+});
+
 test('at the deadline the page asks the box instead of assuming the revert happened', async () => {
   const calls = stubRpc([{ now: 100 } /* change_status: nothing pending */, {} /* get_bands */]);
   try {

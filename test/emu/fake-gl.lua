@@ -11,6 +11,9 @@
 --                                    {"hang": s} answers only after s seconds (a wedged modem)
 --   collect_signals: {...}           cellular.collect get_signals reply
 --   has_ws: true|false               gl-session has_websocket
+--   glc: {"set_band_config": {"result": {}}, "get_cell_tower": {"result": {...}}, ...}
+--                                    gl-session call {module, func, params} reply by func
+--                                    (default {"result": {}}; {"error": {...}} = GL refused)
 --   at: {"AT+CSQ": "\r\n+CSQ: 20,99\r\n\r\nOK\r\n", ...}   modem.CPU.AT get_result_AT by cmd;
 --                                    {"hang": s, "reply": "..."} answers after s seconds;
 --                                    anything else answers "\r\nERROR\r\n"
@@ -80,6 +83,12 @@ conn:add("gl-session", {
   has_websocket = { function(req)
     conn:reply(req, { has_ws = S.has_ws ~= false })
   end, {} },
+  -- the root loop-back into GL's /rpc (the watchdog's glc): {error, result} as GL replies
+  call = { function(req, msg)
+    append("calls.jsonl", { object = "gl-session", method = "call", args = msg or {} })
+    local v = (S.glc or {})[msg and msg.func or ""] or { result = {} }
+    conn:reply(req, v)
+  end, { module = ubus.STRING, func = ubus.STRING, params = ubus.TABLE } },
 })
 
 local ready = io.open(logdir .. "/ready", "w"); if ready then ready:write("1"); ready:close() end

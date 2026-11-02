@@ -32,6 +32,10 @@ part of R2 and the first step of R3), plus the fixes it surfaced.
 - **The update check, the AT-library check/refresh and the cell scan no longer freeze GL's admin**
   either: they run as background jobs in `mudimodemd` (the update check used to hold every page
   for up to 8 s). A cell scan keeps running if the page is reloaded; starting it again rejoins it.
+- **Apply no longer freezes GL's admin for a second,** and a cell lock's "Revert now" no longer runs
+  modem commands inside GL's web server: `mudimodemd` arms the revert watchdog and runs the revert.
+  The safety net itself is unchanged: the same watchdog reverts at the deadline, survives a
+  daemon restart, and `panic` still works from ssh with nothing else running.
 - **Chinese:** the whole Modem page is available in Simplified Chinese and follows GL's language
   setting (switching GL's language switches the page). Technical terms (RSRP, n71, AT commands)
   stay as they are; the community AT library stays English.

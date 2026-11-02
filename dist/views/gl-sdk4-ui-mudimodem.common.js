@@ -1036,7 +1036,7 @@ var __mm = (() => {
         if (!p || p.done || p.keeping || p.reverting) return;
         var k = p.kind;
         this.patchPending({ reverting: true, revertError: "" });
-        rpc("revert_now", {}, { timeout: 2e4 }).then(function(res) {
+        rpcJob("revert_now", {}).then(function(res) {
           if (res && res.error) {
             self.patchPending({ reverting: false, revertError: res.error });
             return;

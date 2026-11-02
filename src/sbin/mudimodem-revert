@@ -3,8 +3,12 @@
 #
 # WHY this exists (docs/knowledge.md §4.2, §8): band/cell locks persist in modem NV and a bad
 # one can drop the cellular link you are administering over. So every write is
-# confirm-or-revert. nginx runs several workers with no shared state, so a
-# timer there is unreliable — set_bands/set_cell_lock launch THIS, detached.
+# confirm-or-revert. A timer inside nginx is unreliable (an nginx reload
+# cancels ngx.timer) and anything slow there stalls GL's one worker — so
+# set_bands/set_cell_lock have THIS launched, detached: by mudimodemd
+# (`change_arm`), or by the plugin itself when the daemon is not running. It
+# needs nothing else running; procd stops services by pid only, so a daemon or
+# nginx restart does not take it down.
 #
 # GL 4.10: band config is written and restored through GL's own per-slot API
 # (`modem.set_band_config`, reached from a shell via the local root test path
@@ -18,10 +22,16 @@
 #   boot-check         run at boot; a pending revert that survived a reboot
 #                      (file still present) is restored now, retried for ~5 min
 #                      while GL's stack comes up (MUDIMODEM_BOOT_TRIES/_DELAY).
-#   restore-now        synchronous restore for the page's "Revert now" (the
-#                      backend's revert_now runs it): the SAME restore the
-#                      watchdog performs at window end, then stands the
-#                      sleeping watchdog down. Prints one JSON line.
+#   restore-now [--reconcile]
+#                      synchronous restore for the page's "Revert now" (the
+#                      backend's revert_now runs it, through mudimodemd): the
+#                      SAME restore the watchdog performs at window end, then
+#                      stands the sleeping watchdog down. Prints one JSON line.
+#                      --reconcile (cell only): then also clear the lock in
+#                      GL's store for that slot + family (gl_unlock_slot), and
+#                      say whether that worked ("gl_reconciled"). Only for a
+#                      caller that is NOT an nginx worker: the store write goes
+#                      gl-session -> nginx /rpc, which needs nginx free.
 #   panic [slot]       immediate open state: band filtering OFF + mode AUTO on
 #                      the given slot (default: both slots), cell locks cleared
 #                      in GL's store (per slot) AND in the modem (AT, on every
@@ -123,7 +133,7 @@ glc() {
 # (shipped in the 4.10 image); without it, or with nothing stored, the minimal
 # {bus, slot, lock:false} goes out. Our keys are LAST: json-c keeps the last
 # duplicate, so bus/slot/lock can never be overridden by a stored field.
-gl_unlock_slot() {  # $1 = slot
+gl_unlock_slot() {  # $1 = slot, $2 = family NR5G|LTE (optional: GL then clears the stored one)
   extra=""
   if command -v jsonfilter >/dev/null 2>&1 && glc get_cell_tower "{\"bus\":\"$BUS\"}"; then
     tw=$(printf '%s' "$GLC_OUT" | jsonfilter -e "@.result.slot$1" 2>/dev/null | tr -d '\n')
@@ -132,7 +142,8 @@ gl_unlock_slot() {  # $1 = slot
               case "$extra" in *\"*) ;; *) extra="" ;; esac ;;   # "{ }" -> nothing
     esac
   fi
-  glc set_cell_tower "{${extra:+$extra,}\"bus\":\"$BUS\",\"slot\":$1,\"lock\":false}"
+  fam=""; [ -n "${2:-}" ] && fam=",\"network_type\":\"$2\""
+  glc set_cell_tower "{${extra:+$extra,}\"bus\":\"$BUS\",\"slot\":$1,\"lock\":false$fam}"
 }
 
 # Write a band config through GL. $1 = params JSON (bus/slot/band_enable/...).
@@ -270,7 +281,17 @@ case "${1:-}" in
       rm -f "$ARMED"
       if [ "$KIND_NOW" = "cell" ]; then append_event "user" "Reverted" "Cell lock removed"
       else append_event "user" "Reverted" "Restored previous bands"; fi
-      printf '{"ok":true,"kind":"%s"}\n' "$KIND_NOW"
+      if [ "$KIND_NOW" = "cell" ] && [ "${2:-}" = "--reconcile" ]; then
+        # The link is already free; reconciling GL's store is best-effort (get_lock derives
+        # `stale` from GL-locked + modem-unlocked and offers "Clear it" if this fails).
+        # SLOT/RAT are still set from the pending file restore_from_pending sourced.
+        case "${RAT:-5g}" in 4g) fam=LTE ;; *) fam=NR5G ;; esac
+        if [ -n "${SLOT:-}" ] && gl_unlock_slot "$SLOT" "$fam"; then rec=true
+        else rec=false; log "restore-now: GL store unlock (slot ${SLOT:-?} $fam) failed"; fi
+        printf '{"ok":true,"kind":"%s","gl_reconciled":%s}\n' "$KIND_NOW" "$rec"
+      else
+        printf '{"ok":true,"kind":"%s"}\n' "$KIND_NOW"
+      fi
     else
       printf '{"ok":false,"kind":"%s","error":"nothing could be written back; pending kept, watchdog still armed"}\n' "$KIND_NOW"
       exit 1
@@ -304,7 +325,7 @@ case "${1:-}" in
     log "panic complete"
     ;;
   *)
-    echo "usage: $0 {watch|boot-check|restore-now|panic [slot]}" >&2
+    echo "usage: $0 {watch|boot-check|restore-now [--reconcile]|panic [slot]}" >&2
     exit 1
     ;;
 esac

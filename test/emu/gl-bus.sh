@@ -4,6 +4,7 @@
 #
 #   test/emu/gl-bus.sh start <dir> <scenario.json>   -> <dir>/ubus.sock, <dir>/bin/ubus (a host
 #                                                      wrapper calling the image's ubus CLI on it)
+#                                                      and <dir>/bin/jsonfilter (the image's)
 #   test/emu/gl-bus.sh stop <dir>
 set -eu
 HERE=$(cd "$(dirname "$0")/../.." && pwd)
@@ -20,7 +21,10 @@ case "$cmd" in
     echo $! > "$dir/fake-gl.pid"
     i=0; while [ ! -f "$dir/ready" ]; do i=$((i + 1)); [ $i -gt 150 ] && { cat "$dir/fake-gl.log" >&2; echo "fake GL did not start" >&2; exit 1; }; sleep 0.1; done
     printf '#!/bin/sh\nexec "%s" run bin/ubus -s "%s" "$@"\n' "$EMU" "$dir/ubus.sock" > "$dir/bin/ubus"
-    chmod +x "$dir/bin/ubus"
+    # the image's jsonfilter too: under qemu-user a PATH lookup (`command -v`) does not see a
+    # rootfs-only binary, so a script on this bus would otherwise take its no-jsonfilter branch
+    printf '#!/bin/sh\nexec "%s" run usr/bin/jsonfilter "$@"\n' "$EMU" > "$dir/bin/jsonfilter"
+    chmod +x "$dir/bin/ubus" "$dir/bin/jsonfilter"
     ;;
   stop)
     for p in fake-gl ubusd; do

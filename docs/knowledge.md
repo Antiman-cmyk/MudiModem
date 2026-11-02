@@ -198,6 +198,14 @@ comma-separated reply. Nothing auto-runs; `{{params}}` must be filled; set/nv ne
   `eco.sys.exec(prog, ...)` searches PATH; a missing binary still "starts" (the exec fails in the
   child: empty stdout); `p:read_stdout("*a", t)` → `nil, "timeout"` on overrun. Children share the
   daemon's process group (and busybox has no `setsid`), so only the direct child can be killed.
+- **procd stops an instance by pid only** (🟢 `/sbin/procd`: `kill(pid, SIGTERM)`, then
+  `kill(pid, SIGKILL)` after the term timeout; never `-pid`; its `setsid` is procd's own startup). So
+  a helper an instance spawned — the revert watchdog spawned by mudimodemd or by an nginx worker —
+  outlives a restart of that instance. busybox has no `setsid`; `mudimodem-detach` closes the
+  inherited descriptors instead.
+- Under qemu-user (the emulation), a PATH lookup (`command -v`) does not find a rootfs-only binary
+  such as `/usr/bin/jsonfilter`, although running it by path works: scripts would silently take
+  their no-jsonfilter branch. `test/emu/gl-bus.sh` puts a `jsonfilter` wrapper next to its `ubus`.
 - **Local `/rpc` loop-back** (🟢 `oui/rpc.lua` `M.access`; `oui-access.lua`, the `/rpc` access phase,
   returns early for 127.0.0.1/::1): a request from 127.0.0.1 carrying a `glinet` header passes oui's ACL — how gl-session's `call {module, func, params}` reaches GL's
   plugins from a shell (eco HTTP client, default 30 s read timeout). mudimodemd uses the same

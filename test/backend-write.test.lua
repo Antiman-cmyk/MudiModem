@@ -14,8 +14,14 @@ local cjson = require "cjson"
 
 -- ---- shim oui.ubus: canned 4.10 reads (bus-scoped status is FLAT) ----
 local at_cmds = {}
+local daemon_arm, arm_calls = nil, 0      -- nil: mudimodemd gives no verdict (the {} below)
 package.loaded["oui.ubus"] = {
   call = function(object, method, params)
+    if object == "mudimodem" and method == "change_arm" and daemon_arm ~= nil then
+      arm_calls = arm_calls + 1
+      if daemon_arm then local f = io.open(ARMED, "w"); f:write("88"); f:close(); return { armed = true } end
+      return { armed = false, error = "revert watchdog failed to arm" }
+    end
     if object == "modem.CPU.AT" and method == "get_result_AT" then
       at_cmds[#at_cmds + 1] = params.cmd
       if params.cmd == "AT+QSPN" then
@@ -423,5 +429,23 @@ assert(M.set_bands({ sa = { 78 } }).ok)
 r = M.confirm({})
 assert(r.ok and r.was_pending == true and r.kind == "bands", "a timely Keep reports was_pending")
 print("  ok  - confirm reports was_pending; a too-late Keep is not logged as kept")
+
+
+-- D. With mudimodemd: it arms the watchdog (change_arm) — no `sleep 1` in the nginx worker and
+--    no spawn from here; a refused arm writes nothing.
+reset(); daemon_arm = true; arm_calls = 0
+r = M.set_bands({ sa = { 78 } })
+assert(r.ok, "set_bands via the daemon arm: " .. tostring(r.error))
+assert(arm_calls == 1, "armed through change_arm")
+for _, c in ipairs(exec_cmds) do
+  assert(not c:find("sleep") and not c:find("watch"), "the plugin neither spawns nor sleeps: " .. c)
+end
+M.confirm({})
+reset(); daemon_arm = false
+r = M.set_bands({ sa = { 78 } })
+assert(r.error and r.error:find("failed to arm"), "refused arm -> refused write: " .. tostring(r.error))
+assert(#set_calls == 0, "no set_band_config without an armed watchdog")
+assert(not io.open(PENDING, "r"), "no pending left")
+daemon_arm = nil
 
 print("ALL SET_BANDS TESTS PASSED (incl. change status)")

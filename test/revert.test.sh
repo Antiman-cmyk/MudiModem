@@ -209,6 +209,7 @@ UBUS_BODY=$(printf '{\n\t"result": {\n\t\t"error": ""\n\t}\n}')
 WIN=1 UBUS_BODY="$UBUS_BODY" runlive watch
 [ ! -f "$WORK/pending" ]          && pass "jsonfilter path: nested error key is still a success" || fail "jsonfilter path false positive"
 
+OKBODY=$(printf '{\n\t"result": { }\n}')
 echo "13. restore-now (KIND=cell): the same restore as watch, synchronously, JSON answer, watchdog stood down"
 rm -f "$WORK/log" "$WORK/hist/events.jsonl"; echo 4242 > "$WORK/armed"
 printf 'KIND=cell\nSUB_ID=1\nSLOT=1\nRAT=5g\nPREV_SAVE_CTRL=0,0\nPREV_mode_pref=NR5G\nPREV_nr5g_disable_mode=0\n' > "$WORK/pending"
@@ -222,6 +223,31 @@ inlog 'mode_pref\\",NR5G'              && pass "restored mode_pref" || fail "no 
 [ ! -f "$WORK/armed" ]                 && pass "arm marker removed (sleeping watchdog stands down)" || fail "arm marker left"
 grep -q '"kind":"user".*"Reverted"' "$WORK/hist/events.jsonl" 2>/dev/null \
                                        && pass "user Reverted event written" || fail "no Reverted event"
+
+echo "13b. LIVE restore-now --reconcile (cell): the modem undo, then GL's store unlocked for that slot + family"
+rm -f "$WORK/log" "$WORK/ubus.calls" "$WORK/hist/events.jsonl"; echo 4242 > "$WORK/armed"
+printf 'KIND=cell\nSUB_ID=2\nSLOT=2\nRAT=5g\nPREV_SAVE_CTRL=0,0\nPREV_mode_pref=NR5G\nPREV_nr5g_disable_mode=0\n' > "$WORK/pending"
+OUT=$(UBUS_BODY="$OKBODY" UBUS_TOWER_BODY='{"result":{"slot2":{"pci":101,"freq":627264,"network_type":"NR5G","band":78,"scs":30}}}' runlive restore-now --reconcile); rc=$?
+[ "$rc" = "0" ]                               && pass "exit 0" || fail "exit $rc"
+echo "$OUT" | grep -q '"gl_reconciled":true'  && pass "gl_reconciled true" || fail "no gl_reconciled: $OUT"
+grep 'modem.CPU.AT' "$WORK/ubus.calls" | grep -q 'common/5g' && grep 'modem.CPU.AT' "$WORK/ubus.calls" | grep -q '"sub_id":2' \
+                                              && pass "modem unlock on the pending sub_id first" || fail "no AT unlock on sub_id 2"
+grep 'set_cell_tower' "$WORK/ubus.calls" | grep -q '"slot":2,"lock":false,"network_type":"NR5G"' \
+                                              && pass "GL unlock: slot 2, lock false, family NR5G last" || fail "GL unlock payload: $(grep set_cell_tower "$WORK/ubus.calls")"
+grep 'set_cell_tower' "$WORK/ubus.calls" | grep -q '"pci": *101' \
+                                              && pass "stored tower fields ride along" || fail "stored fields missing: $(grep set_cell_tower "$WORK/ubus.calls")"
+[ ! -f "$WORK/pending" ] && [ ! -f "$WORK/armed" ] && pass "pending + arm cleared" || fail "pending/arm left"
+echo "13c. LIVE restore-now --reconcile: GL refuses the unlock -> still ok (link freed), gl_reconciled false"
+printf 'KIND=cell\nSUB_ID=1\nSLOT=1\nRAT=4g\n' > "$WORK/pending"; rm -f "$WORK/ubus.calls"
+OUT=$(UBUS_BODY=$(printf '{\n\t"error": {\n\t\t"code": 20002050\n\t}\n}') runlive restore-now --reconcile); rc=$?
+[ "$rc" = "0" ] && echo "$OUT" | grep -q '"ok":true' && echo "$OUT" | grep -q '"gl_reconciled":false' \
+                                              && pass "ok, gl_reconciled false" || fail "unexpected: rc=$rc $OUT"
+grep 'set_cell_tower' "$WORK/ubus.calls" | grep -q '"network_type":"LTE"' && pass "4g lock -> family LTE" || fail "family for 4g"
+echo "13d. restore-now without --reconcile never touches GL's store (the nginx-worker fallback path)"
+printf 'KIND=cell\nSUB_ID=1\nSLOT=1\nRAT=5g\n' > "$WORK/pending"; rm -f "$WORK/ubus.calls"
+OUT=$(UBUS_BODY="$OKBODY" runlive restore-now)
+! grep -q 'set_cell_tower' "$WORK/ubus.calls" && ! echo "$OUT" | grep -q gl_reconciled \
+                                              && pass "no store write, no gl_reconciled" || fail "store touched without --reconcile"
 
 echo "14. restore-now (KIND=bands): restores the snapshot via GL, JSON ok"
 rm -f "$WORK/log"; mkpending "$SNAP"

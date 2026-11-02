@@ -6,7 +6,7 @@
 | **R0 打基础** | ✅ 完成（2026-11-02） | `manifest.txt` + 唯一的安装器 `src/installer/mudimodem-install`（install / uninstall / deploy / 自更新都走它，keep.d 在安装时生成）；在假根目录里端到端跑安装/升级/卸载的模拟测试（dash、busybox、路由器自己的 ash）；清单 lint；`tools/firmware.sh`（固件拉取+解包，sha256 固定）；`tools/emu.sh`（qemu 运行镜像的 lua / eco / busybox / 任意程序）；主题变量 lint，并修掉了 16 个未定义变量；文档重组，去掉 superpowers 流程痕迹，CLAUDE.md 精简 |
 | **R1 前端结构** | ✅ 完成 | esbuild 构建（`src/web` → 提交的 `dist/views`，`--check` 防漂移）；主 chunk 拆成外壳 + 8 个模块，用 `kit/compose.js` 合成同一个组件，拆分前后 104 个方法逐字节一致；`kit/rpc.js` 是唯一碰 `/rpc` 的代码；全页简体中文（`kit/i18n.js` 跟随 GL 语言，`locales/zh-cn.js`），浏览器审计确保零漏翻；审计里的界面问题（确认、流量提示、控制台、手机布局、指标说明）已修。决定：频段 / 锁小区 / 配置仍在主 chunk 里（外壳本身需要它们的数据），按源码模块拆分而不是运行时懒加载 |
 | R2 插件模块化 + 事务 | 🟡 事务部分已完成 | 待确认文件记录 `DEADLINE`/`APPLIED`；新增 `change_status`；`confirm` 返回 `was_pending`；页面按路由器的截止时间倒计时，加载时恢复，横幅在所有标签页显示，Keep/Revert 如实报告结果。插件拆分模块还没做：R3 会把插件变成薄转发，现在拆的收益有限 |
-| R3 守护进程 | 🟡 ①②③ 已完成 | **① 采集器**：`mudimodemd`（镜像自带的 eco）接管了采集器：射频 + 电池采样、历史文件、eMMC 备份和恢复、推送、浏览器在线检测，契约不变（文件格式、`/ws` 名字和结构都一样）。影子比对在模拟环境里做：两套实现跑同一个假 GL 总线，样本、电池记录、推送、备份分段和 ubus 调用顺序都要一致（`test/collectd-emu.test.py`）；文件和电池辅助函数在宿主 Lua、路由器 Lua、eco 三个运行时下和 Python 逐字节一致（`test/jsonl-parity.test.py`）。Python 采集器保留为逃生开关（`/etc/mudimodem/collector` 写 `python`，此时守护进程以 `MUDIMODEMD_COLLECTOR=0` 运行）。**③ AT 队列**：控制台的 AT 引擎（`src/lib/mudimodemd/at.lua`，原插件逻辑逐条搬过去）和先进先出队列（`atq.lua`，最多 4 个）在守护进程里；插件的 `at_console` 只通过 oui.ubus（cosocket，不阻塞 nginx）转发，每次最多等 20 秒，没跑完就返回 `{pending, id}`，页面用 `at_result` 接着等。插件里少了 2 处 `io.popen`。守护进程总是运行（`ubus call mudimodem health` / `at_start` / `at_wait`）。演练：ubusd 重启、cell_info 卡住、第二个实例、慢 AT 期间采样不停、slot 0 不发 sub_id、GL AT 服务缺失时回退到直连口工具。上机只剩 🔴 确认（`tools/verify.sh` 第 7、8c 步）。**② 任务**：`jobs.lua`（`job_start` / `job_wait`，同类任务不会并发，第二次启动会并入正在跑的那次）+ `tasks.lua`：版本检查的 curl、AT 库检查/刷新（python 工具）、小区扫描都在守护进程里跑，插件只负责策略和转发，页面用 `job_result` 接着等。扫描通过本机 `/rpc` 调 GL 自己的 `modem.scan_cell_tower`（带 `glinet` 头，和 gl-session 的 `call` 走的是同一条本机回环，但超时是我们自己的 330 秒；gl-session 的 HTTP 客户端 30 秒就放弃），扫描成功后由守护进程记事件。插件里又少了 3 处阻塞调用（curl、两次 python3）。测速和自更新仍由插件以 detach 方式启动（一次 fork，很快），删除 Python 时（⑤）再迁。④ 变更事务 ⑤ 删除 Python 待做 |
+| R3 守护进程 | 🟡 ①②③④ 已完成 | **① 采集器**：`mudimodemd`（镜像自带的 eco）接管了采集器：射频 + 电池采样、历史文件、eMMC 备份和恢复、推送、浏览器在线检测，契约不变（文件格式、`/ws` 名字和结构都一样）。影子比对在模拟环境里做：两套实现跑同一个假 GL 总线，样本、电池记录、推送、备份分段和 ubus 调用顺序都要一致（`test/collectd-emu.test.py`）；文件和电池辅助函数在宿主 Lua、路由器 Lua、eco 三个运行时下和 Python 逐字节一致（`test/jsonl-parity.test.py`）。Python 采集器保留为逃生开关（`/etc/mudimodem/collector` 写 `python`，此时守护进程以 `MUDIMODEMD_COLLECTOR=0` 运行）。**③ AT 队列**：控制台的 AT 引擎（`src/lib/mudimodemd/at.lua`，原插件逻辑逐条搬过去）和先进先出队列（`atq.lua`，最多 4 个）在守护进程里；插件的 `at_console` 只通过 oui.ubus（cosocket，不阻塞 nginx）转发，每次最多等 20 秒，没跑完就返回 `{pending, id}`，页面用 `at_result` 接着等。插件里少了 2 处 `io.popen`。守护进程总是运行（`ubus call mudimodem health` / `at_start` / `at_wait`）。演练：ubusd 重启、cell_info 卡住、第二个实例、慢 AT 期间采样不停、slot 0 不发 sub_id、GL AT 服务缺失时回退到直连口工具。上机只剩 🔴 确认（`tools/verify.sh` 第 7、8c 步）。**② 任务**：`jobs.lua`（`job_start` / `job_wait`，同类任务不会并发，第二次启动会并入正在跑的那次）+ `tasks.lua`：版本检查的 curl、AT 库检查/刷新（python 工具）、小区扫描都在守护进程里跑，插件只负责策略和转发，页面用 `job_result` 接着等。扫描通过本机 `/rpc` 调 GL 自己的 `modem.scan_cell_tower`（带 `glinet` 头，和 gl-session 的 `call` 走的是同一条本机回环，但超时是我们自己的 330 秒；gl-session 的 HTTP 客户端 30 秒就放弃），扫描成功后由守护进程记事件。插件里又少了 3 处阻塞调用（curl、两次 python3）。测速和自更新仍由插件以 detach 方式启动（一次 fork，很快），删除 Python 时（⑤）再迁。**④ 变更事务**：见 D2。Apply 不再让 nginx 停 1 秒；锁小区的"立即回滚"（AT 解锁和清 GL 存储）不再在 worker 里跑。演练在 `test/change-emu.test.py` 里：真实插件、守护进程、路由器 busybox 下的真实看门狗，加上记录所有 `gl-session call` 的假 GL。覆盖：到期自动回滚、Keep、回滚窗口内守护进程被 SIGKILL、窗口内 ubusd 重启、看门狗不布防就不写（守护进程谎报已布防也不写）、守护进程不在时退回旧路径、锁小区立即回滚（pending 里的 sub_id，然后清 GL 存储）。⑤ 删除 Python 待做 |
 | R4 新功能 | 待做 | |
 
 姊妹篇：`docs/audit-2026-11-02.md` 逐条列出了具体问题。这一篇回答的是另一个问题：**这些问题为什么会
@@ -102,21 +102,30 @@ heal 流程，以及依赖 opkg 和网络的那条路径。
 - 原来"外部看门狗 + ARMED 握手 + `sleep 1`"这套机制，改成守护进程内的 `time.at(deadline)`。
 - 截止时间用路由器的时钟。页面挂载时读 `change.status` 就能恢复横幅，这样审计 §1.2 的问题从根上解决。
 
-**D2 安全路径不能只依赖守护进程正常运行。** 这是整个设计里最需要谨慎的一点：
-- 写入模组**之前**，先把事务落盘到 `change.json`：`{kind, slot, sub_id, prev, applied, deadline_epoch, state}`。
-  用 JSON，不再让 sh 去 `source`。
-- 守护进程启动时恢复未完成的事务：已过期的立即回滚，未过期的接着倒数。procd 负责崩溃后重启。
-- 新守护进程上线的头几个版本，额外保留一个**兜底守卫**：一个独立的 sh 进程，在 `deadline + 30 s` 时检查
-  `change.json`。如果仍是 `applied`，并且守护进程没有响应，就由它来回滚。这和现在的看门狗是同一套逻辑，代码可以复用。
-  等守护进程经过足够长时间的实际使用之后，再考虑去掉它。
-- `panic` 一直保持纯 sh，不依赖守护进程。
-- `confirm` 返回 `{state, was_pending}`，这样"太晚了，已经回滚"可以如实告诉用户（审计 §1.1）。
+**D2 安全网不依赖守护进程（R3 ④ 已定）。** 这是整个设计里最需要谨慎的一点：
+- 计时、回滚、开机检查、`panic` 全部留在 `mudimodem-revert`（纯 sh，ssh 下什么都不运行也能用）；待确认状态仍是
+  sh 可以 `source` 的 pending 文件。
+- 守护进程只接手原来会卡住 nginx 的两段等待：
+  - **布防**（`change_arm`）：用插件原来的同一条命令拉起看门狗，等它写下布防标记再回答。插件**自己再检查一次标记**，
+    没有标记就不写（守护进程说"已布防"也不算数）。插件以前为此在 worker 里 `sleep 1`。
+  - **锁小区的"立即回滚"**（`restore` 任务）：运行同一个 `restore-now`，再加 `--reconcile` 清掉 GL 存储里的锁。
+    以前这一步由插件在 worker 里用 glc 做；守护进程不是 nginx worker，可以像 `panic` 一样经 gl-session 回到 `/rpc`
+    （`gl_unlock_slot`，sh 里本来就有）。在 nginx worker 里这条回环会因为唯一的 worker 被占着而卡死，
+    所以退回路径（守护进程不在时）不带 `--reconcile`。
+  - 守护进程完全没有应答时，插件退回原来的进程内路径（慢，但同样安全）。
+- 原计划把计时搬进守护进程、sh 只做兜底，放弃了，理由有三：
+  - sh 看门狗本来就是精确计时（布防即开始倒数）；
+  - 再加一个计时器，只会多出"两边谁来回滚"的协调问题，安全上没有收益；
+  - procd 停服务只按 pid 发信号（🟢 `/sbin/procd`：`kill(pid, SIGTERM)`，然后是 `SIGKILL`，从不发给进程组），
+    所以守护进程拉起的看门狗在守护进程重启后照样存活，和 nginx 拉起的一样。
+- `confirm` 返回 `was_pending`，"太晚了，已经回滚"会如实告诉用户（审计 §1.1，已实现）。
 
 **D3 所有可能超过几秒的操作都做成任务（job）。**
-- 涉及的操作：扫描、测速、库刷新、自更新、多步 AT 序列。
-- RPC 立即返回 `{job_id}`；进度和结果通过 `/ws mudimodem.job` 推送；刷新页面后用 `job.status` 找回。
-- 结果持久化到 `/tmp/mudimodem/jobs/<kind>.json`，比如上一次扫描的结果。
-- 这样一来，300 秒的 fastcgi 超时、单 worker 被占满、"扫完结果丢了"这三个问题都不再存在。
+- 已经是任务的：AT 序列（`at_start` / `at_wait`）、扫描、库检查/刷新、版本检查、锁小区的回滚（`job_start` / `job_wait`）。
+- 插件每次最多等 20 秒；没做完就回 `{pending, id}`，页面用 `at_result` / `job_result` 接着等。每一片都要在 30 秒内
+  返回，这是 GL ubus 代理的上限（实测）。结果在守护进程内存里保留 5 分钟。
+- 同一类任务同时只跑一个（扫描、库检查/刷新、回滚），第二次启动会并入正在跑的那次，所以刷新页面后再点一次就能接上。
+- 测速和自更新仍由插件以 detach 方式启动（一次很快的 fork），留到 ⑤ 处理。
 
 **D4 历史数据由插件直接读文件。** 24 小时的数据可能有几 MB，不适合整包走 ubus。守护进程是唯一的写入方，
 插件只读。文件格式（`samples.jsonl` 的 schema）保持不变，前端不受影响。
@@ -182,30 +191,30 @@ src/web/
 
 ---
 
-## 5. 守护进程与插件接口（草案）
+## 5. 守护进程与插件接口
 
-`mudimodemd` 在 ubus 上注册一个对象 `mudimodem`。服务端调用不受点号限制。插件按白名单把请求一对一转发给它。
+`mudimodemd` 在 ubus 上注册一个对象 `mudimodem`。服务端调用不受点号限制，浏览器碰不到它（oui 的 `/rpc` 只分发给
+Lua 插件和 glc）。插件按方法一一转发。已实现的部分：
 
-| 分组 | 方法 | 说明 |
-|---|---|---|
-| bands | `get {light?}` / `apply {slot, mode?, sa?, nsa?, lte?, reset?}` | `apply` 内部开启一个变更事务 |
-| lock | `get` / `lock {…}` / `unlock` / `neighbours`（单次 QENG 邻区读取） | `lock` / `unlock` 也走变更事务 |
-| change | `status` / `confirm` / `revert` | `status` 返回 `{state, kind, applied, deadline, now}` |
-| job | `start {kind, args}` / `status {id\|kind}` / `cancel {id}` | kind：scan、speedtest、lib_refresh、self_update、at_seq |
-| at | `run {cmd}`（单条，≤ 15 s） | 长序列改为 `job.start {kind:"at_seq"}` |
-| speedtest | `history` / `clear` / `schedule get\|set` | |
-| battery | `limit get\|set` | |
-| system | `version` / `health` | `health` 返回采样延迟、队列长度、最近一次错误，在 Config 页显示 |
+| 方法 | 说明 |
+|---|---|
+| `health` | 采样计数、最近一次错误、浏览器是否在线、AT 队列和任务的状态 |
+| `at_start {cmd, timeout}` / `at_wait {id, wait}` | 控制台的 AT 序列（`at.lua` + `atq.lua`），一次一个，最多排 4 个 |
+| `job_start {kind, args}` / `job_wait {id, wait}` | kind：`version_fetch`、`lib_check`、`lib_refresh`、`scan`、`restore` |
+| `change_arm` | 拉起回滚看门狗，等它布防后回答（D2） |
 
-**变更事务的状态机**（安全网完全集中在这里）：
+没有做、也不打算按原草案做的：把 bands / lock 的读写整个搬进守护进程（插件通过 glc 读写本来就不阻塞 nginx），
+以及 `change.status/confirm`（这两步只是读写 pending 文件，留在插件里最简单）。测速、电池限充的方法留到 ⑤。
+
+**变更事务（实际实现，R3 ④）**：
 ```
-idle ──apply/lock──▶ prepared ──写入成功──▶ applied(deadline)
-                         │写入失败                 │confirm            │revert / 到期
-                         ▼                        ▼                   ▼
-                       failed                   kept       reverting ─▶ reverted | revert_failed（保持 armed，提示用户）
+apply   插件写 pending ─▶ change_arm（守护进程拉起看门狗，等待标记）─▶ 插件确认 ARMED ─▶ glc 写入 GL 存储
+到期    看门狗：仍有 pending 且 nonce 是自己 ─▶ restore_from_pending ─▶ 事件 + 推送（失败时保留 pending）
+Keep    插件删除 pending，看门狗醒来后什么都不做
+Revert  频段：插件内用 glc 写回快照；锁小区：守护进程的 restore 任务（restore-now --reconcile）
 ```
-- 每次状态转换都做三件事：写 `change.json`，推送 `mudimodem.change`，追加一条事件。
-- 前端的横幅**只看推送和 `status`**，不再自己倒数，所以手机锁屏、刷新页面、切换标签都不会影响它。
+- 页面按路由器的 deadline 倒数，加载时用 `change_status` 恢复；到期后询问路由器，不自己假设已经回滚（已实现）。
+- 没有做：`mudimodem.change` 推送。另一个浏览器里的 Keep / Revert 要等到期或刷新才会反映出来。
 
 **采样源**（🔴 上机确认之后再切换）：
 - 优先读 GL 的 `cellular.collect get_signals {time:10, slot}`。GL 已经在每 10 秒执行 QENG+QCAINFO（🟡 `libcmcollect.so`），我们没必要再执行一遍。

@@ -5,14 +5,17 @@
 -- the eMMC backup and the live pushes — with the contract of the Python collector it replaces
 -- (src/lib/mudimodemd/collector.lua); ③ the AT console's queue, so a console command no longer
 -- holds GL's one nginx worker (the plugin forwards over oui.ubus, a non-blocking cosocket).
--- ② jobs — the version check, the AT-library check/refresh and the cell scan (tasks.lua). The
--- change transaction comes next, on the same ubus object `mudimodem` (server-side only: oui's
--- /rpc dispatches to Lua plugins and glc, never to ubus).
+-- ② jobs — the version check, the AT-library check/refresh and the cell scan (tasks.lua); ④ the
+-- waiting parts of confirm-or-revert — arming the watchdog, a cell lock's "Revert now"
+-- (change.lua) — while the sh watchdog stays the timer and the restore. All on the ubus object
+-- `mudimodem` (server-side only: oui's /rpc dispatches to Lua plugins and glc, never to ubus).
 --
 --   ubus call mudimodem health      counters, last error, whether a browser is attached
 --   ubus call mudimodem at_start {cmd, timeout}   queue an AT sequence (mudimodemd/atq.lua)
 --   ubus call mudimodem at_wait {id, wait}        its result, waiting up to `wait` s (<= 25)
 --   ubus call mudimodem job_start {kind, args}    version_fetch | lib_check | lib_refresh | scan
+--                                                 | restore (a cell lock's "Revert now")
+--   ubus call mudimodem change_arm                start the revert watchdog, answer once armed
 --   ubus call mudimodem job_wait {id, wait}       its result, the same way (mudimodemd/jobs.lua)
 --
 -- Managed by procd (/etc/init.d/mudimodem-collectd), respawned on exit. Env overrides for tests:
@@ -30,6 +33,7 @@ local collector = require "mudimodemd.collector"
 local atq = require "mudimodemd.atq"
 local jobs = require "mudimodemd.jobs"
 local tasks = require "mudimodemd.tasks"
+local change = require "mudimodemd.change"
 
 local function log(msg) io.stderr:write("mudimodemd: ", msg, "\n"); io.stderr:flush() end
 
@@ -74,6 +78,10 @@ J.register("lib_check", function() return tasks.library("check", tcfg) end, { si
 J.register("lib_refresh", function() return tasks.library("refresh", tcfg) end, { single = true })
 J.register("scan", function(a) return tasks.scan(a, tcfg, event) end, { single = true })
 
+-- Confirm-or-revert: only the waiting moves here (change.lua); the watchdog stays the timer.
+local CH = change.new(change.config(), log)
+J.register("restore", function() return CH.restore() end, { single = true })
+
 -- eco.ubus does not enforce these policies (handlers get the request as sent): they document
 -- the signature for `ubus -v list mudimodem`; at.lua / atq.lua validate every field.
 local ok, aerr = conn:add("mudimodem", {
@@ -82,6 +90,7 @@ local ok, aerr = conn:add("mudimodem", {
     for k, v in pairs(c and c.state or {}) do h[k] = v end
     for k, v in pairs(q.stats) do h[k] = v end
     for k, v in pairs(J.stats) do h[k] = v end
+    for k, v in pairs(CH.stats) do h[k] = v end
     conn:reply(req, h)
   end, {} },
   at_start = { function(req, msg)
@@ -92,6 +101,9 @@ local ok, aerr = conn:add("mudimodem", {
     msg = type(msg) == "table" and msg or {}
     conn:reply(req, q.wait(msg.id, msg.wait))
   end, { id = ubus.INT32, wait = ubus.INT32 } },
+  change_arm = { function(req)
+    conn:reply(req, CH.arm())
+  end, {} },
   job_start = { function(req, msg)
     msg = type(msg) == "table" and msg or {}
     conn:reply(req, J.start(msg.kind, msg.args))

@@ -111,9 +111,11 @@ local function job_wait(id)
 end
 
 -- Start a daemon job and wait one slice for it: the result (done = true) or {pending, id}.
+-- The second value is true when mudimodemd is not registered at all (callers with an
+-- in-process fallback use it); any other failure is an answer of its own.
 local function job(kind, args)
   local r, err = ucall("mudimodem", "job_start", { kind = kind, args = args or {} })
-  if type(r) ~= "table" then return { error = daemon_error(err) } end
+  if type(r) ~= "table" then return { error = daemon_error(err) }, err == "not found" end
   if r.error then return { error = r.error } end
   return job_wait(r.id)
 end
@@ -171,6 +173,23 @@ local function pending_get(key)
     end
   end
   return nil
+end
+
+-- Arm the revert watchdog and CONFIRM it is live before any write: no net, no write (both write
+-- paths call this after writing PENDING). mudimodemd spawns it and waits for its marker without
+-- holding this worker (change.lua). Only when the daemon gives no verdict at all (not running,
+-- not answering) does the spawn run from here, holding the worker ~1 s as before; a watchdog the
+-- daemon may still have started meanwhile is harmless — the newest one owns the marker, an
+-- older one stands down (its nonce no longer matches).
+local function arm_watchdog()
+  os.remove(ARMED)
+  local r = ucall("mudimodem", "change_arm", {})
+  if type(r) == "table" and type(r.armed) == "boolean" then
+    return r.armed and file_exists(ARMED)
+  end
+  spawn_detached(REVERT_BIN .. " watch")
+  os.execute("sleep 1")
+  return file_exists(ARMED)
 end
 
 -- The confirm-or-revert window. The watchdog reads the same variable (default 60 s); it arms
@@ -821,10 +840,7 @@ function M.set_cell_lock(args)
   f:close()
 
   -- Arm the watchdog; no arm, no write (same interlock as set_bands).
-  os.remove(ARMED)
-  spawn_detached(REVERT_BIN .. " watch")
-  os.execute("sleep 1")
-  if not file_exists(ARMED) then
+  if not arm_watchdog() then
     os.remove(PENDING)
     return { error = "revert watchdog failed to arm; no change written" }
   end
@@ -1046,10 +1062,7 @@ function M.set_bands(args)
   f:close()
 
   -- Arm the watchdog, and CONFIRM it is live before the write. No net, no write.
-  os.remove(ARMED)
-  spawn_detached(REVERT_BIN .. " watch")
-  os.execute("sleep 1")
-  if not file_exists(ARMED) then
+  if not arm_watchdog() then
     os.remove(PENDING)
     return { error = "revert watchdog failed to arm; no change written" }
   end
@@ -1199,6 +1212,12 @@ function M.revert_now(args)
   if not file_exists(PENDING) then return { ok = true, note = "nothing pending" } end
 
   if pending_get("KIND") == "cell" then
+    -- Through mudimodemd: the same restore-now, plus GL's store reconciled (--reconcile), with
+    -- no AT or store write holding this worker. A {pending, id} reply is followed by the page
+    -- (job_result). Only with the daemon not running does the in-process path below run.
+    local jr, absent = job("restore", {})
+    if not absent then return jr end
+
     local slot = tonumber(pending_get("SLOT"))
 
     -- The modem-side undo — GL-INDEPENDENT raw-AT unlock FIRST (it is what

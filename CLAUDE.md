@@ -29,7 +29,9 @@ Rule of scope (owner): ship only what stock 4.10 lacks or does incompletely.
   slot the page read and refuse if the active SIM changed.
 - Every band/cell-lock write is **confirm-or-revert**, written through GL's own store
   (`modem.set_band_config` / `set_cell_tower` via glc), and the watchdog is armed **before** the
-  write. `panic` must keep working from ssh with nothing else running.
+  write (mudimodemd `change_arm`, then the plugin checks the marker itself: no marker, no write).
+  The sh watchdog stays the timer and the restore; `panic` must keep working from ssh with
+  nothing else running.
 - The browser cannot call dotted objects (`/rpc` dot rule); only our undotted `mudimodem` plugin
   calls them, server-side. Any free-form string arg needs a validator entry.
 - Nothing slow inside the nginx plugin: 4.10 runs **one** nginx worker, so `os.execute`/`io.popen`
