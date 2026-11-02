@@ -31,12 +31,12 @@ export function rpcSilent(method, params, timeoutMs) {
 // a job still running replies {pending, id} and continues with job_result. `sliceMs` bounds each
 // call; MAX_SLICES bounds the whole wait (a scan is cut by GL at 300 s = 15 slices).
 var MAX_SLICES = 40;
-function follow(call, sliceMs) {
+function follow(call, sliceMs, next) {
   var n = 0;
   var step = function (r) {
     if (r && r.pending && r.id != null) {
       if (++n > MAX_SLICES) return { error: "gave up waiting for the router" };
-      return call("job_result", { id: r.id }, sliceMs).then(step);
+      return call(next || "job_result", { id: r.id }, sliceMs).then(step);
     }
     return r;
   };
@@ -47,6 +47,14 @@ export function rpcJob(method, params, sliceMs) {
   sliceMs = sliceMs || 35000;
   var call = function (m, p, ms) { return rpc(m, p, { timeout: ms }); };
   return call(method, params, sliceMs).then(follow(call, sliceMs));
+}
+
+// One AT command through mudimodemd's AT queue (the console's transport): at_console, then
+// at_result while it is queued or running. -> the final reply ({steps:[{cmd, status, response}]}
+// | {error}). For fixed read-only commands the page itself issues (neighbour cells).
+export function rpcAt(cmd, timeoutS) {
+  var call = function (m, p, ms) { return rpc(m, p, { timeout: ms }); };
+  return call("at_console", { cmd: cmd, timeout: timeoutS || 8 }, 35000).then(follow(call, 35000, "at_result"));
 }
 
 export function rpcSilentJob(method, params, sliceMs) {

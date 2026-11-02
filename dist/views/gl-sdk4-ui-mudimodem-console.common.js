@@ -47,12 +47,12 @@ var __mm = (() => {
     });
   }
   var MAX_SLICES = 40;
-  function follow(call, sliceMs) {
+  function follow(call, sliceMs, next) {
     var n = 0;
     var step = function(r) {
       if (r && r.pending && r.id != null) {
         if (++n > MAX_SLICES) return { error: "gave up waiting for the router" };
-        return call("job_result", { id: r.id }, sliceMs).then(step);
+        return call(next || "job_result", { id: r.id }, sliceMs).then(step);
       }
       return r;
     };
@@ -82,7 +82,6 @@ var __mm = (() => {
     "4G only": "仅 4G",
     "5G NR non-standalone": "5G NR 非独立组网（NSA）",
     "5G NR standalone": "5G NR 独立组网（SA）",
-    "5G SA exposes no neighbour list - only the serving cell is visible without a scan, and a scan takes the modem offline for up to ~10 minutes.": "5G SA 不提供邻区列表 - 不扫描只能看到当前服务小区，而扫描会让 Modem 离线最长约 10 分钟。",
     "5G only": "仅 5G",
     "5G selections held back under 4G-only": "仅 4G 模式下 5G 选择不会下发",
     "6 hours": "6 小时",
@@ -100,6 +99,8 @@ var __mm = (() => {
     "Apply": "应用",
     "Applying...": "正在应用…",
     "Armed · target {target} · will apply when the charger connects · current {cur}": "已开启 · 目标 {target} · 接上充电器后生效 · 当前 {cur}",
+    "Asking the modem...": "正在询问 Modem…",
+    "Asks the modem which cells it measures besides the serving one (LTE and NSA anchors).": "询问 Modem 除服务小区外还测到了哪些小区（LTE 和 NSA 锚点）。",
     "Auto": "自动",
     "Auto or 4G only": "自动或仅 4G",
     "Auto or 5G only": "自动或仅 5G",
@@ -175,6 +176,7 @@ var __mm = (() => {
     "Couldn't reach the router — retrying every {s} s.": "无法连接路由器 — 每 {s} 秒重试一次。",
     "Couldn't read bands: {err}": "无法读取频段：{err}",
     "Couldn't read lock state: {err}": "无法读取锁定状态：{err}",
+    "Couldn't read neighbours: {err}": "无法读取邻区：{err}",
     "Couldn't save the schedule: {err}": "无法保存计划：{err}",
     "Couldn't start update: {err}": "无法开始更新：{err}",
     "Current": "电流",
@@ -253,9 +255,11 @@ var __mm = (() => {
     "Modem crash": "Modem 崩溃",
     "MudiModem (version unknown)": "MudiModem（版本未知）",
     "Nearby cells": "附近基站",
+    "Neighbour cells": "邻区",
     "Network": "网络",
     "Network mode": "网络模式",
     "Network mode — open Bands": "网络模式 — 打开频段页",
+    "No scan yet. A scan lists every cell in range, on every carrier, but takes the modem offline for up to ~10 minutes.": "还没有扫描。扫描能列出范围内所有运营商的所有小区，但会让 Modem 离线最长约 10 分钟。",
     "No band changes, handovers or failovers recorded yet.": "还没有记录到频段修改、基站切换或 SIM 卡切换。",
     "No battery history yet — sampling starts within 20 s.": "还没有电池历史 — 20 秒内开始采样。",
     "No changes": "没有修改",
@@ -282,6 +286,8 @@ var __mm = (() => {
     "RSRQ · dB": "RSRQ · dB",
     "Range {r}": "范围 {r}",
     "Raw AT": "AT 命令",
+    "Read again": "重新读取",
+    "Read neighbours": "读取邻区",
     "Reading band configuration from the modem...": "正在从 Modem 读取频段配置…",
     "Reading lock state from the modem...": "正在从 Modem 读取锁定状态…",
     "Received power from the cell, in dBm. Above −90 is good, −90 to −105 fair, below −110 poor.": "从基站收到的信号功率，单位 dBm。高于 −90 为好，−90 到 −105 一般，低于 −110 差。",
@@ -337,6 +343,7 @@ var __mm = (() => {
     "The connection dropped while applying, and nothing is pending on the router now - the change did not take, or was already reverted.": "应用时连接中断，且路由器上现在没有待确认的修改 - 修改没有生效，或已被恢复。",
     "The frequency band in use: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter.": "当前使用的频段：n 表示 5G NR，B 表示 LTE。低频覆盖远；高频速度快但覆盖近。",
     "The lock request was cut off by a connection drop and no lock is set - try again.": "锁定请求因连接中断而失败，目前没有设置锁定 - 请重试。",
+    "The modem reports no neighbours. On 5G SA it never does - only a scan finds other cells there.": "Modem 没有报告邻区。5G SA 下从来不会报告 - 只有扫描才能找到其他小区。",
     "The modem restarted after a crash; GL saved a dump in /data/vendor/modem_crash_log": "Modem 崩溃后已自动重启；GL 已把转储保存在 /data/vendor/modem_crash_log",
     "The watchdog reverted a lock, but {gl} still remembers it - GL may re-apply it later. Clear it to reconcile.": "看门狗已撤销一次锁定，但 {gl} 仍然记着它 - GL 之后可能会重新应用。请清除以保持一致。",
     "Time": "时间",
@@ -410,13 +417,17 @@ var __mm = (() => {
     "ms latency": "ms 延迟",
     "newest first": "最新的在前",
     "no reply": "无应答",
+    "no scan, the link stays up": "无需扫描，连接不中断",
     "nv": "nv",
     "one clock, all three metrics — hover for a slice, click to pin": "同一时间轴上的三个指标 — 悬停查看某一时刻，点击固定",
+    "other frequency": "异频",
     "permitted, not active": "允许但未生效",
     "permitted, not selected": "允许但未选择",
     "pinned": "已固定",
     "read": "只读",
     "read before locking": "锁定前请先阅读",
+    "read just now": "刚刚读取",
+    "read {n} min ago": "{n} 分钟前读取",
     "ready. Pick a command from the library, or type one.": "就绪。从命令库选择命令，或直接输入。",
     "refresh": "刷新",
     "refresh failed": "更新失败",
@@ -429,8 +440,11 @@ var __mm = (() => {
     "rev {rev}": "版本 {rev}",
     "ring = serving now (every carrier: PCC + SCCs)": "圆环 = 当前服务（所有载波：PCC + SCC）",
     "safe — reads only": "安全 — 只读",
+    "same frequency": "同频",
     "scan failed": "扫描失败",
     "Carrier cap": "运营商限速",
+    "the modem did not answer": "Modem 没有应答",
+    "the modem refused the command": "Modem 拒绝了该命令",
     "{dl} / {ul} Mbps": "{dl} / {ul} Mbps",
     "download at the cap": "下载已达上限",
     "upload at the cap": "上传已达上限",

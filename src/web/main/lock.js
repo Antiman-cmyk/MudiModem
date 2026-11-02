@@ -1,4 +1,5 @@
-// Cell lock tab: serving cell, pin / scan / lock / unlock, recovery notes.
+// Cell lock tab: serving cell, pin / scan / lock / unlock, recovery notes (neighbours.js: the
+// no-scan neighbour list).
 import { rpc, hasRpc, rpcJob } from "../kit/rpc.js";
 import { t as T, tp as TP } from "../kit/i18n.js";
 export default {
@@ -54,6 +55,8 @@ export default {
       this.lockConfirm = null;
       this.scanConfirm = false;
       if (!this.scan.running) this.scan = { towers: [], running: false, error: "", ts: 0, slot: null };
+      if (!this.nb.running) this.nb = { cells: [], other: [], running: false, error: "", ts: 0, slot: null, read: false };
+      this.nbConfirm = null;
       this.applyError = "";
       this.clearResetNote();
       if (this.bands || this.bandsLoading) this.fetchBands();
@@ -305,8 +308,8 @@ export default {
     },
 
     // Nearby-cells scan card. GL's scan_cells is DISRUPTIVE (modem offline up
-    // to ~10 minutes), so it never fires without an explicit confirm step, and
-    // the empty state is honest that 5G SA exposes no neighbour list at all.
+    // to ~10 minutes), so it never fires without an explicit confirm step. The no-scan neighbour
+    // list (neighbours.js) sits above it; on 5G SA that list is always empty.
     renderScanCard(h) {
       var self = this;
       var locked = this.lockData && ((this.lockData.lock.l5g || {}).locked ||
@@ -380,7 +383,7 @@ export default {
       } else {
         body = h("div", { staticClass: "mm-empty" }, this.scan.error
           ? T("Scan failed: {err}", { err: this.scan.error })
-          : "5G SA exposes no neighbour list - only the serving cell is visible without a scan, and a scan takes the modem offline for up to ~10 minutes.");
+          : "No scan yet. A scan lists every cell in range, on every carrier, but takes the modem offline for up to ~10 minutes.");
       }
       var foot;
       if (!this.scan.running) {
@@ -435,6 +438,7 @@ export default {
             ])
           : null,
         this.renderCurrentCell(h),
+        this.renderNeighbours(h),
         this.renderScanCard(h),
         this.renderRecovery(h)
       ];

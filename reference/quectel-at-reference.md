@@ -245,8 +245,11 @@ Only **LTE** and **WCDMA** neighbour formats exist in the manual:
        <cell_resel_priority>,<threshX_low>,<threshX_high>
 ```
 🟢 `AT+QENG=?` on our box → `("servingcell","neighbourcell")` — the type exists.
-❓ **Untested on this box, and no SA neighbour format is documented.** The Cell-lock tab design
-assumes a neighbour list *with SINR*; on 5G SA that may return nothing. **Test before building it.**
+🟢 On NR5G-SA it returns a bare `OK` (2026-07-18: no neighbour list exists there).
+❓ LTE / NSA-anchor replies on this box and any NR line format are not captured yet. The Cell lock
+tab's "Neighbour cells" (`src/web/main/neighbours.js`, on click only, through mudimodemd's AT
+queue) parses the two LTE formats above and shows any other `+QENG:` line verbatim, so the first
+user on LTE/NSA who reads it settles both.
 
 ### 4.3 `AT+QNWINFO` 📘🟢
 `+QNWINFO: <AcT>,<oper>,<band>,<channel>` — 📘 note: returns `+QNWINFO: No Service` if unregistered.

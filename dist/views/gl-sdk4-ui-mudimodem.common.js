@@ -73,7 +73,6 @@ var __mm = (() => {
     "4G only": "仅 4G",
     "5G NR non-standalone": "5G NR 非独立组网（NSA）",
     "5G NR standalone": "5G NR 独立组网（SA）",
-    "5G SA exposes no neighbour list - only the serving cell is visible without a scan, and a scan takes the modem offline for up to ~10 minutes.": "5G SA 不提供邻区列表 - 不扫描只能看到当前服务小区，而扫描会让 Modem 离线最长约 10 分钟。",
     "5G only": "仅 5G",
     "5G selections held back under 4G-only": "仅 4G 模式下 5G 选择不会下发",
     "6 hours": "6 小时",
@@ -91,6 +90,8 @@ var __mm = (() => {
     "Apply": "应用",
     "Applying...": "正在应用…",
     "Armed · target {target} · will apply when the charger connects · current {cur}": "已开启 · 目标 {target} · 接上充电器后生效 · 当前 {cur}",
+    "Asking the modem...": "正在询问 Modem…",
+    "Asks the modem which cells it measures besides the serving one (LTE and NSA anchors).": "询问 Modem 除服务小区外还测到了哪些小区（LTE 和 NSA 锚点）。",
     "Auto": "自动",
     "Auto or 4G only": "自动或仅 4G",
     "Auto or 5G only": "自动或仅 5G",
@@ -166,6 +167,7 @@ var __mm = (() => {
     "Couldn't reach the router — retrying every {s} s.": "无法连接路由器 — 每 {s} 秒重试一次。",
     "Couldn't read bands: {err}": "无法读取频段：{err}",
     "Couldn't read lock state: {err}": "无法读取锁定状态：{err}",
+    "Couldn't read neighbours: {err}": "无法读取邻区：{err}",
     "Couldn't save the schedule: {err}": "无法保存计划：{err}",
     "Couldn't start update: {err}": "无法开始更新：{err}",
     "Current": "电流",
@@ -244,9 +246,11 @@ var __mm = (() => {
     "Modem crash": "Modem 崩溃",
     "MudiModem (version unknown)": "MudiModem（版本未知）",
     "Nearby cells": "附近基站",
+    "Neighbour cells": "邻区",
     "Network": "网络",
     "Network mode": "网络模式",
     "Network mode — open Bands": "网络模式 — 打开频段页",
+    "No scan yet. A scan lists every cell in range, on every carrier, but takes the modem offline for up to ~10 minutes.": "还没有扫描。扫描能列出范围内所有运营商的所有小区，但会让 Modem 离线最长约 10 分钟。",
     "No band changes, handovers or failovers recorded yet.": "还没有记录到频段修改、基站切换或 SIM 卡切换。",
     "No battery history yet — sampling starts within 20 s.": "还没有电池历史 — 20 秒内开始采样。",
     "No changes": "没有修改",
@@ -273,6 +277,8 @@ var __mm = (() => {
     "RSRQ · dB": "RSRQ · dB",
     "Range {r}": "范围 {r}",
     "Raw AT": "AT 命令",
+    "Read again": "重新读取",
+    "Read neighbours": "读取邻区",
     "Reading band configuration from the modem...": "正在从 Modem 读取频段配置…",
     "Reading lock state from the modem...": "正在从 Modem 读取锁定状态…",
     "Received power from the cell, in dBm. Above −90 is good, −90 to −105 fair, below −110 poor.": "从基站收到的信号功率，单位 dBm。高于 −90 为好，−90 到 −105 一般，低于 −110 差。",
@@ -328,6 +334,7 @@ var __mm = (() => {
     "The connection dropped while applying, and nothing is pending on the router now - the change did not take, or was already reverted.": "应用时连接中断，且路由器上现在没有待确认的修改 - 修改没有生效，或已被恢复。",
     "The frequency band in use: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter.": "当前使用的频段：n 表示 5G NR，B 表示 LTE。低频覆盖远；高频速度快但覆盖近。",
     "The lock request was cut off by a connection drop and no lock is set - try again.": "锁定请求因连接中断而失败，目前没有设置锁定 - 请重试。",
+    "The modem reports no neighbours. On 5G SA it never does - only a scan finds other cells there.": "Modem 没有报告邻区。5G SA 下从来不会报告 - 只有扫描才能找到其他小区。",
     "The modem restarted after a crash; GL saved a dump in /data/vendor/modem_crash_log": "Modem 崩溃后已自动重启；GL 已把转储保存在 /data/vendor/modem_crash_log",
     "The watchdog reverted a lock, but {gl} still remembers it - GL may re-apply it later. Clear it to reconcile.": "看门狗已撤销一次锁定，但 {gl} 仍然记着它 - GL 之后可能会重新应用。请清除以保持一致。",
     "Time": "时间",
@@ -401,13 +408,17 @@ var __mm = (() => {
     "ms latency": "ms 延迟",
     "newest first": "最新的在前",
     "no reply": "无应答",
+    "no scan, the link stays up": "无需扫描，连接不中断",
     "nv": "nv",
     "one clock, all three metrics — hover for a slice, click to pin": "同一时间轴上的三个指标 — 悬停查看某一时刻，点击固定",
+    "other frequency": "异频",
     "permitted, not active": "允许但未生效",
     "permitted, not selected": "允许但未选择",
     "pinned": "已固定",
     "read": "只读",
     "read before locking": "锁定前请先阅读",
+    "read just now": "刚刚读取",
+    "read {n} min ago": "{n} 分钟前读取",
     "ready. Pick a command from the library, or type one.": "就绪。从命令库选择命令，或直接输入。",
     "refresh": "刷新",
     "refresh failed": "更新失败",
@@ -420,8 +431,11 @@ var __mm = (() => {
     "rev {rev}": "版本 {rev}",
     "ring = serving now (every carrier: PCC + SCCs)": "圆环 = 当前服务（所有载波：PCC + SCC）",
     "safe — reads only": "安全 — 只读",
+    "same frequency": "同频",
     "scan failed": "扫描失败",
     "Carrier cap": "运营商限速",
+    "the modem did not answer": "Modem 没有应答",
+    "the modem refused the command": "Modem 拒绝了该命令",
     "{dl} / {ul} Mbps": "{dl} / {ul} Mbps",
     "download at the cap": "下载已达上限",
     "upload at the cap": "上传已达上限",
@@ -595,12 +609,12 @@ var __mm = (() => {
     });
   }
   var MAX_SLICES = 40;
-  function follow(call, sliceMs) {
+  function follow(call, sliceMs, next) {
     var n = 0;
     var step = function(r) {
       if (r && r.pending && r.id != null) {
         if (++n > MAX_SLICES) return { error: "gave up waiting for the router" };
-        return call("job_result", { id: r.id }, sliceMs).then(step);
+        return call(next || "job_result", { id: r.id }, sliceMs).then(step);
       }
       return r;
     };
@@ -612,6 +626,12 @@ var __mm = (() => {
       return rpc(m, p, { timeout: ms });
     };
     return call(method, params, sliceMs).then(follow(call, sliceMs));
+  }
+  function rpcAt(cmd, timeoutS) {
+    var call = function(m, p, ms) {
+      return rpc(m, p, { timeout: ms });
+    };
+    return call("at_console", { cmd, timeout: timeoutS || 8 }, 35e3).then(follow(call, 35e3, "at_result"));
   }
   function rpcSilentJob(method, params, sliceMs) {
     sliceMs = sliceMs || 35e3;
@@ -1719,6 +1739,8 @@ var __mm = (() => {
         this.lockConfirm = null;
         this.scanConfirm = false;
         if (!this.scan.running) this.scan = { towers: [], running: false, error: "", ts: 0, slot: null };
+        if (!this.nb.running) this.nb = { cells: [], other: [], running: false, error: "", ts: 0, slot: null, read: false };
+        this.nbConfirm = null;
         this.applyError = "";
         this.clearResetNote();
         if (this.bands || this.bandsLoading) this.fetchBands();
@@ -1989,8 +2011,8 @@ var __mm = (() => {
         ]);
       },
       // Nearby-cells scan card. GL's scan_cells is DISRUPTIVE (modem offline up
-      // to ~10 minutes), so it never fires without an explicit confirm step, and
-      // the empty state is honest that 5G SA exposes no neighbour list at all.
+      // to ~10 minutes), so it never fires without an explicit confirm step. The no-scan neighbour
+      // list (neighbours.js) sits above it; on 5G SA that list is always empty.
       renderScanCard(h) {
         var self = this;
         var locked = this.lockData && ((this.lockData.lock.l5g || {}).locked || (this.lockData.lock.l4g || {}).locked);
@@ -2073,7 +2095,7 @@ var __mm = (() => {
           });
           body = h("div", rows);
         } else {
-          body = h("div", { staticClass: "mm-empty" }, this.scan.error ? t("Scan failed: {err}", { err: this.scan.error }) : "5G SA exposes no neighbour list - only the serving cell is visible without a scan, and a scan takes the modem offline for up to ~10 minutes.");
+          body = h("div", { staticClass: "mm-empty" }, this.scan.error ? t("Scan failed: {err}", { err: this.scan.error }) : "No scan yet. A scan lists every cell in range, on every carrier, but takes the modem offline for up to ~10 minutes.");
         }
         var foot;
         if (!this.scan.running) {
@@ -2142,6 +2164,7 @@ var __mm = (() => {
             ])
           ]) : null,
           this.renderCurrentCell(h),
+          this.renderNeighbours(h),
           this.renderScanCard(h),
           this.renderRecovery(h)
         ];
@@ -2162,6 +2185,208 @@ var __mm = (() => {
             { label: h("b", t("Remote sessions:")) }
           ))
         ]);
+      }
+    }
+  };
+
+  // src/web/main/neighbours.js
+  var LTE_DL = [
+    [1, 0, 599],
+    [2, 600, 1199],
+    [3, 1200, 1949],
+    [4, 1950, 2399],
+    [5, 2400, 2649],
+    [7, 2750, 3449],
+    [8, 3450, 3799],
+    [12, 5010, 5179],
+    [13, 5180, 5279],
+    [14, 5280, 5379],
+    [17, 5730, 5849],
+    [18, 5850, 5999],
+    [19, 6e3, 6149],
+    [20, 6150, 6449],
+    [25, 8040, 8689],
+    [26, 8690, 9039],
+    [28, 9210, 9659],
+    [29, 9660, 9769],
+    [30, 9770, 9869],
+    [32, 9920, 10359],
+    [34, 36200, 36349],
+    [38, 37750, 38249],
+    [39, 38250, 38649],
+    [40, 38650, 39649],
+    [41, 39650, 41589],
+    [42, 41590, 43589],
+    [43, 43590, 45589],
+    [46, 46790, 54539],
+    [48, 55240, 56739],
+    [66, 66436, 67335],
+    [71, 68586, 68935]
+  ];
+  function lteBandOf(earfcn) {
+    var n = Number(earfcn);
+    if (!isFinite(n)) return void 0;
+    for (var i = 0; i < LTE_DL.length; i++) if (n >= LTE_DL[i][1] && n <= LTE_DL[i][2]) return LTE_DL[i][0];
+    return void 0;
+  }
+  function parseNeighbours(text) {
+    var cells = [], other = [];
+    var num = function(v) {
+      var s = String(v == null ? "" : v).trim();
+      if (s === "" || s === "-") return void 0;
+      var n = Number(s);
+      return isFinite(n) ? n : void 0;
+    };
+    String(text || "").replace(/\r/g, "\n").split("\n").forEach(function(l) {
+      l = l.trim();
+      var m = l.match(/^\+QENG:\s*"neighbourcell ?([a-z]*)"\s*,\s*"([^"]*)"\s*,(.*)$/i);
+      if (!m) {
+        if (/^\+QENG:/i.test(l)) other.push(l);
+        return;
+      }
+      var f = m[3].split(",");
+      if (m[2] !== "LTE" || num(f[0]) === void 0 || num(f[1]) === void 0) {
+        other.push(l);
+        return;
+      }
+      cells.push({
+        kind: m[1].toLowerCase() || "?",
+        rat: "LTE",
+        earfcn: num(f[0]),
+        pci: num(f[1]),
+        rsrq: num(f[2]),
+        rsrp: num(f[3]),
+        rssi: num(f[4]),
+        sinr: num(f[5]),
+        srxlev: num(f[6]),
+        band: lteBandOf(f[0])
+      });
+    });
+    return { cells, other };
+  }
+  var neighbours_default = {
+    data() {
+      return {
+        // the last read: cells/other from parseNeighbours, the slot it was read for, its time
+        nb: { cells: [], other: [], running: false, error: "", ts: 0, slot: null, read: false },
+        nbConfirm: null
+        // index of the row whose Lock awaits confirm
+      };
+    },
+    methods: {
+      readNeighbours() {
+        var self = this;
+        if (this.nb.running || this.scan.running) return;
+        var slot = this.slotOf(this.lockData);
+        this.nb = { cells: [], other: [], running: true, error: "", ts: 0, slot: slot == null ? null : slot, read: false };
+        this.nbConfirm = null;
+        rpcAt('AT+QENG="neighbourcell"', 8).then(function(r) {
+          if (!r || r.error) {
+            self.nb.error = r && r.error || "request failed";
+            return;
+          }
+          var st = Array.isArray(r.steps) ? r.steps[0] : null;
+          if (!st || st.status !== "ok") {
+            self.nb.error = st && st.status === "timeout" ? "the modem did not answer" : "the modem refused the command";
+            return;
+          }
+          var p = parseNeighbours(st.response);
+          self.nb.cells = p.cells;
+          self.nb.other = p.other;
+          self.nb.read = true;
+          self.nb.ts = Date.now();
+        }).catch(function(e) {
+          self.nb.error = e && (e.type || e.message) || "request failed";
+        }).then(function() {
+          self.nb.running = false;
+        });
+      },
+      // Lock target from a neighbour row: a 4G lock is EARFCN + PCI (GL: QNWLOCK "common/4g").
+      nbTarget(c) {
+        return {
+          rat: "4g",
+          pci: c.pci,
+          freq: c.earfcn,
+          band: c.band,
+          label: "neighbour cell PCI " + c.pci,
+          slot: this.nb.slot != null ? this.nb.slot : this.slotOf(this.lockData)
+        };
+      },
+      renderNeighbours(h) {
+        var self = this, nb = this.nb;
+        var locked = this.lockData && ((this.lockData.lock.l5g || {}).locked || (this.lockData.lock.l4g || {}).locked);
+        var head = h("div", { staticClass: "mm-grp-h" }, [
+          h("span", { staticClass: "mm-grp-t" }, "Neighbour cells"),
+          h("span", { staticClass: "mm-hint" }, !nb.ts ? "no scan, the link stays up" : Date.now() - nb.ts < 6e4 ? "read just now" : t("read {n} min ago", { n: Math.round((Date.now() - nb.ts) / 6e4) }))
+        ]);
+        var body = null;
+        if (nb.running) body = h("div", { staticClass: "mm-empty" }, "Asking the modem...");
+        else if (nb.error) body = h("div", { staticClass: "mm-empty" }, t("Couldn't read neighbours: {err}", { err: t(nb.error) }));
+        else if (nb.read && !nb.cells.length && !nb.other.length)
+          body = h(
+            "div",
+            { staticClass: "mm-empty" },
+            "The modem reports no neighbours. On 5G SA it never does - only a scan finds other cells there."
+          );
+        else if (nb.read) {
+          var sorted = nb.cells.slice().sort(function(a, b) {
+            if (a.rsrp === void 0) return 1;
+            if (b.rsrp === void 0) return -1;
+            return b.rsrp - a.rsrp;
+          });
+          var rows = sorted.map(function(c, i) {
+            var q = c.rsrp !== void 0 ? c.rsrp >= -95 ? "good" : c.rsrp >= -105 ? "fair" : "poor" : "none";
+            var confirming = self.nbConfirm === i;
+            var target = self.nbTarget(c);
+            return h("div", { key: "n" + i, staticClass: "mm-scan-row" }, [
+              h("span", { staticClass: "mm-scan-badge" }, "LTE"),
+              h("span", c.kind === "intra" ? t("same frequency") : c.kind === "inter" ? t("other frequency") : c.kind),
+              h("span", (c.band !== void 0 ? "B" + c.band : "B?") + "  EARFCN " + c.earfcn + "  PCI " + c.pci),
+              h(
+                "span",
+                { style: { color: self.qColor(q) } },
+                (c.rsrp !== void 0 ? c.rsrp + " dBm" : "") + (c.sinr !== void 0 ? " · SINR " + c.sinr : "")
+              ),
+              confirming ? h("span", { staticStyle: { display: "flex", gap: "6px" } }, [
+                h("button", { staticClass: "mm-btn", on: { click: function() {
+                  self.nbConfirm = null;
+                } } }, "Cancel"),
+                h("button", {
+                  staticClass: "mm-btn primary",
+                  attrs: { disabled: self.lockBusy || !!self.pending },
+                  on: { click: function() {
+                    self.lockCell(target);
+                  } }
+                }, self.lockBusy ? "Locking..." : "Confirm")
+              ]) : h("button", {
+                staticClass: "mm-btn",
+                attrs: { disabled: !!self.pending || self.lockBusy || locked || c.pci === void 0 },
+                on: { click: function() {
+                  self.nbConfirm = i;
+                } }
+              }, "Lock")
+            ]);
+          });
+          nb.other.forEach(function(l, i) {
+            rows.push(h("div", {
+              key: "o" + i,
+              staticClass: "mm-hint",
+              staticStyle: { fontFamily: "ui-monospace,monospace", wordBreak: "break-all" }
+            }, l));
+          });
+          body = h("div", rows);
+        }
+        var foot = h("div", { staticClass: "mm-foot" }, [
+          h("span", { staticClass: "mm-hint" }, "Asks the modem which cells it measures besides the serving one (LTE and NSA anchors)."),
+          h("button", {
+            staticClass: "mm-btn",
+            attrs: { disabled: nb.running || this.scan.running || !!this.pending },
+            on: { click: function() {
+              self.readNeighbours();
+            } }
+          }, nb.read || nb.error ? "Read again" : "Read neighbours")
+        ]);
+        return h("div", { staticClass: "mm-grp" }, [head, body, foot].filter(Boolean));
       }
     }
   };
@@ -3178,7 +3403,7 @@ var __mm = (() => {
       }
       return h("div", { staticClass: "mm" }, [strip, this.pending ? this.renderRevert(h) : null, tabs, panel]);
     }
-  }, [strip_default, change_default, bands_default, lock_default, config_default, tabs_default, serving_default, styles_default]));
+  }, [strip_default, change_default, bands_default, lock_default, neighbours_default, config_default, tabs_default, serving_default, styles_default]));
   return __toCommonJS(index_exports);
 })();
 return __mm.default;

@@ -978,15 +978,16 @@ test('at the deadline the page asks the box instead of assuming the revert happe
 
 // ---- Nearby-cells scan card ----
 
-test('lock tab: scan card empty state is honest about SA + disruption', () => {
+test('lock tab: the no-scan neighbour read comes first; the scan card is honest about disruption', () => {
   const component = loadChunk();
   const vm = makeVm(component, LIVE);
   vm.tab = 'lock';
   vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
   const text = textOf(component.render.call(vm, h));
-  assert.match(text, /no neighbour list/i);
-  assert.match(text, /offline/i);
+  assert.match(text, /Neighbour cells.*the link stays up.*Read neighbours.*Nearby cells/);
+  assert.match(text, /offline for up to ~10 minutes/i);
   assert.match(text, /Scan for cells/);
+  // SA honesty now lives where it applies: the neighbour read's empty answer (tested above)
 });
 
 test('lock tab: scan results float the serving carrier first, then A–Z, then strongest RSRP', () => {
@@ -2043,4 +2044,77 @@ test('the "?" beside the RSRP label opens a glossary of the readings', () => {
   const txt = textOf(c.render.call(vm, h));
   assert.match(txt, /Received power from the cell/);
   assert.match(txt, /Carrier aggregation/);
+});
+
+// ---- neighbour cells without a scan (src/web/main/neighbours.js) ----
+const QENG_LTE = '\r\n+QENG: "neighbourcell intra","LTE",66786,301,-11,-92,-60,12,38,62,12,10,22\r\n' +
+  '+QENG: "neighbourcell inter","LTE",5230,77,-15,-108,-75,-2,10,3,4,5\r\n' +
+  '+QENG: "neighbourcell inter","LTE",2175,12,-,-,-,-,-,-\r\n' +
+  '+QENG: "neighbourcell","NR5G",627264,516,-90\r\n\r\nOK\r\n';
+
+test('readNeighbours(): one read-only AT through the queue, {pending} followed via at_result, LTE parsed', async () => {
+  const calls = stubRpc([
+    { done: false, pending: true, id: 7, steps: [] },                                // at_console: queued
+    { done: true, id: 7, steps: [{ cmd: 'AT+QENG="neighbourcell"', status: 'ok', response: QENG_LTE }] }
+  ]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+    vm.pending = null; vm.lockBusy = false;
+    vm.readNeighbours();
+    assert.strictEqual(vm.nb.running, true);
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    assert.deepStrictEqual(calls.map((x) => x.params[2]), ['at_console', 'at_result']);
+    assert.deepStrictEqual(calls[0].params[3], { cmd: 'AT+QENG="neighbourcell"', timeout: 8 }, 'a fixed command');
+    assert.deepStrictEqual(calls[1].params[3], { id: 7 });
+    assert.strictEqual(vm.nb.running, false);
+    assert.strictEqual(vm.nb.error, '');
+    assert.strictEqual(vm.nb.cells.length, 3, 'the three LTE rows');
+    const [a, b, z] = vm.nb.cells;
+    assert.deepStrictEqual([a.kind, a.earfcn, a.pci, a.rsrq, a.rsrp, a.sinr, a.band], ['intra', 66786, 301, -11, -92, 12, 66]);
+    assert.deepStrictEqual([b.kind, b.earfcn, b.band, b.rsrp], ['inter', 5230, 13, -108]);
+    assert.strictEqual(z.rsrp, undefined, '"-" is no reading, never 0');
+    assert.strictEqual(z.band, 4, 'EARFCN 2175 is B4');
+    assert.deepStrictEqual(vm.nb.other, ['+QENG: "neighbourcell","NR5G",627264,516,-90'], 'NR shown raw, not guessed');
+    const tree = vm.renderNeighbours(h);
+    const txt = textOf(tree);
+    assert.match(txt, /B66  EARFCN 66786  PCI 301/);
+    assert.match(txt, /NR5G",627264/);
+    const rows = walk(tree).filter((n) => n.data && n.data.staticClass === 'mm-scan-row');
+    assert.strictEqual(textOf(rows[0]).indexOf('PCI 301') >= 0, true, 'strongest first');
+    assert.strictEqual(textOf(rows[2]).indexOf('PCI 12') >= 0, true, 'no RSRP sinks to the bottom');
+    const t = vm.nbTarget(a);
+    assert.deepStrictEqual([t.rat, t.pci, t.freq, t.band, t.slot], ['4g', 301, 66786, 66, vm.slotOf(vm.lockData)],
+      'a 4G lock target: EARFCN + PCI on the SIM it was read for');
+  } finally { unstubRpc(); }
+});
+
+test('readNeighbours(): 5G SA answers a bare OK -> an honest empty state; a refusal or timeout is an error', async () => {
+  for (const [step, want] of [
+    [{ status: 'ok', response: '\r\nOK\r\n' }, /reports no neighbours/],
+    [{ status: 'error', response: '\r\nERROR\r\n' }, /refused/],
+    [{ status: 'timeout', response: '' }, /did not answer/],
+  ]) {
+    stubRpc([{ done: true, id: 1, steps: [Object.assign({ cmd: 'x' }, step)] }]);
+    try {
+      const c = loadChunk();
+      const vm = makeVm(c, LIVE);
+      vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+      vm.readNeighbours();
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      assert.match(textOf(vm.renderNeighbours(h)), want);
+    } finally { unstubRpc(); }
+  }
+});
+
+test('a SIM change drops the neighbour list (it belongs to the other SIM)', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, LIVE);
+  vm.nb = { cells: [{ pci: 1 }], other: [], running: false, error: '', ts: 1, slot: 1, read: true };
+  vm.nbConfirm = 0;
+  vm.fetchBands = () => {}; vm.fetchLock = () => {};
+  vm.onSlotChange();
+  assert.deepStrictEqual(vm.nb.cells, []);
+  assert.strictEqual(vm.nbConfirm, null);
 });

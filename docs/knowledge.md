@@ -259,7 +259,7 @@ comma-separated reply. Nothing auto-runs; `{{params}}` must be filled; set/nv ne
 1. `AT+QPRTPARA` (1–4) mapping — believed 1 backup, 3 force restore, 4 info (other family's doc);
    unverified, never run it guessing.
 2. Is `policy_band` writable (`policy_mode` exists, undocumented)?
-3. `AT+QENG="neighbourcell"` on NR (SA/NSA) — format unknown.
+3. `AT+QENG="neighbourcell"` on LTE / NSA on this box, and any NR line format (SA answers a bare `OK`). Cell lock → Neighbour cells shows unknown lines verbatim, so the first user report settles it.
 4. `AT+QCAINFO` `<pcell_state>` returned `5` (documented 0|1) — don't decode positionally.
 5. The full `quectel_set_band_info` branch table (which empty-list combinations emit
    `nr5g_disable_mode` 1/2) — settle by disassembly first.

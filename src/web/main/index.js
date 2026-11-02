@@ -10,7 +10,7 @@
 //   strip.js    RSRP trace (collector preload + pushes + backfill) + mode/tower badges
 //   change.js   confirm-or-revert as the router reports it (change_status), Keep / Revert
 //   bands.js    the three-layer band model, mode, Apply
-//   lock.js     serving cell, scan, lock / unlock
+//   lock.js     serving cell, scan, lock / unlock      neighbours.js  no-scan neighbour list
 //   config.js   version / self-update, device info, history-on-flash
 //   tabs.js     lazy tab chunks          serving.js  signal/band formatting   styles.js  CSS
 //
@@ -26,6 +26,7 @@ import strip from "./strip.js";
 import change from "./change.js";
 import bands from "./bands.js";
 import lock from "./lock.js";
+import neighbours from "./neighbours.js";
 import config from "./config.js";
 import tabs from "./tabs.js";
 import serving from "./serving.js";
@@ -341,4 +342,4 @@ export default localize(compose({
     // page) must never hide the only Keep button while the watchdog counts down.
     return h("div", { staticClass: "mm" }, [strip, this.pending ? this.renderRevert(h) : null, tabs, panel]);
   }
-}, [strip, change, bands, lock, config, tabs, serving, styles]));
+}, [strip, change, bands, lock, neighbours, config, tabs, serving, styles]));
