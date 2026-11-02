@@ -72,6 +72,8 @@ var __mm = (() => {
 
   // src/web/locales/zh-cn.js
   var zh_cn_default = {
+    "The modem has moved to PCI {pci} / ARFCN {arfcn} since this was read. Refresh before locking.": "读取之后 Modem 已切换到 PCI {pci} / ARFCN {arfcn}。请先刷新再锁定。",
+    "The modem has moved to PCI {pci} / ARFCN {arfcn} since this was read - re-reading...": "读取之后 Modem 已切换到 PCI {pci} / ARFCN {arfcn}，正在重新读取……",
     "(carrier change)": "（载波变化）",
     "(details unavailable)": "（详情不可用）",
     "1 hour": "1 小时",
@@ -460,6 +462,7 @@ var __mm = (() => {
     "read just now": "刚刚读取",
     "read {n} min ago": "{n} 分钟前读取",
     "ready. Pick a command from the library, or type one.": "就绪。从命令库选择命令，或直接输入。",
+    "Refresh": "刷新",
     "refresh": "刷新",
     "refresh failed": "更新失败",
     "refreshing...": "正在刷新…",
@@ -782,6 +785,12 @@ var __mm = (() => {
           self.libStatus = st;
         });
         else this.checkLibraryStatus();
+      },
+      beforeDestroy() {
+        if (this._copyTimer) {
+          clearTimeout(this._copyTimer);
+          this._copyTimer = null;
+        }
       },
       methods: {
         // Background calls (the on-open library check): POST to /rpc via $axios

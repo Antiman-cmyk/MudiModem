@@ -169,7 +169,8 @@ export default localize(compose({
     },
     tab(t) {
       if (t === "bands" && !this.bands && !this.bandsLoading) this.fetchBands();
-      if (t === "lock" && !this.lockData && !this.lockLoading) this.fetchLock();
+      // re-read on open too when the modem has moved since the picture was taken
+      if (t === "lock" && !this.lockLoading && (!this.lockData || this.servingMoved)) this.fetchLock();
       if (t === "at" && !this.consoleComp && !this.consoleLoading) this.loadConsole();
       if (t === "config") {
         if (!this.deviceInfo) this.fetchDeviceInfo();   // retries on every open until it succeeds
@@ -196,6 +197,7 @@ export default localize(compose({
     if (this.updateConfirmTimer) clearTimeout(this.updateConfirmTimer);
     if (this.updatePollTimer) clearTimeout(this.updatePollTimer);
     if (this.verRefreshTimer) clearTimeout(this.verRefreshTimer);
+    if (this.lockProbeTimer) clearTimeout(this.lockProbeTimer);
     this.pollStopped = true;
   },
 

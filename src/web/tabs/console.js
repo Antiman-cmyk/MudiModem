@@ -162,6 +162,9 @@ export default localize((function () {
     if (STORE.libStatusP) STORE.libStatusP.then(function (st) { self.libStatus = st; });
     else this.checkLibraryStatus();
   },
+  beforeDestroy() {
+    if (this._copyTimer) { clearTimeout(this._copyTimer); this._copyTimer = null; }
+  },
 
   methods: {
     // Background calls (the on-open library check): POST to /rpc via $axios

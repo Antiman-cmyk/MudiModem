@@ -16,7 +16,47 @@ export default {
       // Scanned neighbour towers (Task 5 fills the scan card); pinTarget reads
       // scan.towers now to confirm an SCS reading when one is available.
       scan: { towers: [], running: false, error: "", ts: 0, slot: null },
+      movedRefetched: "",   // pci/arfcn of the last handover that triggered a re-read (once per cell)
+      lockProbeTimer: null, // verifyLockAfterDrop's next probe
     };
+  },
+  computed: {
+    // The serving cell as the collector's latest push sees it, built the way get_lock builds its
+    // own (rpc serving_from_sample): the PCC, or under EN-DC the NR leg. null when unknown/stale.
+    liveCell() {
+      var s = this.serving;
+      if (!s || !s.t || s.stale) return null;
+      if (/NSA/.test(s.rat || s.mode || "")) {
+        var nr = (Array.isArray(s.signals) ? s.signals : []).filter(function (g) {
+          return g && /NR5G/.test(g.rat || "") && g.pci != null && g.earfcn != null;
+        })[0];
+        return nr ? { slot: s.slot, pci: Number(nr.pci), arfcn: Number(nr.earfcn) } : null;
+      }
+      if (s.pci == null || s.tx_channel == null) return null;
+      return { slot: s.slot, pci: Number(s.pci), arfcn: Number(s.tx_channel) };
+    },
+    // The Lock tab's picture names a cell the modem has since left (a handover after get_lock):
+    // the cell it is on now, else null. Only for the same SIM — a slot switch re-reads anyway.
+    servingMoved() {
+      var d = this.lockData, s = d && d.serving, live = this.liveCell;
+      if (!s || !live || s.pci == null || s.arfcn == null) return null;
+      var slot = this.slotOf(d);
+      if (slot !== undefined && live.slot != null && Number(live.slot) !== slot) return null;
+      return (Number(s.pci) !== live.pci || Number(s.arfcn) !== live.arfcn) ? live : null;
+    },
+  },
+  watch: {
+    // A handover while the lock picture is on screen: drop an armed "lock to this cell" and
+    // re-read, once per new cell — the pin target must be the cell the modem is on now.
+    servingMoved(m) {
+      if (!m) return;
+      if (this.lockConfirm && this.lockConfirm.pin) this.lockConfirm = null;
+      if (this.tab !== "lock" || this.lockLoading || this.lockBusy || this.pending) return;
+      var key = m.pci + "/" + m.arfcn;
+      if (key === this.movedRefetched) return;
+      this.movedRefetched = key;
+      this.fetchLock();
+    },
   },
   methods: {
     // Fetch the current cell-lock state (serving cell + any existing lock).
@@ -74,6 +114,7 @@ export default {
     // Build the lock target for the serving cell. SCS: last scan result for
     // this pci+arfcn if we have one, else the band default (flagged assumed).
     pinTarget() {
+      if (this.servingMoved) return null;   // the picture names a cell the modem has left
       var s = this.lockData && this.lockData.serving;
       // == null, not falsy: PCI 0 (LTE 0-503 / NR 0-1007) and EARFCN 0 (LTE B1) are real.
       if (!s || s.pci == null || s.arfcn == null) return null;
@@ -143,7 +184,10 @@ export default {
       this.lockError = "";
       this.pending = { kind: "cell", verifying: true };
       var attempts = 0, MAX = 6;
+      var again = function () { self.lockProbeTimer = setTimeout(probe, 2500); };
       var probe = function () {
+        self.lockProbeTimer = null;
+        if (self.pollStopped) return;     // the page is gone
         attempts += 1;
         rpc("get_lock", {}, { timeout: 15000 })
           .then(function (res) {
@@ -157,7 +201,7 @@ export default {
               self.finishVerify();
               if (armed) self.restoreChange(3);   // replace "uncertain" with the real countdown
             } else if (attempts < MAX) {
-              setTimeout(probe, 2500);
+              again();
             } else {
               self.pending = null;
               self.lockError = "The lock request was cut off by a connection drop and no lock is set - try again.";
@@ -165,7 +209,7 @@ export default {
             }
           })
           .catch(function () {
-            if (attempts < MAX) { setTimeout(probe, 2500); }
+            if (attempts < MAX) { again(); }
             else {
               self.pending = null;
               self.lockError = "Connection dropped while locking and hasn't recovered yet - refresh once you're back to see the current lock state.";
@@ -173,7 +217,7 @@ export default {
             }
           });
       };
-      setTimeout(probe, 2500);
+      again();
     },
 
     finishVerify() {
@@ -238,8 +282,12 @@ export default {
       push("RAT", s.rat); push("PCI", s.pci); push("ARFCN", s.arfcn);
       push(T("Band"), s.band != null ? ((/NR5G/.test(s.rat || "") ? "n" : "B") + s.band) : null);
       push(T("Cell ID"), s.cell_id);
-      push("RSRP", this.serving.rsrp != null ? this.serving.rsrp + " dBm" : null);
-      push("SINR", this.serving.sinr != null ? this.serving.sinr + " dB" : null);
+      var moved = this.servingMoved;
+      // Live readings belong to the cell the modem is on: after a handover, not to this one.
+      if (!moved) {
+        push("RSRP", this.serving.rsrp != null ? this.serving.rsrp + " dBm" : null);
+        push("SINR", this.serving.sinr != null ? this.serving.sinr + " dB" : null);
+      }
 
       var action;
       if (locked) {
@@ -267,7 +315,17 @@ export default {
         ]);
       } else {
         var target = this.pinTarget();
-        if (this.lockConfirm && this.lockConfirm.pin) {
+        if (moved) {
+          action = h("div", { staticClass: "mm-foot" }, [
+            h("span", { staticClass: "mm-hint", staticStyle: { color: "var(--warning-hover)" } },
+              T(this.lockLoading
+                ? "The modem has moved to PCI {pci} / ARFCN {arfcn} since this was read - re-reading..."
+                : "The modem has moved to PCI {pci} / ARFCN {arfcn} since this was read. Refresh before locking.",
+                { pci: moved.pci, arfcn: moved.arfcn })),
+            h("button", { staticClass: "mm-btn", attrs: { disabled: this.lockLoading || this.lockBusy || !!this.pending },
+              on: { click: function () { self.fetchLock(); } } }, "Refresh")
+          ]);
+        } else if (this.lockConfirm && this.lockConfirm.pin && target) {
           action = h("div", { staticClass: "mm-foot" }, [
             h("span", { staticClass: "mm-hint", staticStyle: { color: "var(--warning-hover)" } },
               T(target.rat === "5g"

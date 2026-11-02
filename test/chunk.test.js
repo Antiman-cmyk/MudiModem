@@ -2,6 +2,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { after } = require('node:test');
 
 // The BUILT chunk (what ships, dist/) is what these tests evaluate; static checks read the
 // sources under src/web/main + src/web/kit (tools/build-web.mjs builds one from the other).
@@ -44,8 +45,13 @@ function walk(node, out) {
 
 // Build a working component instance: data + bound methods + computed getters,
 // exactly as Vue would wire them, plus a stub $store feeding the websocket data.
+const MADE = [];   // every instance a test builds: torn down at the end, as Vue would on leave
+after(() => {
+  for (const [component, vm] of MADE) if (component.beforeDestroy) component.beforeDestroy.call(vm);
+});
 function makeVm(component, statusMap) {
   const vm = Object.assign({}, component.data());
+  MADE.push([component, vm]);
   vm.$store = {
     getters: {
       moduleStatus(name) { return (statusMap && statusMap[name]) || {}; }
@@ -890,6 +896,71 @@ test('lock tab: pin target derives from serving cell with SCS default', () => {
   assert.equal(t.band, 71);
   assert.equal(t.scs, 15);          // n71 default, 3GPP TS 38.104
   assert.equal(t.scsAssumed, true); // no scan result to confirm it
+});
+
+// A handover after get_lock: the picture's cell is not the one the modem is on any more.
+function movedSample(pci, earfcn) {
+  const s = JSON.parse(JSON.stringify(SAMPLE));
+  s.pci = pci; s.tx_channel = earfcn; s.signals[0].pci = pci; s.signals[0].earfcn = earfcn;
+  return Object.assign({}, LIVE, { 'mudimodem.collect': s });
+}
+
+test('lock tab: after a handover the pin target is refused and the card says where the modem went', () => {
+  const component = loadChunk();
+  const vm = makeVm(component, movedSample(333, 127490));
+  vm.tab = 'lock';
+  vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));   // read while on PCI 516
+  assert.deepEqual(vm.servingMoved, { slot: 1, pci: 333, arfcn: 127490 });
+  assert.strictEqual(vm.pinTarget(), null, 'never lock to the cell the modem has left');
+  const text = textOf(component.render.call(vm, h));
+  assert.match(text, /moved to PCI 333 \/ ARFCN 127490/);
+  assert.doesNotMatch(text, /Lock to this cell/);
+  assert.doesNotMatch(text, /-101 dBm/, "the new cell's RSRP is not shown against the old cell");
+});
+
+test('lock tab: a handover re-reads the lock picture once per new cell, and drops an armed pin', () => {
+  const component = loadChunk();
+  const vm = makeVm(component, movedSample(333, 127490));
+  vm.tab = 'lock';
+  vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+  vm.lockConfirm = { pin: true };
+  let reads = 0;
+  vm.fetchLock = () => { reads += 1; };
+  component.watch.servingMoved.call(vm, vm.servingMoved);
+  component.watch.servingMoved.call(vm, vm.servingMoved);   // the same cell again: no second read
+  assert.equal(reads, 1);
+  assert.strictEqual(vm.lockConfirm, null, 'an armed "lock to this cell" is dropped');
+});
+
+test('lock tab: same cell, other SIM, or a stale sample is not a handover', () => {
+  const component = loadChunk();
+  let vm = makeVm(component, LIVE);
+  vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+  assert.strictEqual(vm.servingMoved, null, 'live cell = picture cell');
+  const other = movedSample(333, 127490);
+  other['mudimodem.collect'].slot = 2;
+  vm = makeVm(component, other);
+  vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+  assert.strictEqual(vm.servingMoved, null, 'a sample of the other SIM says nothing about this one');
+  const stale = movedSample(333, 127490);
+  stale['mudimodem.collect'].stale = true;
+  vm = makeVm(component, stale);
+  vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+  assert.strictEqual(vm.servingMoved, null, 'a stale seed is not live');
+});
+
+test('lock tab: under EN-DC the live cell is the NR leg, as get_lock reads it', () => {
+  const component = loadChunk();
+  const nsa = JSON.parse(JSON.stringify(SAMPLE));
+  Object.assign(nsa, { rat: 'NR5G-NSA', mode: 'NR5G-NSA', pci: 136, tx_channel: 67036, band: 66 });
+  nsa.signals = [
+    { role: 'PCC', rat: 'LTE', band: 66, earfcn: 67036, pci: 136 },
+    { role: 'SCC', rat: 'NR5G-NSA', band: 78, earfcn: 627264, pci: 516 }];
+  const vm = makeVm(component, Object.assign({}, LIVE, { 'mudimodem.collect': nsa }));
+  vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+  vm.lockData.serving = { rat: 'NR5G-NSA', pci: 516, arfcn: 627264, band: 78 };
+  assert.deepEqual(vm.liveCell, { slot: 1, pci: 516, arfcn: 627264 });
+  assert.strictEqual(vm.servingMoved, null, 'the anchor is not compared against the NR picture');
 });
 
 test('lock tab: pin target prefers a scan-confirmed SCS over the band default', () => {
@@ -1826,7 +1897,8 @@ test('strip history: the first fetch is the WINDOW even after the immediate serv
 
 test('lock tab: pin target accepts PCI 0 / EARFCN 0 (valid identifiers, not "missing")', () => {
   const c = loadChunk();
-  const vm = makeVm(c, LIVE);
+  const vm = makeVm(c, Object.assign({}, LIVE, { 'mudimodem.collect': Object.assign({}, SAMPLE,
+    { rat: 'LTE', mode: 'LTE', pci: 0, tx_channel: 0, band: 1 }) }));   // live on the same cell
   vm.lockData = { lock: { l4g: { locked: false }, l5g: { locked: false } }, gl: { locked: false },
     serving: { rat: 'LTE', pci: 0, arfcn: 0, band: 1, cell_id: 'A' } };
   const t = vm.pinTarget();
