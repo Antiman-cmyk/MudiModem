@@ -70,6 +70,9 @@ export default localize((function () {
   // PADL / PADR clear the RSRP (left) and SINR (right) y-axis labels. Was 30/12
   // when the overlay had no numeric scale and the legend carried every domain.
   var PADL = 42, PADR = 36, BUS_H = 20, PLOT_H = 230;
+  // Throughput lane (the cellular device's kbit/s per tick, from the collector): its own scale,
+  // drawn only when the window has any — older history and boxes without the counters show none.
+  var TP_H = 56;
   // How many intervals on each numeric y-axis (→ N+1 labels, incl. floor + ceiling).
   var Y_INTERVALS = 4;
 
@@ -790,8 +793,40 @@ export default localize((function () {
             d: d.trim() } }));
         });
 
-        // ---- buses below the plot (unchanged layout, new origin).
+        // ---- throughput lane: down (rx) and up (tx) in Mbps, scaled to the window's peak.
         var y = plotBot + 12;
+        var tpMax = 0;
+        ss.forEach(function (s) {
+          if (s.rx_kbps > tpMax) tpMax = s.rx_kbps;
+          if (s.tx_kbps > tpMax) tpMax = s.tx_kbps;
+        });
+        if (ss.some(function (s) { return s.rx_kbps != null || s.tx_kbps != null; })) {
+          var top = Math.max(1000, tpMax), tpBot = y + TP_H;
+          kids.push(h("text", { attrs: { x: 6, y: y + 9, "font-size": 9, fill: "var(--text-badge)" } }, "MBPS"));
+          kids.push(h("text", { attrs: { x: W - PADR + 5, y: y + 9, "font-size": 9, fill: "var(--text-badge)" } },
+            String(Math.round(top / 100) / 10)));
+          kids.push(h("line", { attrs: { x1: PADL, x2: W - PADR, y1: tpBot, y2: tpBot,
+            stroke: "var(--divider)", "stroke-width": 1 } }));
+          [["rx_kbps", "var(--primary)"], ["tx_kbps", "var(--success)"]].forEach(function (L) {
+            var d = "", pen = false, prevT = null, prevSlot = null;
+            ss.forEach(function (s) {
+              var v = s[L[0]];
+              var slot = s.slot == null ? null : String(s.slot);
+              if (prevSlot !== null && slot !== prevSlot) pen = false;
+              prevSlot = slot;
+              if (v == null) { pen = false; prevT = s.t != null ? s.t : prevT; return; }
+              if (prevT != null && s.t != null && s.t - prevT > GAP_MS) pen = false;
+              var yy = tpBot - Math.min(v, top) / top * (TP_H - 4);
+              d += (pen ? "L" : "M") + self.xOf(s.m).toFixed(1) + " " + yy.toFixed(1) + " ";
+              pen = true; prevT = s.t != null ? s.t : prevT;
+            });
+            if (d) kids.push(h("path", { attrs: { fill: "none", stroke: L[1], "stroke-width": 1.5,
+              "stroke-linejoin": "round", d: d.trim() } }));
+          });
+          y = tpBot + 10;
+        }
+
+        // ---- buses below the plot (unchanged layout, new origin).
         BUSES.forEach(function (B) {
           kids.push(h("text", { attrs: { x: 6, y: y + BUS_H / 2 + 3, "font-size": 9,
             fill: "var(--text-badge)" } }, B.label));
@@ -861,6 +896,9 @@ export default localize((function () {
           row("Cell", s.id == null ? "—" : s.id, "", null),
           row("SIM", (s.carrier || "SIM") + " · " + s.slot, "", null)
         ];
+        var mbps = function (k) { return k == null ? null : (Math.round(k / 100) / 10); };
+        if (s.rx_kbps != null || s.tx_kbps != null)
+          rows.splice(3, 0, row("Down", mbps(s.rx_kbps), "Mbps", null), row("Up", mbps(s.tx_kbps), "Mbps", null));
         var kids = [h("div", { staticClass: "t" },
           this.clock(s.t) + (this.pinnedT != null ? " · " + T("pinned") : ""))];
         if (near) kids.push(h("div", { staticClass: "e",

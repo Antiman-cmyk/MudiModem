@@ -409,6 +409,10 @@ var __mm = (() => {
     "ring = serving now (every carrier: PCC + SCCs)": "圆环 = 当前服务（所有载波：PCC + SCC）",
     "safe — reads only": "安全 — 只读",
     "scan failed": "扫描失败",
+    "Carrier cap": "运营商限速",
+    "{dl} / {ul} Mbps": "{dl} / {ul} Mbps",
+    "download at the cap": "下载已达上限",
+    "upload at the cap": "上传已达上限",
     "gave up waiting for the router": "等待路由器超时，已放弃",
     "scanned {n} min ago": "{n} 分钟前扫描",
     "serving now": "当前服务",
@@ -573,9 +577,19 @@ var __mm = (() => {
       var sig = Array.isArray(r.signals) && r.signals[0];
       return r.pcc_rat || sig && sig.rat || r.mode || "";
     }
+    function capRow(r) {
+      if (r.ambr_dl == null && r.ambr_ul == null) return null;
+      var v = t("{dl} / {ul} Mbps", { dl: r.ambr_dl == null ? "—" : r.ambr_dl, ul: r.ambr_ul == null ? "—" : r.ambr_ul });
+      var at = [];
+      if (r.ambr_dl && r.down_mbps != null && r.down_mbps >= 0.9 * r.ambr_dl) at.push(t("download at the cap"));
+      if (r.ambr_ul && r.up_mbps != null && r.up_mbps >= 0.9 * r.ambr_ul) at.push(t("upload at the cap"));
+      return ["Carrier cap", at.length ? v + " · " + at.join(", ") : v];
+    }
     function resultDetailRows(r) {
+      var cap = capRow(r);
       return [
-        ["Latency", r.latency_ms == null ? "—" : r.latency_ms + " ms (±" + (r.jitter_ms == null ? "—" : r.jitter_ms) + ")"],
+        ["Latency", r.latency_ms == null ? "—" : r.latency_ms + " ms (±" + (r.jitter_ms == null ? "—" : r.jitter_ms) + ")"]
+      ].concat(cap ? [cap] : []).concat([
         ["Carrier", (r.carrier || "—") + " · SIM " + (r.slot == null ? "—" : r.slot)],
         // The prefix follows the carrier: an EN-DC anchor on B2 is "B2", not "n2".
         ["Band", r.band == null ? "—" : (/NR5G/.test(carrierRat(r)) ? "n" : "B") + r.band],
@@ -583,7 +597,7 @@ var __mm = (() => {
         ["RSRP", r.rsrp == null ? "—" : r.rsrp + " dBm"],
         ["SINR", r.sinr == null ? "—" : r.sinr + " dB"],
         ["RSRQ", r.rsrq == null ? "—" : r.rsrq + " dB"]
-      ];
+      ]);
     }
     var component = {
       name: "mudimodem-speedtest",

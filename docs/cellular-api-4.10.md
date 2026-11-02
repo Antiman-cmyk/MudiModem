@@ -62,11 +62,11 @@ gone with the LCD renderer it fed.
 
 | call | notes |
 |---|---|
-| `cellular.modem status` (no args) | `{modems:[{bus, current_sim_slot, slot_switch_enable, …}]}` — GL's canonical form; `lib/functions/modem.sh get_current_sim_slot`, `websocket/cellular.lua` and `internet.js` all parse `.modems[]`. **The only shape the code accepts** (`cellular_compat.pick_modem` / Lua `pick_modem` select the built-in modem by `bus == "cpu"` / `type == 0`). The bus-scoped call form is never used. |
+| `cellular.modem status` (no args) | `{modems:[{bus, current_sim_slot, slot_switch_enable, …}]}` — GL's canonical form; `lib/functions/modem.sh get_current_sim_slot`, `websocket/cellular.lua` and `internet.js` all parse `.modems[]`. **The only shape the code accepts** (`cellular_compat.lua` `pick_modem` and the plugin's own `pick_modem` select the built-in modem by `bus == "cpu"` / `type == 0`). The bus-scoped call form is never used. |
 | `cellular.modem info` (no args) | `modems[]` with `.band` (module-supported sets) |
-| `cellular.sim info` (no args) | `sims[]{slot, mcc, mnc, iccid, …}` — PLMN for the sub_id resolver |
+| `cellular.sim info` (no args) | `sims[]{slot, mcc, mnc, iccid, …, ambr_dl, ambr_ul}` — PLMN for the sub_id resolver; `ambr_*` (Mbps, the carrier's max bit rate) is where `networks_info` gets them (🟡 the keys sit with `phone_number`/`apn_list` in `libcm_sim.so`'s sim-info builder) — the speed test records them per result |
 | `cellular.network info` | `networks[]{bus, slot, carrier, …}` — carrier/identity, read every 60 s by collectd |
-| `cellular.network cell_info {"bus":"cpu","slot":N}` | `{network_type, tac, cell_id, signal[]{ca, network_type, band, earfcn, pci, bandwidth, rsrp, rsrq, sinr, rssi, rscp, ecio, snr, rsrp_level…snr_level (7), strength}}` — EVERY row carries `network_type` and `pci` (🟢 handler `libcm_network.so` @0x8284, both row emitters @0x88d4/@0x8ab0, ≤5 rows). EN-DC: QCAINFO `PCC` = LTE anchor → row 4, `SCC` lines whose band token starts with `N` → row 51 (`libcm_modem.so` parse_qcainfo_line @0x27bd4), cell 51; plain LTE CA → 41. ⚠️ When QCAINFO yields no carriers the handler emits ONE fallback row from the QENG servingcell struct (LTE-anchor band/pci/earfcn) stamped with the CELL's code — `cellular_compat._row_network_type` re-tags an NR-coded row on an E-UTRA channel as LTE. Top-level code: `modem_network_mode_to_public_code` (`libcmutils.so` table @0x10db7: 6→4, 7→41, 8→51, 9→5). **Executes `AT+QENG`/`AT+QCAINFO` on every call** (🟢 `libcm_modem.so` quectel_get_qcainfo_signal @0x2710c: templates @0x271dc/@0x274ec; no `AT+QNWINFO` anywhere). Within MudiModem collectd is the only caller (10 s); everything else (speed test, cell lock) reuses its `latest.json` while it is < 30 s old. ⚠️ It is NOT the only caller on the box: GL's own collector runs the same QENG+QCAINFO every 10 s (next row), and GL's cellular-detail page polls `modem.get_cell_info` every 20 s while it is open (🟢 `getCellInfoTimeout(2e4)`) |
+| `cellular.network cell_info {"bus":"cpu","slot":N}` | `{network_type, tac, cell_id, signal[]{ca, network_type, band, earfcn, pci, bandwidth, rsrp, rsrq, sinr, rssi, rscp, ecio, snr, rsrp_level…snr_level (7), strength}}` — EVERY row carries `network_type` and `pci` (🟢 handler `libcm_network.so` @0x8284, both row emitters @0x88d4/@0x8ab0, ≤5 rows). EN-DC: QCAINFO `PCC` = LTE anchor → row 4, `SCC` lines whose band token starts with `N` → row 51 (`libcm_modem.so` parse_qcainfo_line @0x27bd4), cell 51; plain LTE CA → 41. ⚠️ When QCAINFO yields no carriers the handler emits ONE fallback row from the QENG servingcell struct (LTE-anchor band/pci/earfcn) stamped with the CELL's code — `cellular_compat.lua` `row_network_type` re-tags an NR-coded row on an E-UTRA channel as LTE. Top-level code: `modem_network_mode_to_public_code` (`libcmutils.so` table @0x10db7: 6→4, 7→41, 8→51, 9→5). **Executes `AT+QENG`/`AT+QCAINFO` on every call** (🟢 `libcm_modem.so` quectel_get_qcainfo_signal @0x2710c: templates @0x271dc/@0x274ec; no `AT+QNWINFO` anywhere). Within MudiModem collectd is the only caller (10 s); everything else (speed test, cell lock) reuses its `latest.json` while it is < 30 s old. ⚠️ It is NOT the only caller on the box: GL's own collector runs the same QENG+QCAINFO every 10 s (next row), and GL's cellular-detail page polls `modem.get_cell_info` every 20 s while it is open (🟢 `getCellInfoTimeout(2e4)`) |
 | `cellular.collect get_signals {time, slot}` / `get_traffic {bus}` / `clean_traffic {bus, slot, type}` | GL's own sampler (`libcmcollect.so`, inside `cellular_manager`): on because `e5800` is in `support_historical_signal` (🟢 `/lib/modem_data/product_baseline.json`); defaults `signal_info {interval:10, max_count:180}` (= 30 min, RAM only) written to `/etc/config/collection.json` only when that file is missing (🟡 `init_collection_config`). Each tick calls `quectel_get_qcainfo_signal` (🟡 import) — the same AT pair as `cell_info` — plus `AT+QCSQ` and `AT+QGDCNT?` for traffic. `get_signals` returns `{signals:[{slot, timestamp, signal:[{ca, network_type, band, bandwidth, pci, earfcn, rsrp, rsrq, rssi, sinr, rscp, ecio, snr}]}]}`, newest first, no cell_id/TAC (🟡). A cheaper RF source than our own `cell_info` call — see `docs/architecture.md` §5 (🔴 shape/freshness before switching) |
 | `modem.CPU.AT get_result_AT {cmd, timeout, sub_id}` | provider `/usr/bin/modem_AT` (spawned per bus by `cellular_manager`); the only path with an explicit `sub_id` — used for `policy_band` / `ue_capability_band` / `QNWLOCK` reads. **`sub_id` = slot (1 or 2) for the built-in modem** 🟢 — see §2.1 |
 | `gl-session notify {name, data}` / `has_websocket` / `call {module, func, params}` | push bus; browser-attached probe; root loop-back into `/rpc` (`is_local` + `glinet` header; its HTTP client gives up after 30 s) — how the watchdog restores bands from a shell. mudimodemd's cell scan makes the same loop-back request itself, with a 330 s timeout |
@@ -98,7 +98,7 @@ with an LTE B3 anchor (EARFCN 1700); the EU unit's SA n78 sample was `5`. ⚠️
 swapped and 2/3 shifted — a GL bug; physics + captures win. Ours:
 `1 GSM · 2 2G · 3 3G · 4 LTE · 41 LTE+ · 5 NR5G-SA · 51 NR5G-NSA · 6 EVDO`.
 
-## 3. The normalized sample (`src/lib/cellular_compat.py` → every consumer)
+## 3. The normalized sample (`src/lib/cellular_compat.lua` → every consumer)
 
 ```json
 {"t": 1700000000000, "slot": 1, "registered": true, "carrier": "CHN-UNICOM",
@@ -113,7 +113,12 @@ swapped and 2/3 shifted — a GL bug; physics + captures win. Ours:
 ```
 `signals[]` is the full CA picture (`signal[0]` = PCC, others SCCn); the flattened keys are
 the PCC aliases so single-carrier consumers (strip, tracking, speedtest, cell lock) need no CA
-awareness. Written to `/tmp/mudimodem/samples.jsonl` + `latest.json` and pushed as `mudimodem.collect`.
+awareness. The collector adds `rx_kbps` / `tx_kbps`: the cellular data device's kbit/s since the
+previous RF tick, from `/sys/class/net/<dev>/statistics/{rx,tx}_bytes`, the device re-resolved from
+`network.interface dump` (the non-`_6` `proto: rmnet` interface's `l3_device`) at most once a
+minute; absent on the first tick, when no cellular interface exists, and across a device change or a
+counter reset (reconnect). Written to `/tmp/mudimodem/samples.jsonl` + `latest.json` and pushed as
+`mudimodem.collect`.
 
 ## 4. GL web RPC used by MudiModem (undotted `modem.*`, browser- or glc-callable)
 
@@ -196,7 +201,7 @@ Settled from the image (second pass, 2026-09-02):
 - **`cellular.modem status` wrapper:** GL's own `lib/functions/modem.sh get_current_sim_slot`
   parses the NO-ARG form as `@.modems[@.bus='…'].current_sim_slot`, as does `websocket/
   cellular.lua` and `internet.js`. The code calls it with NO arguments and accepts ONLY that
-  `modems[]` form (`cellular_compat.pick_modem` / Lua `pick_modem` select the built-in modem by
+  `modems[]` form (`cellular_compat.lua` `pick_modem` and the plugin's own `pick_modem` select the built-in modem by
   `bus == "cpu"` / `type == 0`); no flat-object shape is parsed.
 - **`network_type` enum:** §2 (GL's own maps + two live captures).
 - **`set_band_config` applies to the modem AND redials** 🟢 (`libcm_modem.so` @0x223fc): it

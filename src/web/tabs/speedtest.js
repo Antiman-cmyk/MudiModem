@@ -44,9 +44,21 @@ export default localize((function () {
   // Shared label+value rows for a result record `r` -- used by both the
   // graph's hover tooltip and the latest-result panel, so the field list and
   // formatting (units, band prefix, — for null) live in exactly one place.
+  // The carrier's max bit rate (AMBR) recorded with a cellular result, and whether the result
+  // reached it (>= 90%): then the number measured the plan, not the radio. null when unknown.
+  function capRow(r) {
+    if (r.ambr_dl == null && r.ambr_ul == null) return null;
+    var v = T("{dl} / {ul} Mbps", { dl: r.ambr_dl == null ? "—" : r.ambr_dl, ul: r.ambr_ul == null ? "—" : r.ambr_ul });
+    var at = [];
+    if (r.ambr_dl && r.down_mbps != null && r.down_mbps >= 0.9 * r.ambr_dl) at.push(T("download at the cap"));
+    if (r.ambr_ul && r.up_mbps != null && r.up_mbps >= 0.9 * r.ambr_ul) at.push(T("upload at the cap"));
+    return ["Carrier cap", at.length ? v + " · " + at.join(", ") : v];
+  }
   function resultDetailRows(r) {
+    var cap = capRow(r);
     return [
-      ["Latency", r.latency_ms == null ? "—" : r.latency_ms + " ms (±" + (r.jitter_ms == null ? "—" : r.jitter_ms) + ")"],
+      ["Latency", r.latency_ms == null ? "—" : r.latency_ms + " ms (±" + (r.jitter_ms == null ? "—" : r.jitter_ms) + ")"]
+    ].concat(cap ? [cap] : []).concat([
       ["Carrier", (r.carrier || "—") + " · SIM " + (r.slot == null ? "—" : r.slot)],
       // The prefix follows the carrier: an EN-DC anchor on B2 is "B2", not "n2".
       ["Band", r.band == null ? "—" : (/NR5G/.test(carrierRat(r)) ? "n" : "B") + r.band],
@@ -54,7 +66,7 @@ export default localize((function () {
       ["RSRP", r.rsrp == null ? "—" : r.rsrp + " dBm"],
       ["SINR", r.sinr == null ? "—" : r.sinr + " dB"],
       ["RSRQ", r.rsrq == null ? "—" : r.rsrq + " dB"]
-    ];
+    ]);
   }
 
   var component = {

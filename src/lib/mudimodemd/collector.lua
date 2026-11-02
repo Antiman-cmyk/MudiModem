@@ -17,6 +17,7 @@ local time = require "eco.time"
 local cc = require "cellular_compat"
 local jsonl = require "mudimodemd.jsonl"
 local battery = require "mudimodemd.battery"
+local net = require "mudimodemd.net"
 
 local M = {}
 
@@ -42,6 +43,8 @@ function M.config()
     battery = hist .. "/battery.jsonl",
     battery_latest = hist .. "/battery-latest.json",
     batt_sysfs = os.getenv("MUDIMODEM_BATT_SYSFS") or "/sys/class/power_supply",
+    net_sysfs = os.getenv("MUDIMODEM_NET_SYSFS") or "/sys/class/net",
+    netdev_interval = envnum("MUDIMODEM_NETDEV_INTERVAL", 60),
     battlimit_pidf = os.getenv("MUDIMODEM_BATTLIMIT_PIDF") or "/tmp/glbattlimit.pid",
     battlimit_limf = os.getenv("MUDIMODEM_BATTLIMIT_LIMF") or "/tmp/glbattlimit.limit",
     history_cfg = os.getenv("MUDIMODEM_HISTORY_CFG") or "/etc/mudimodem/history.json",
@@ -122,6 +125,24 @@ function M.new(conn, cfg, log)
     end
   end
 
+  -- ---- throughput: the cellular device's byte counters, read every tick (sysfs: no AT, no ubus;
+  -- the device itself is looked up in `network.interface dump` per NETDEV_INTERVAL)
+  local nd = { at = nil, dev = nil, prev = nil }
+  function self.throughput()
+    local now = mono()
+    if nd.at == nil or now - nd.at >= cfg.netdev_interval then
+      nd.at = now
+      nd.dev = net.resolve_iface(call("network.interface", "dump"), "cellular")
+    end
+    if not nd.dev then nd.prev = nil; return nil, nil end
+    local rx, tx = net.counters(cfg.net_sysfs, nd.dev)
+    if not rx then nd.prev = nil; return nil, nil end
+    local cur = { dev = nd.dev, rx = rx, tx = tx, t = now }
+    local down, up = net.rate(nd.prev, cur)
+    nd.prev = cur
+    return down, up
+  end
+
   function self.collect_sample()
     local modem = call("cellular.modem", "status")
     local slot = cc.active_slot(modem, cfg.bus)
@@ -179,7 +200,10 @@ function M.new(conn, cfg, log)
   function self.rf_tick()
     local s = self.collect_sample()
     st.rf_ticks = st.rf_ticks + 1
+    local down, up = self.throughput()
     if s ~= nil then
+      -- kbit/s on the cellular device since the previous tick (absent across a reconnect)
+      s.rx_kbps, s.tx_kbps = down, up
       local line = cjson.encode(s)
       jsonl.append_line(cfg.samples, line)
       jsonl.write_atomic(cfg.latest, line)

@@ -104,6 +104,22 @@ test('default range is the 15 m view (state + active segment)', () => {
   assert.strictEqual(textOf(on[0]), '15 m', 'the 15 m segment is the active one');
 });
 
+test('the throughput lane appears only with throughput data, and the readout shows Mbps', () => {
+  const c = loadChunk();
+  const plain = makeVm(c, { samples: seedSamples(), events: [], winW: 60 });
+  assert.doesNotMatch(textOf(c.render.call(plain, h)), /MBPS/, 'no lane for samples without counters');
+  const withTp = seedSamples().map((x, i) => Object.assign(x, { rx_kbps: 2000 + i * 100, tx_kbps: 300 }));
+  const vm = makeVm(c, { samples: withTp, events: [], winW: 60 });
+  const tree = c.render.call(vm, h);
+  assert.match(textOf(tree), /MBPS/);
+  assert.match(textOf(tree), /4/, 'the lane is scaled to the window peak (4.0 Mbps)');
+  const paths = walk(tree).filter((n) => n.tag === 'path' && n.data.attrs && n.data.attrs['stroke-width'] === 1.5);
+  assert.strictEqual(paths.length, 2, 'one down + one up line');
+  vm.pinnedT = withTp[withTp.length - 1].t;
+  const tip = textOf(vm.sliceReadout(h));
+  assert.match(tip, /Down/); assert.match(tip, /4 Mbps/); assert.match(tip, /0\.3 Mbps/);
+});
+
 test('renders one overlaid plot (RSRP/SINR/RSRQ) + three buses + a derived handover tick', () => {
   const c = loadChunk();
   const vm = makeVm(c, { samples: seedSamples(), events: [], winW: 60 });

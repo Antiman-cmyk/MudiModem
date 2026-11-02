@@ -143,7 +143,7 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         # nothing but the read path: no AT, no writes, no get_signals yet
         seen = {(c["object"], c["method"]) for c in r["calls"]}
         self.assertLessEqual(seen, {("cellular.modem", "status"), ("cellular.network", "cell_info"),
-                                    ("cellular.network", "info")})
+                                    ("cellular.network", "info"), ("network.interface", "dump")})
         self.assertEqual(sum(1 for c in r["calls"] if c["method"] == "info"), 1,
                          "carrier identity is cached, not read per tick")
         # samples follow the cell_info cycle; the failed read leaves no line
@@ -222,6 +222,50 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         self.assertEqual(seq[:3], [("cellular.modem", "status", {}),
                                    ("cellular.network", "cell_info", {"bus": "cpu", "slot": 1}),
                                    ("cellular.network", "info", {})], "the python collector's call order")
+
+    def test_eco_throughput_from_the_cellular_device_counters(self):
+        """Each sample carries the cellular device's kbit/s since the previous tick, from sysfs
+        (no AT); the device comes from network.interface dump; a counter reset (reconnect) gives
+        no value for that tick, never a negative or huge one."""
+        d = tempfile.mkdtemp(prefix="mm-net-")
+        self.addCleanup(shutil.rmtree, d, True)
+        stat = os.path.join(d, "rmnet_data1", "statistics")
+        os.makedirs(stat)
+        def put(rx, tx):
+            for n, v in (("rx_bytes", rx), ("tx_bytes", tx)):
+                with open(os.path.join(stat, n + ".tmp"), "w") as f:
+                    f.write("%d\n" % v)
+                os.replace(os.path.join(stat, n + ".tmp"), os.path.join(stat, n))
+        put(0, 0)
+        stop = threading.Event()
+        def feed():                                   # 1.25 MB/s down, 125 kB/s up = 10000 / 1000 kbit/s
+            t0, reset_at = time.monotonic(), None
+            while not stop.is_set():
+                el = time.monotonic() - t0
+                if reset_at is None and el > 3.0:
+                    reset_at = el                     # the modem reconnected: counters restart
+                base = (el - reset_at) if reset_at else el
+                put(int(base * 1250000), int(base * 125000))
+                time.sleep(0.05)
+        th = threading.Thread(target=feed, daemon=True); th.start()
+        self.addCleanup(stop.set)
+        scen = {"modem_status": ct.MODEM_STATUS_410, "network_info": ct.NETWORK_INFO_410,
+                "cell_info": [ct.CELL_INFO_410_SA], "has_ws": True,
+                "network_dump": {"interface": [{"interface": "modem_1_1_2", "proto": "rmnet", "up": True,
+                                                "l3_device": "rmnet_data1"}]}}
+        r = self.run_collector("eco", scen, ticks=24, extra_env={"MUDIMODEM_NET_SYSFS": d})
+        self.assertEqual(r["rc"], 0, r["stderr"])
+        rates = [(s.get("rx_kbps"), s.get("tx_kbps")) for s in r["samples"]]
+        self.assertIsNone(rates[0][0], "no rate before a second reading")
+        good = [x for x in rates[1:] if x[0] is not None]
+        self.assertGreaterEqual(len(good), 8)
+        for down, up in good:
+            self.assertTrue(0 <= down < 30000 and 0 <= up < 3000, (down, up))
+        mid = sorted(g[0] for g in good)[len(good) // 2]
+        self.assertTrue(6000 < mid < 14000, "about 10000 kbit/s down, got median %s" % mid)
+        self.assertIn(None, [x[0] for x in rates[2:]], "the counter reset gave one tick without a rate")
+        dumps = [c for c in r["calls"] if c["method"] == "dump"]
+        self.assertEqual(len(dumps), 1, "the device is looked up per NETDEV_INTERVAL, not per tick")
 
     def test_eco_shared_trim_loses_no_line(self):
         """events.jsonl is appended to by the plugin and the watchdog while the daemon trims it:

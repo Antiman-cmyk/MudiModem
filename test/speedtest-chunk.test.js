@@ -236,6 +236,24 @@ test('renderLatestResult: shows headline numbers + detail rows for the just-fini
   assert.match(txt, /-95 dBm/);
 });
 
+test('renderLatestResult: the carrier cap (AMBR) row, and when a result reached it', () => {
+  const c = loadChunk();
+  const vm = makeVm(c);
+  vm.resultsLoading = false;
+  const base = { t: 2000, iface: 'cellular', down_mbps: 48, up_mbps: 3, latency_ms: 30, jitter_ms: 2, slot: 1 };
+  vm.lastResult = Object.assign({}, base, { ambr_dl: 50, ambr_ul: 10 });
+  let txt = textOf(c.render.call(vm, h));
+  assert.match(txt, /Carrier cap/);
+  assert.match(txt, /50 \/ 10 Mbps · download at the cap/, '48 of 50 Mbps: the plan, not the radio');
+  assert.doesNotMatch(txt, /upload at the cap/, '3 of 10 is not at the cap');
+  vm.lastResult = Object.assign({}, base, { down_mbps: 20, ambr_dl: 50, ambr_ul: 10 });
+  txt = textOf(c.render.call(vm, h));
+  assert.match(txt, /50 \/ 10 Mbps/);
+  assert.doesNotMatch(txt, /at the cap/);
+  vm.lastResult = base;                                    // wired, or a SIM without AMBR
+  assert.doesNotMatch(textOf(c.render.call(vm, h)), /Carrier cap/);
+});
+
 test('renderLatestResult: null fields render as an honest em-dash placeholder', () => {
   const c = loadChunk();
   const vm = makeVm(c);

@@ -84,7 +84,9 @@ class SpeedTest(unittest.TestCase):
                         MM_PLUGIN=os.path.join(ROOT, "src", "rpc", "mudimodem"))
 
     def start(self, dump=DUMP_UP, cell=CELL, **extra):
-        scen = {"modem_status": MODEM, "network_dump": dump, "cell_info": [cell], "network_info": {"networks": []}}
+        scen = {"modem_status": MODEM, "network_dump": dump, "cell_info": [cell], "network_info": {"networks": []},
+                "sim_info": {"sims": [{"slot": 2, "bus": "cpu", "ambr_dl": 999, "ambr_ul": 99},
+                                      {"slot": 1, "bus": "cpu", "ambr_dl": "150", "ambr_ul": 50}]}}
         with open(os.path.join(self.bus, "scen.json"), "w") as f:
             json.dump(scen, f)
         subprocess.run(["sh", BUS_SH, "start", self.bus, os.path.join(self.bus, "scen.json")], check=True)
@@ -138,6 +140,7 @@ class SpeedTest(unittest.TestCase):
             self.assertIsInstance(r[k], (int, float), k)
         self.assertEqual((r["band"], r["pcc_rat"], r["cell_id"]), (3, "LTE", "AB"), "snapshot from latest.json")
         self.assertNotIn("signals", r, "an empty list does not cross ubus (dropped like a null)")
+        self.assertEqual((r["ambr_dl"], r["ambr_ul"]), (150, 50), "the ACTIVE SIM's carrier cap, as numbers")
         hist = jsonl(self.st["hist.jsonl"])
         self.assertEqual(len(hist), 1)
         self.assertEqual(hist[0]["signals"], [], "the history line keeps an empty list a list")
@@ -155,6 +158,7 @@ class SpeedTest(unittest.TestCase):
         self.assertEqual((r["band"], r["cell_id"], r["slot"]), (78, "C1", 1))
         self.assertEqual(len(self.gl_calls("cell_info")), 1)
         w = self.one_run("wired")
+        self.assertNotIn("ambr_dl", w, "a wired result has no carrier cap")
         self.assertNotIn("band", w)
         self.assertNotIn("slot", w)
         self.assertEqual(len(self.gl_calls("cell_info")), 1, "a wired run reads nothing cellular")

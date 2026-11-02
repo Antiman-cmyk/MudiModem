@@ -399,6 +399,10 @@ var __mm = (() => {
     "ring = serving now (every carrier: PCC + SCCs)": "圆环 = 当前服务（所有载波：PCC + SCC）",
     "safe — reads only": "安全 — 只读",
     "scan failed": "扫描失败",
+    "Carrier cap": "运营商限速",
+    "{dl} / {ul} Mbps": "{dl} / {ul} Mbps",
+    "download at the cap": "下载已达上限",
+    "upload at the cap": "上传已达上限",
     "gave up waiting for the router": "等待路由器超时，已放弃",
     "scanned {n} min ago": "{n} 分钟前扫描",
     "serving now": "当前服务",
@@ -575,6 +579,7 @@ var __mm = (() => {
     var GAP_MS = 45e3;
     var RETRY_BASE_MS = 2e3, RETRY_MAX_MS = 3e4;
     var PADL = 42, PADR = 36, BUS_H = 20, PLOT_H = 230;
+    var TP_H = 56;
     var Y_INTERVALS = 4;
     var component = {
       name: "mudimodem-tracking",
@@ -1345,6 +1350,57 @@ var __mm = (() => {
             } }));
           });
           var y = plotBot + 12;
+          var tpMax = 0;
+          ss.forEach(function(s) {
+            if (s.rx_kbps > tpMax) tpMax = s.rx_kbps;
+            if (s.tx_kbps > tpMax) tpMax = s.tx_kbps;
+          });
+          if (ss.some(function(s) {
+            return s.rx_kbps != null || s.tx_kbps != null;
+          })) {
+            var top = Math.max(1e3, tpMax), tpBot = y + TP_H;
+            kids.push(h("text", { attrs: { x: 6, y: y + 9, "font-size": 9, fill: "var(--text-badge)" } }, "MBPS"));
+            kids.push(h(
+              "text",
+              { attrs: { x: W - PADR + 5, y: y + 9, "font-size": 9, fill: "var(--text-badge)" } },
+              String(Math.round(top / 100) / 10)
+            ));
+            kids.push(h("line", { attrs: {
+              x1: PADL,
+              x2: W - PADR,
+              y1: tpBot,
+              y2: tpBot,
+              stroke: "var(--divider)",
+              "stroke-width": 1
+            } }));
+            [["rx_kbps", "var(--primary)"], ["tx_kbps", "var(--success)"]].forEach(function(L) {
+              var d = "", pen = false, prevT = null, prevSlot = null;
+              ss.forEach(function(s) {
+                var v = s[L[0]];
+                var slot = s.slot == null ? null : String(s.slot);
+                if (prevSlot !== null && slot !== prevSlot) pen = false;
+                prevSlot = slot;
+                if (v == null) {
+                  pen = false;
+                  prevT = s.t != null ? s.t : prevT;
+                  return;
+                }
+                if (prevT != null && s.t != null && s.t - prevT > GAP_MS) pen = false;
+                var yy = tpBot - Math.min(v, top) / top * (TP_H - 4);
+                d += (pen ? "L" : "M") + self.xOf(s.m).toFixed(1) + " " + yy.toFixed(1) + " ";
+                pen = true;
+                prevT = s.t != null ? s.t : prevT;
+              });
+              if (d) kids.push(h("path", { attrs: {
+                fill: "none",
+                stroke: L[1],
+                "stroke-width": 1.5,
+                "stroke-linejoin": "round",
+                d: d.trim()
+              } }));
+            });
+            y = tpBot + 10;
+          }
           BUSES.forEach(function(B) {
             kids.push(h("text", { attrs: {
               x: 6,
@@ -1465,6 +1521,11 @@ var __mm = (() => {
             row("Cell", s.id == null ? "—" : s.id, "", null),
             row("SIM", (s.carrier || "SIM") + " · " + s.slot, "", null)
           ];
+          var mbps = function(k) {
+            return k == null ? null : Math.round(k / 100) / 10;
+          };
+          if (s.rx_kbps != null || s.tx_kbps != null)
+            rows.splice(3, 0, row("Down", mbps(s.rx_kbps), "Mbps", null), row("Up", mbps(s.tx_kbps), "Mbps", null));
           var kids = [h(
             "div",
             { staticClass: "t" },

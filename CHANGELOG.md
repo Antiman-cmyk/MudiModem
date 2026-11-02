@@ -38,6 +38,12 @@ part of R2 and the first step of R3), plus the fixes it surfaced.
   modem commands inside GL's web server: `mudimodemd` arms the revert watchdog and runs the revert.
   The safety net itself is unchanged: the same watchdog reverts at the deadline, survives a
   daemon restart, and `panic` still works from ssh with nothing else running.
+- **Speed test shows the carrier's cap.** Each cellular result records the per-SIM bearer limit
+  the network signals (AMBR, from GL's `cellular.sim info`), and the result card says when a test
+  ran at that cap: a slow result can then be told apart from a throttled plan.
+- **Tracking has a throughput lane:** download and upload rate of the cellular link under the
+  signal chart, from the interface's byte counters every RF tick (no extra modem commands), with a
+  gap after a reconnect or SIM switch. The readout shows the current Down / Up rate.
 - **Chinese:** the whole Modem page is available in Simplified Chinese and follows GL's language
   setting (switching GL's language switches the page). Technical terms (RSRP, n71, AT commands)
   stay as they are; the community AT library stays English.

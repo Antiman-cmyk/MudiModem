@@ -18,6 +18,7 @@ local sys = require "eco.sys"
 local cjson = require "cjson"
 local cc = require "cellular_compat"
 local jsonl = require "mudimodemd.jsonl"
+local net = require "mudimodemd.net"
 
 local M = {}
 
@@ -71,20 +72,7 @@ function M.mbps(bps)
   return math.floor(bps * 8 / 1e6 * 10 + 0.5) / 10
 end
 
--- The live device of 'cellular' (the non-_6 rmnet interface) or 'wired' (wan): (device, up).
-function M.resolve_iface(dump, which)
-  local ifaces = type(dump) == "table" and type(dump.interface) == "table" and dump.interface or {}
-  for _, i in ipairs(ifaces) do
-    local name = tostring(i.interface or "")
-    local hit = (which == "cellular" and i.proto == "rmnet" and not name:match("_6$"))
-             or (which == "wired" and name == "wan")
-    if hit then
-      local dev = (i.l3_device ~= cjson.null and i.l3_device) or (i.device ~= cjson.null and i.device) or nil
-      return dev, (i.up == true) and dev ~= nil
-    end
-  end
-  return nil, false
-end
+M.resolve_iface = net.resolve_iface          -- (device, up) from network.interface dump
 
 -- median + (max - min) of the probes that answered, in ms; nil, nil when none did
 function M.latency_stats(samples)
@@ -190,6 +178,19 @@ function M.new(conn, cfg, log)
       if not up or not device then return fail(iface .. " is not connected") end
       -- the radio snapshot describes the CELLULAR link; a wired result carries none
       local snapshot = iface == "cellular" and load_snapshot() or {}
+      if iface == "cellular" then
+        -- the carrier's max bit rate (AMBR, Mbps) for this SIM: a result at the cap is the plan,
+        -- not the radio. GL's sim info carries it (🟡 libcm_sim.so; GL's cellular-detail shows it)
+        local slot = tonumber(snapshot.slot) or cc.active_slot(call("cellular.modem", "status"), cfg.bus)
+        local sims = call("cellular.sim", "info")
+        for _, s in ipairs(sims and type(sims.sims) == "table" and sims.sims or {}) do
+          if type(s) == "table" and slot and tonumber(s.slot) == slot and (s.bus == nil or s.bus == cjson.null or s.bus == cfg.bus) then
+            local dl, ul = tonumber(s.ambr_dl), tonumber(s.ambr_ul)
+            if dl and dl > 0 then snapshot.ambr_dl = dl end
+            if ul and ul > 0 then snapshot.ambr_ul = ul end
+          end
+        end
+      end
 
       status({ running = true, phase = "download" })
       local d = probe({ "--interface", device, "-G", "--data-urlencode", "bytes=" .. math.floor(cfg.down_bytes), cfg.down_url })
