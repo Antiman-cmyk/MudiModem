@@ -9,6 +9,8 @@ import json, os, shutil, subprocess, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
+sys.path.insert(0, HERE)
+import mudiemu  # noqa: E402
 GOLDEN = os.path.join(HERE, "golden", "jsonl.json")
 dead = subprocess.Popen(["true"]); dead.wait()
 SUBS = {"{PID}": str(os.getpid()), "{DEAD}": str(dead.pid)}
@@ -45,11 +47,9 @@ def runtimes():
     rt = []
     if shutil.which("lua5.1"):
         rt.append(("host lua5.1", ["lua5.1"]))
-    rootfs = os.environ.get("MM_ROOTFS", os.path.join(ROOT, "firmware", "rootfs"))
-    if shutil.which("qemu-aarch64-static") and os.path.exists(os.path.join(rootfs, "usr", "bin", "eco")):
-        emu = os.path.join(ROOT, "tools", "emu.sh")
-        rt.append(("router lua", [emu, "lua"]))
-        rt.append(("router eco", [emu, "eco"]))
+    if mudiemu.ok():                                   # tools/mudi-emu: the router's own interpreters
+        rt.append(("router lua", mudiemu.cmd("run", "lua")))
+        rt.append(("router eco", mudiemu.cmd("run", "eco")))
     return rt
 
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """mudimodemd end to end against an emulated GL 4.10 bus: the image's own ubusd + ubus CLI and a
-fake cellular stack (test/emu/fake-gl.lua under the image's eco), all via qemu. Nothing is mocked
+fake cellular stack (mudi-emu's fakebus: lib/fakebus/fake-gl.lua under the image's eco), all via qemu. Nothing is mocked
 inside the daemon: it talks eco.ubus to the real ubusd.
 
 The collector's samples must be the ones in test/golden/compat.json (frozen from the python
@@ -12,7 +12,7 @@ collector it replaced: the R3 shadow comparison, kept). The contract:
   * carrier identity (`cellular.network info`) is read once, not per tick;
   * no browser attached (has_ws false) -> no push at all;
   * battery from sysfs (+ glbattlimit state), eMMC backup flush and boot restore.
-Skips when the firmware rootfs or qemu is absent (tools/emu.sh check)."""
+Skips when the firmware rootfs or qemu is absent (mudi-emu check)."""
 import http.server, json, os, shutil, signal, subprocess, sys, tempfile, threading, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -20,9 +20,9 @@ ROOT = os.path.abspath(os.path.join(HERE, ".."))
 sys.path.insert(0, HERE)
 import fixtures410 as ct  # noqa: E402  (GL 4.10 payloads)
 
-EMU = os.path.join(ROOT, "tools", "emu.sh")
-BUS_SH = os.path.join(HERE, "emu", "gl-bus.sh")
-ENGINES = {"eco": [EMU, "eco", os.path.join(ROOT, "src", "sbin", "mudimodemd")]}
+import mudiemu  # noqa: E402  (tools/mudi-emu: the router's userland + a fake GL bus)
+EMU = mudiemu.cmd("run")
+ENGINES = {"eco": [*EMU, "eco", os.path.join(ROOT, "src", "sbin", "mudimodemd")]}
 with open(os.path.join(HERE, "golden", "compat.json")) as _f:
     _G = json.load(_f)
 
@@ -44,7 +44,7 @@ SYSFS = {"cw221X-bat/capacity": "87", "cw221X-bat/voltage_now": "4012345", "cw22
 
 
 def emu_ok():
-    return subprocess.run([EMU, "check"], capture_output=True).returncode == 0
+    return mudiemu.ok()
 
 
 def jsonl(path):
@@ -58,7 +58,7 @@ def ct_sample(status, cell, networks):
     """The sample the collector builds from GL's cell_info, computed by the collector's own code
     (cellular_compat.build_sample under the image's Lua), minus t: the reference the get_signals
     path must reproduce."""
-    out = subprocess.run([EMU, "lua", "-e", REF_LUA], input=json.dumps([status, cell, networks]),
+    out = subprocess.run([*EMU, "lua", "-e", REF_LUA], input=json.dumps([status, cell, networks]),
                          capture_output=True, text=True, env=dict(os.environ, LUA_PATH=os.path.join(ROOT, "src", "lib", "?.lua") + ";;"))
     if out.returncode != 0:
         raise AssertionError(out.stderr)
@@ -99,7 +99,7 @@ def write_tree(root, files):
             f.write(body + "\n")
 
 
-@unittest.skipUnless(emu_ok(), "no firmware rootfs / qemu (tools/emu.sh check)")
+@unittest.skipUnless(emu_ok(), "no firmware rootfs / qemu (mudi-emu check)")
 class CollectorOnEmulatedBus(unittest.TestCase):
     def run_collector(self, engine, scen, ticks, sysfs=None, history=False, seed=None, extra_env=None):
         d = tempfile.mkdtemp(prefix="mm-emu-")
@@ -108,8 +108,8 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         os.makedirs(bus); os.makedirs(hist)
         with open(os.path.join(bus, "scen.json"), "w") as f:
             json.dump(scen, f)
-        subprocess.run(["sh", BUS_SH, "start", bus, os.path.join(bus, "scen.json")], check=True)
-        self.addCleanup(subprocess.run, ["sh", BUS_SH, "stop", bus])
+        mudiemu.bus("start", bus, os.path.join(bus, "scen.json"))
+        self.addCleanup(mudiemu.bus, "stop", bus)
         cfg = os.path.join(d, "history.json")
         if history:
             with open(cfg, "w") as f:
@@ -400,7 +400,7 @@ class CollectorOnEmulatedBus(unittest.TestCase):
     def test_eco_rf_from_gl_sampler(self):
         """RF comes from GL's own sampler (get_signals: no AT); cell_info only for the identity.
         The sample built from GL's level-less rows is the one GL's own cell_info gives (levels
-        with GL's thresholds, measured by running GL's cellular_manager: test/emu/gl-real.sh)."""
+        with GL's thresholds, measured by running GL's cellular_manager: mudi-emu up)."""
         rows = ct.gl_signal_rows(ct.GL_CELL_SA)
         r = self.run_gl_sampler([rows], [ct.GL_CELL_SA], ticks=8)
         gets = [c for c in r["calls"] if c["method"] == "get_signals"]
@@ -454,7 +454,7 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         path, stop = os.path.join(d, "events.jsonl"), os.path.join(d, "stop")
         with open(path, "w") as f:
             f.write("".join(json.dumps({"t": t, "kind": "old"}) + "\n" for t in range(100)))
-        trimmer = subprocess.Popen([EMU, "eco", os.path.join(HERE, "emu", "shared-trim.lua"),
+        trimmer = subprocess.Popen([*EMU, "eco", os.path.join(HERE, "emu", "shared-trim.lua"),
                                     os.path.join(ROOT, "src", "lib"), path, stop],
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         written = list(range(100, 700))
@@ -481,8 +481,8 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         bus = os.path.join(d, "bus"); os.makedirs(bus)
         with open(os.path.join(bus, "scen.json"), "w") as f:
             json.dump(scen, f)
-        subprocess.run(["sh", BUS_SH, "start", bus, os.path.join(bus, "scen.json")], check=True)
-        self.addCleanup(subprocess.run, ["sh", BUS_SH, "stop", bus])
+        mudiemu.bus("start", bus, os.path.join(bus, "scen.json"))
+        self.addCleanup(mudiemu.bus, "stop", bus)
         env = dict(os.environ, MUDIMODEM_UBUS_SOCK=os.path.join(bus, "ubus.sock"),
                    MUDIMODEM_LIB=os.path.join(ROOT, "src", "lib"), MUDIMODEM_POLL="0.2",
                    MUDIMODEM_HIST=os.path.join(d, "hist"), MUDIMODEM_HISTORY_CFG=os.path.join(d, "none"),
@@ -513,11 +513,11 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         p = self.spawn_eco(env)
         hist = env["MUDIMODEM_HIST"]
         self.assertGreaterEqual(len(self.wait_samples(hist, 2)), 2)
-        subprocess.run(["sh", BUS_SH, "stop", bus], check=True)
+        mudiemu.bus("stop", bus)
         time.sleep(1.0)
         self.assertIsNone(p.poll(), "the daemon survives ubusd going away")
         before = len(jsonl(os.path.join(hist, "samples.jsonl")))
-        subprocess.run(["sh", BUS_SH, "start", bus, os.path.join(bus, "scen.json")], check=True)
+        mudiemu.bus("start", bus, os.path.join(bus, "scen.json"))
         self.assertGreaterEqual(len(self.wait_samples(hist, before + 3)), before + 3, "sampling resumed")
         out = subprocess.run([os.path.join(bus, "bin", "ubus"), "call", "mudimodem", "health"],
                              capture_output=True, text=True)
@@ -793,8 +793,8 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         bus = os.path.join(d, "bus"); os.makedirs(bus)
         with open(os.path.join(bus, "scen.json"), "w") as f:
             json.dump(scen, f)
-        subprocess.run(["sh", BUS_SH, "start", bus, os.path.join(bus, "scen.json")], check=True)
-        self.addCleanup(subprocess.run, ["sh", BUS_SH, "stop", bus])
+        mudiemu.bus("start", bus, os.path.join(bus, "scen.json"))
+        self.addCleanup(mudiemu.bus, "stop", bus)
         env = dict(os.environ, MUDIMODEM_UBUS_SOCK=os.path.join(bus, "ubus.sock"),
                    MUDIMODEM_LIB=os.path.join(ROOT, "src", "lib"), MUDIMODEM_POLL="0.2",
                    MUDIMODEM_HIST=os.path.join(d, "hist"), MUDIMODEM_HISTORY_CFG=os.path.join(d, "none"),

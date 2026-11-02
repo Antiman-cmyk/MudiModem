@@ -11,7 +11,7 @@
 //                                             list the English text the active table does not
 //                                             translate -> build/i18n-audit.json
 //
-// What is real: GL's theme CSS (from firmware/rootfs, tools/firmware.sh), Vue 2.6.12 runtime
+// What is real: GL's theme CSS (from the image mudi-emu extracts, tools/mudi-emu), Vue 2.6.12 runtime
 // (fetched once into build/.cache with `npm pack`), the BUILT chunks from dist/views loaded by
 // eval exactly as GL's SPA does (lazy tab chunks through a fake $axios.get). What is fake: the
 // /ws status (cellular.* + mudimodem.collect) and /rpc replies — FIXTURE below. A page error,
@@ -23,7 +23,14 @@ const zlib = require("zlib");
 const { execFileSync } = require("child_process");
 
 const ROOT = path.join(__dirname, "..");
-const ROOTFS = path.join(ROOT, process.env.MM_ROOTFS || "firmware/rootfs");
+const ROOTFS = (() => {                            // the extracted image, wherever mudi-emu keeps it
+  const cli = process.env.MUDI_EMU || path.join(ROOT, "tools/mudi-emu/bin/mudi-emu");
+  try {
+    return execFileSync(cli, ["path", "rootfs"], { env: { MUDI_EMU_IMAGE: "e5800-4.10.0", ...process.env } }).toString().trim();
+  } catch (e) {
+    return path.join(ROOT, "build/no-mudi-emu");
+  }
+})();
 const CACHE = path.join(ROOT, "build/.cache");
 const args = process.argv.slice(2);
 const opt = (k, d) => { const i = args.indexOf("--" + k); return i >= 0 ? args[i + 1] : d; };
@@ -41,7 +48,7 @@ function vueRuntime() {
 }
 function themeCss(theme) {
   const t = path.join(ROOTFS, "www/theme");
-  if (!fs.existsSync(path.join(t, "base.css"))) throw new Error("no firmware rootfs: tools/firmware.sh fetch && tools/firmware.sh extract");
+  if (!fs.existsSync(path.join(t, "base.css"))) throw new Error("no extracted image: tools/mudi-emu/bin/mudi-emu fetch && tools/mudi-emu/bin/mudi-emu extract");
   return fs.readFileSync(path.join(t, "base.css"), "utf8") + "\n" +
          zlib.gunzipSync(fs.readFileSync(path.join(t, theme, "index.css.gz"))).toString();
 }

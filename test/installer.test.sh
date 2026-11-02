@@ -3,7 +3,7 @@
 #
 #   sh test/installer.test.sh                 host dash
 #   busybox sh test/installer.test.sh         host busybox ash
-#   tools/emu.sh sh test/installer.test.sh    the ROUTER's busybox ash + applets (qemu)
+#   tools/mudi-emu/bin/mudi-emu run sh test/installer.test.sh   the ROUTER's busybox ash + applets (qemu)
 #
 # Runs install.sh / uninstall.sh exactly as a user would (MUDIMODEM_BASE = this checkout), then
 # checks the resulting tree, the generated firmware-upgrade keep list, the recorded service

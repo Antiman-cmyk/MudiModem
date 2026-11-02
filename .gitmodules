@@ -1,0 +1,3 @@
+[submodule "tools/mudi-emu"]
+	path = tools/mudi-emu
+	url = https://github.com/Antiman-cmyk/mudi-emu

@@ -1,35 +1,29 @@
 #!/usr/bin/env python3
 """mudimodemd against GL's OWN cellular stack: cellular_manager (and the modem_AT it spawns) from
-the 4.10 image, chrooted under qemu with a fake RG650V behind /dev/smd9 (test/emu/gl-real.sh).
-Nothing of GL is faked here but the modem's AT replies, so what GL returns is what GL's code does.
+the 4.10 image, chrooted under qemu with mudi-emu's RG650V model behind /dev/smd9 (`mudi-emu up`,
+scenario test/emu/gl-real.json). Nothing of GL is faked here but the modem's AT replies, so what
+GL returns is what GL's code does.
 
   * the collector's RF comes from GL's sampler (cellular.collect get_signals), and its sample is
     the one GL's own cell_info gives — levels included (GL's thresholds, cellular_compat);
   * cell_info runs only for the identity: once, then again after the serving cell changes;
   * the carrier's AMBR is in `cellular.sim status` (the speed test's source), not `sim info`.
-Needs firmware/rootfs, qemu-user + binfmt, and root for the namespaces/overlay; skips otherwise."""
+Needs the extracted image, qemu-user + binfmt, and root for the namespaces/overlay (`mudi-emu check`);
+skips otherwise."""
 import json, os, shutil, subprocess, sys, tempfile, textwrap, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
-EMU = os.path.join(ROOT, "tools", "emu.sh")
-GLREAL = os.path.join(HERE, "emu", "gl-real.sh")
-
-
-def can_run():
-    if os.geteuid() != 0 or not shutil.which("unshare"):
-        return False
-    if subprocess.run([EMU, "check"], capture_output=True).returncode != 0:
-        return False
-    return os.path.exists("/proc/sys/fs/binfmt_misc/qemu-aarch64")
+sys.path.insert(0, HERE)
+import mudiemu  # noqa: E402
+SCENARIO = os.path.join(HERE, "emu", "gl-real.json")
 
 
 INNER = textwrap.dedent(r'''
     import json, os, subprocess, sys, time
-    W, EMU, ROOT = sys.argv[1], sys.argv[2], sys.argv[3]
-    GLR = os.environ["GLR"]; UBUS = os.environ["UBUS"].split()
+    W, CLI, ROOT = os.environ["MUDI_EMU_WORK"], sys.argv[1], sys.argv[2]
     def ubus(obj, m, a):
-        out = subprocess.run(UBUS + ["-t", "20", "call", obj, m, json.dumps(a)], capture_output=True, text=True).stdout
+        out = subprocess.run([CLI, "ubus", "-t", "20", "call", obj, m, json.dumps(a)], capture_output=True, text=True).stdout
         return json.loads(out) if out.strip() else None
     def samples():
         try:
@@ -41,21 +35,21 @@ INNER = textwrap.dedent(r'''
         if r and r.get("signals"):
             break
         time.sleep(1)
-    env = dict(os.environ, MUDIMODEM_UBUS_SOCK=os.path.join(GLR, "tmp/run/ubus/ubus.sock"),
+    env = dict(os.environ, MUDIMODEM_UBUS_SOCK=os.environ["MUDI_EMU_UBUS_SOCK"],
                MUDIMODEM_LIB=os.path.join(ROOT, "src", "lib"), MUDIMODEM_POLL="2",
                MUDIMODEM_HIST=os.path.join(W, "hist"), MUDIMODEM_HISTORY_CFG=os.path.join(W, "none"),
                MUDIMODEM_BATT_SYSFS=os.path.join(W, "none"), MUDIMODEM_SUMMARY=os.path.join(W, "summary.jsonl"),
                MUDIMODEM_LINK_INTERVAL="0", MUDIMODEM_CRASH_INTERVAL="0", MUDIMODEM_NO_WS_PUSH="1")
-    d = subprocess.Popen([EMU, "eco", os.path.join(ROOT, "src", "sbin", "mudimodemd")], env=env,
+    d = subprocess.Popen([CLI, "run", "eco", os.path.join(ROOT, "src", "sbin", "mudimodemd")], env=env,
                          stdout=subprocess.DEVNULL, stderr=open(os.path.join(W, "daemon.err"), "w"))
     time.sleep(16)
     before = samples()
     h1 = ubus("mudimodem", "health", {})
     gl_cell = ubus("cellular.network", "cell_info", {"bus": "cpu", "slot": 1})
     sim_info, sim_status = ubus("cellular.sim", "info", {}), ubus("cellular.sim", "status", {})
-    # a handover: the modem now serves another cell (new PCI, new id)
-    line = '+QENG: "servingcell","NOCONN","NR5G-SA","FDD",310,260,187461999,333,870100,127490,71,2,-106,-17,7,0,-'
-    json.dump({"replies": {'AT+QENG="servingcell"': line}}, open(os.path.join(W, "modem-state.json"), "w"))
+    # a handover: the modem now serves another cell (new PCI, new id), pushed into the running model
+    subprocess.run([CLI, "modem", json.dumps({"subs": {"1": {"serving": {
+        "cell_id": "187461999", "pci": 333, "rsrp": -106, "rsrq": -17, "sinr": 7}}}})], check=True)
     time.sleep(26)
     after = samples()[len(before):]
     h2 = ubus("mudimodem", "health", {})
@@ -67,7 +61,7 @@ INNER = textwrap.dedent(r'''
 ''')
 
 
-@unittest.skipUnless(can_run(), "needs root, unshare, firmware/rootfs and qemu binfmt (tools/emu.sh check)")
+@unittest.skipUnless(mudiemu.stack_ok(), "needs root, the extracted image and qemu binfmt (mudi-emu check)")
 class AgainstGLsOwnStack(unittest.TestCase):
     def test_collector_reads_gl_sampler(self):
         w = tempfile.mkdtemp(prefix="mm-glreal-", dir=os.path.join(ROOT, "build"))
@@ -75,7 +69,8 @@ class AgainstGLsOwnStack(unittest.TestCase):
         inner = os.path.join(w, "inner.py")
         with open(inner, "w") as f:
             f.write(INNER)
-        p = subprocess.run([GLREAL, w, "python3", "-I", inner, w, EMU, ROOT], capture_output=True, text=True, timeout=300)
+        p = subprocess.run(mudiemu.cmd("up", w, "--scenario", SCENARIO, "--", sys.executable, "-I", inner,
+                                       mudiemu.CLI, ROOT), capture_output=True, text=True, timeout=300)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         with open(os.path.join(w, "result.json")) as f:
             r = json.load(f)

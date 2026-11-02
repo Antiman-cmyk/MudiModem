@@ -45,7 +45,7 @@ esac
 EOF
   chmod +x "$FAKE/ubus"
   # libubox's jsonfilter: the real one when it is on PATH (the router's own, under
-  # tools/emu.sh), else a stand-in: `-e '@.a.b'` prints the value at that path —
+  # `mudi-emu run sh`), else a stand-in: `-e '@.a.b'` prints the value at that path —
   # objects as JSON, nothing when the path is missing — which is all the watchdog
   # relies on.
   command -v jsonfilter >/dev/null 2>&1 || cat > "$FAKE/jsonfilter" <<'EOF'

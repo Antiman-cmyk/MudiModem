@@ -4,10 +4,12 @@ test/golden/compat.json — frozen from the python reference (src/lib/cellular_c
 R3 ⑤ retired it, so the port stays proven equal — under the host's lua5.1 and, when the firmware
 rootfs is extracted, the router's lua (5.1) and eco (5.4). A deliberate behaviour change edits the
 golden in the same commit. Run: python3 test/compat-golden.test.py"""
-import json, os, shutil, subprocess, tempfile, unittest
+import json, os, shutil, subprocess, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
+sys.path.insert(0, HERE)
+import mudiemu  # noqa: E402
 GOLDEN = os.path.join(HERE, "golden", "compat.json")
 
 
@@ -15,11 +17,9 @@ def runtimes():
     rt = []
     if shutil.which("lua5.1"):
         rt.append(("host lua5.1", ["lua5.1"]))
-    rootfs = os.environ.get("MM_ROOTFS", os.path.join(ROOT, "firmware", "rootfs"))
-    if shutil.which("qemu-aarch64-static") and os.path.exists(os.path.join(rootfs, "usr", "bin", "eco")):
-        emu = os.path.join(ROOT, "tools", "emu.sh")
-        rt.append(("router lua", [emu, "lua"]))
-        rt.append(("router eco", [emu, "eco"]))
+    if mudiemu.ok():                                   # tools/mudi-emu: the router's own interpreters
+        rt.append(("router lua", mudiemu.cmd("run", "lua")))
+        rt.append(("router eco", mudiemu.cmd("run", "eco")))
     return rt
 
 

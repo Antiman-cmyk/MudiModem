@@ -1,7 +1,7 @@
 -- test/emu/plugin-driver.lua — run ONE call of the real nginx plugin (src/rpc/mudimodem) against
 -- the emulated GL bus, for test/change-emu.test.py:
 --   lua5.1 plugin-driver.lua <ubus wrapper> <glc state dir> <method> [json args]
--- oui.ubus.call goes through the image's ubus CLI (the wrapper test/emu/gl-bus.sh writes);
+-- oui.ubus.call goes through the image's ubus CLI (the wrapper `mudi-emu fakebus start` writes);
 -- ngx.location.capture("/cgi-bin/glc") is a fake glc keeping GL's band config in
 -- <dir>/band_config.json and logging every call to <dir>/glc.jsonl; os.execute runs for real
 -- and is logged to <dir>/exec.log. Prints the method's reply as JSON.

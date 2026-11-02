@@ -108,7 +108,7 @@ from 3GPP TS 38.101-1 / 36.101.
 - Bands: `modem.set_band_config {bus, slot, band_enable, band_filter_mode, network_mode,
   band_list:{LTE,"NR-SA","NR-NSA"}}` via glc. One write, fail-closed, durable. `band_filter_mode`
   0 = allowlist. Panic/open state = `band_enable:false` + `AUTO`. What GL does with it, measured by
-  running GL's own cellular_manager + glc under emulation (`test/emu/gl-real.sh`, every AT logged):
+  running GL's own cellular_manager + glc under emulation (`mudi-emu up`, every AT logged):
   - **current slot**: applies at once, writing only what differs from the module (it queries the
     three band lists first): AUTO + all lists → `mode_pref` AUTO, `nr5g_disable_mode` 0, the
     lists; AUTO or NR5G + **empty NR-SA** → `mode_pref` LTE:NR5G, `nr5g_disable_mode` **1** (SA
@@ -194,7 +194,7 @@ comma-separated reply. Nothing auto-runs; `{{params}}` must be filled; set/nv ne
   timeout). A plugin → daemon call must answer within that; longer work is a job (start, then poll).
 - Everything the image ships (lua 5.1/5.4, **lua-eco**, libubus-lua, luaposix, luasocket,
   lsqlite3, cjson, curl, jsonfilter, sqlite3) survives upgrades.
-- **lua-eco 3.19.1 as we use it** (probed under qemu on the image, `tools/emu.sh eco`):
+- **lua-eco 3.19.1 as we use it** (probed under qemu on the image, `mudi-emu run eco`):
   `eco.ubus.connect(sock)` → `conn:call(obj, m, args)` yields and returns `(table)` or
   `(nil, "not found" | "timeout" | "Unknown error")`; the default call timeout is **30 s**,
   `conn:settimeout(s)` sets it per connection. A dead connection (ubusd restarted) also answers
@@ -217,7 +217,7 @@ comma-separated reply. Nothing auto-runs; `{{params}}` must be filled; set/nv ne
   inherited descriptors instead.
 - Under qemu-user (the emulation), a PATH lookup (`command -v`) does not find a rootfs-only binary
   such as `/usr/bin/jsonfilter`, although running it by path works: scripts would silently take
-  their no-jsonfilter branch. `test/emu/gl-bus.sh` puts a `jsonfilter` wrapper next to its `ubus`.
+  their no-jsonfilter branch. `mudi-emu fakebus` puts a `jsonfilter` wrapper next to its `ubus`.
 - **Local `/rpc` loop-back** (🟢 `oui/rpc.lua` `M.access`; `oui-access.lua`, the `/rpc` access phase,
   returns early for 127.0.0.1/::1): a request from 127.0.0.1 carrying a `glinet` header passes oui's ACL — how gl-session's `call {module, func, params}` reaches GL's
   plugins from a shell (eco HTTP client, default 30 s read timeout). mudimodemd uses the same
@@ -254,7 +254,7 @@ comma-separated reply. Nothing auto-runs; `{{params}}` must be filled; set/nv ne
           worker={id=function() return 0 end, count=function() return 1 end},
           now=function() return os.time() end, time=function() return os.time() end }
   ```
-  Run it under the router's Lua (`tools/emu.sh lua`) — the host's stock Lua accepts things the
+  Run it under the router's Lua (`mudi-emu run lua`) — the host's stock Lua accepts things the
   router's LNUM build rejects. Such tests bypass oui's arg validation; a free-form param also needs
   a validator test.
 - Never call `clear_cell_lock` / any write in a test against a real box.

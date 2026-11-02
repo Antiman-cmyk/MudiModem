@@ -3,23 +3,24 @@
 under the image's eco on the emulated GL bus, with a fake curl serving the remote files. These are
 the cases tools/mudimodem-lib (python3) was tested with before R3 ⑤ retired it, plus one it never
 had: the cached library is the fetched body verbatim (re-encoding would turn [] into {}).
-Skips when the firmware rootfs or qemu is absent (tools/emu.sh check)."""
-import gzip, json, os, shutil, signal, stat, subprocess, tempfile, time, unittest
+Skips when the firmware rootfs or qemu is absent (mudi-emu check)."""
+import gzip, json, os, shutil, signal, stat, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
-EMU = os.path.join(ROOT, "tools", "emu.sh")
-BUS_SH = os.path.join(HERE, "emu", "gl-bus.sh")
+sys.path.insert(0, HERE)
+import mudiemu  # noqa: E402  (tools/mudi-emu: the router's userland + a fake GL bus)
+EMU = mudiemu.cmd("run")
 LIB = {"version": 3, "revision": "new222",
        "entries": [{"id": "a.read", "cmd": "AT+CSQ", "risk": "read", "params": []},
                    {"id": "b.set", "cmd": "AT+X={{v}}", "risk": "set", "params": [{"name": "v"}]}]}
 
 
 def emu_ok():
-    return subprocess.run([EMU, "check"], capture_output=True).returncode == 0
+    return mudiemu.ok()
 
 
-@unittest.skipUnless(emu_ok(), "no firmware rootfs / qemu (tools/emu.sh check)")
+@unittest.skipUnless(emu_ok(), "no firmware rootfs / qemu (mudi-emu check)")
 class Library(unittest.TestCase):
     def setUp(self):
         d = self.d = tempfile.mkdtemp(prefix="mm-lib-")
@@ -28,8 +29,8 @@ class Library(unittest.TestCase):
         os.makedirs(self.bus); os.makedirs(self.remote)
         with open(os.path.join(self.bus, "scen.json"), "w") as f:
             json.dump({}, f)
-        subprocess.run(["sh", BUS_SH, "start", self.bus, os.path.join(self.bus, "scen.json")], check=True)
-        self.addCleanup(subprocess.run, ["sh", BUS_SH, "stop", self.bus])
+        mudiemu.bus("start", self.bus, os.path.join(self.bus, "scen.json"))
+        self.addCleanup(mudiemu.bus, "stop", self.bus)
         # a curl that serves <remote>/<file> for any URL ending in /<file>; exit 22 (-f) when absent;
         # CURL_FAIL in the file "fail" makes it fail like an offline box
         self.curl = os.path.join(d, "curl.sh")
@@ -47,7 +48,7 @@ class Library(unittest.TestCase):
                         MUDIMODEM_HIST=os.path.join(d, "hist"))
 
     def daemon(self, **extra):
-        p = subprocess.Popen([EMU, "eco", os.path.join(ROOT, "src", "sbin", "mudimodemd")],
+        p = subprocess.Popen([*EMU, "eco", os.path.join(ROOT, "src", "sbin", "mudimodemd")],
                              env=dict(self.env, **extra), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: (p.poll() is None and p.send_signal(signal.SIGTERM), p.wait(timeout=20),
                                  p.stdout.close(), p.stderr.close()))

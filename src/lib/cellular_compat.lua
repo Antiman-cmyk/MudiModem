@@ -115,7 +115,7 @@ function M.normalize_signal(row, network_type, index)
 end
 
 -- GL's signal levels, as `cellular.network cell_info` computes them (libcm_network.so). Measured by
--- running GL's own cellular_manager under emulation (test/emu/gl-real.sh) across every value:
+-- running GL's own cellular_manager under emulation (mudi-emu up) across every value:
 -- RSRP and SINR use the same thresholds for LTE and NR, RSRQ does not, and each row goes by its
 -- OWN network_type (an EN-DC LTE anchor row uses LTE's). An absent / sentinel value is level 0.
 -- `cellular.collect get_signals` rows are cell_info rows without the levels; this adds them.

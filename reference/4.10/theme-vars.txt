@@ -1,5 +1,5 @@
 # CSS custom properties GL 4.10.0 defines (www/theme/base.css + {default,classic,dark}/index.css.gz).
-# Generated from the firmware image; test/theme-vars.test.js checks it against firmware/rootfs when present.
+# Generated from the firmware image; test/theme-vars.test.js checks it against the extracted image (tools/mudi-emu) when present.
 --background-badge
 --background-card
 --background-collapse

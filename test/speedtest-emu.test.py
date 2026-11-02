@@ -3,14 +3,15 @@
 image's eco on the emulated GL bus, against a fake speed server on 127.0.0.1 (the "cellular"
 interface is `lo` here). These are the end-to-end cases tools/mudimodem-speedtest.py and
 mudimodem-speedtestd (python3) were tested with before R3 ⑤ retired them, plus the plugin's
-start-then-poll path. Skips when the firmware rootfs or qemu is absent (tools/emu.sh check)."""
-import http.server, json, os, shutil, signal, subprocess, tempfile, threading, time, unittest
+start-then-poll path. Skips when the firmware rootfs or qemu is absent (mudi-emu check)."""
+import http.server, json, os, shutil, signal, subprocess, sys, tempfile, threading, time, unittest
 from urllib.parse import urlparse, parse_qs
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
-EMU = os.path.join(ROOT, "tools", "emu.sh")
-BUS_SH = os.path.join(HERE, "emu", "gl-bus.sh")
+sys.path.insert(0, HERE)
+import mudiemu  # noqa: E402  (tools/mudi-emu: the router's userland + a fake GL bus)
+EMU = mudiemu.cmd("run")
 DRIVER = os.path.join(HERE, "emu", "plugin-driver.lua")
 DUMP_UP = {"interface": [{"interface": "modem_1_1_2_6", "proto": "rmnet", "up": True, "l3_device": "lo"},
                          {"interface": "modem_1_1_2", "proto": "rmnet", "up": True, "l3_device": "lo"},
@@ -22,7 +23,7 @@ CELL = {"network_type": 5, "cell_id": "C1", "tac": "T1",
 
 
 def emu_ok():
-    return shutil.which("lua5.1") is not None and subprocess.run([EMU, "check"], capture_output=True).returncode == 0
+    return shutil.which("lua5.1") is not None and mudiemu.ok()
 
 
 def jsonl(path):
@@ -74,7 +75,7 @@ class Speed(http.server.BaseHTTPRequestHandler):
         pass
 
 
-@unittest.skipUnless(emu_ok(), "no firmware rootfs / qemu / lua5.1 (tools/emu.sh check)")
+@unittest.skipUnless(emu_ok(), "no firmware rootfs / qemu / lua5.1 (mudi-emu check)")
 class SpeedTest(unittest.TestCase):
     def setUp(self):
         d = self.d = tempfile.mkdtemp(prefix="mm-st-")
@@ -108,9 +109,9 @@ class SpeedTest(unittest.TestCase):
                                         {"slot": 1, "bus": "cpu", "ambr_dl": "150", "ambr_ul": 50}]}}
         with open(os.path.join(self.bus, "scen.json"), "w") as f:
             json.dump(scen, f)
-        subprocess.run(["sh", BUS_SH, "start", self.bus, os.path.join(self.bus, "scen.json")], check=True)
-        self.addCleanup(subprocess.run, ["sh", BUS_SH, "stop", self.bus])
-        p = subprocess.Popen([EMU, "eco", os.path.join(ROOT, "src", "sbin", "mudimodemd")],
+        mudiemu.bus("start", self.bus, os.path.join(self.bus, "scen.json"))
+        self.addCleanup(mudiemu.bus, "stop", self.bus)
+        p = subprocess.Popen([*EMU, "eco", os.path.join(ROOT, "src", "sbin", "mudimodemd")],
                              env=dict(self.env, **extra), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: (p.poll() is None and p.send_signal(signal.SIGTERM), p.wait(timeout=20),
                                  p.stdout.close(), p.stderr.close()))

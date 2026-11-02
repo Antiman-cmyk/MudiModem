@@ -16,7 +16,7 @@
 -- cellular_compat.with_levels) and without the cell id / TAC, so `cellular.network cell_info`
 -- (one QENG + QCAINFO) runs only when the serving carrier changes, once a minute, or when GL has no
 -- fresh row (its sampler starting up). All of it measured by running GL's cellular_manager under
--- emulation (test/emu/gl-real.sh; docs/cellular-api-4.10.md).
+-- emulation (mudi-emu up; docs/cellular-api-4.10.md).
 local cjson = require "cjson"
 local time = require "eco.time"
 local cc = require "cellular_compat"

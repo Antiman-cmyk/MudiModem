@@ -190,11 +190,13 @@ and AT commands are Quectel- and firmware-specific; treat other hardware as unte
 
 ## Development
 
-No router is needed to work on MudiModem. `tools/firmware.sh fetch && tools/firmware.sh extract`
+No router is needed to work on MudiModem. The firmware and emulation tooling is
+[mudi-emu](https://github.com/Antiman-cmyk/mudi-emu), pinned as a submodule in `tools/mudi-emu`
+(`git submodule update --init`). `tools/mudi-emu/bin/mudi-emu fetch && tools/mudi-emu/bin/mudi-emu extract`
 unpacks GL's official 4.10.0 image, and `tools/test-local.sh` runs every test suite on the dev box —
-including passes under the **router's own** Lua, busybox shell and tools via qemu
-(`tools/emu.sh`) — and renders every tab of the page in headless Chromium with GL's own theme
-(`tools/preview.js`). What ships where is listed once, in `manifest.txt`; `tools/deploy.sh` pushes a
+including passes under the **router's own** Lua, busybox shell and tools via qemu, and against
+GL's own cellular stack with a modem model on its AT port — and renders every tab of the page in
+headless Chromium with GL's own theme (`tools/preview.js`). What ships where is listed once, in `manifest.txt`; `tools/deploy.sh` pushes a
 working tree to a real box over ssh when one is genuinely needed.
 
 The page is written as ES modules under `src/web` and built with esbuild (`npm ci && npm run

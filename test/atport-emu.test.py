@@ -4,12 +4,14 @@ with a pty playing the modem (raw mode; the real /dev/at_mdm0 is not a tty eithe
 cases tools/mudimodem-at.py was tested with before R3 ⑤ retired python3: terminators, stop on
 error, and late replies — a reply that lands after its command timed out must never be read as
 the next command's answer (the port pairs replies by order only).
-Skips when the firmware rootfs or qemu is absent (tools/emu.sh check)."""
-import json, os, shutil, subprocess, tempfile, threading, time, tty, unittest
+Skips when the firmware rootfs or qemu is absent (mudi-emu check)."""
+import json, os, shutil, subprocess, sys, tempfile, threading, time, tty, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
-EMU = os.path.join(ROOT, "tools", "emu.sh")
+sys.path.insert(0, HERE)
+import mudiemu  # noqa: E402  (tools/mudi-emu: the router's userland + a fake GL bus)
+EMU = mudiemu.cmd("run")
 DRIVER = os.path.join(HERE, "emu", "atport-driver.lua")
 SCAN = "AT+QSCAN=3,1"
 SCAN_REPLY = b'\r\n+QSCAN: "NR5G",310,260,520110,41,-95\r\n\r\nOK\r\n'
@@ -17,7 +19,7 @@ CSQ_REPLY = b"\r\n+CSQ: 20,99\r\n\r\nOK\r\n"
 
 
 def emu_ok():
-    return subprocess.run([EMU, "check"], capture_output=True).returncode == 0
+    return mudiemu.ok()
 
 
 def uptime():
@@ -55,7 +57,7 @@ class ScriptedModem:
                 os.write(self.master, reply)
 
 
-@unittest.skipUnless(emu_ok(), "no firmware rootfs / qemu (tools/emu.sh check)")
+@unittest.skipUnless(emu_ok(), "no firmware rootfs / qemu (mudi-emu check)")
 class DirectPort(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="mm-atport-")
@@ -63,7 +65,7 @@ class DirectPort(unittest.TestCase):
         self.marker = os.path.join(self.tmp, "at.inflight")
 
     def run_port(self, port, timeout, *cmds):
-        out = subprocess.run([EMU, "eco", DRIVER, os.path.join(ROOT, "src", "lib"), port, self.marker,
+        out = subprocess.run([*EMU, "eco", DRIVER, os.path.join(ROOT, "src", "lib"), port, self.marker,
                               str(timeout)] + list(cmds), capture_output=True, text=True, timeout=120)
         self.assertEqual(out.returncode, 0, out.stderr)
         return json.loads(out.stdout)

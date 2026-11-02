@@ -8,18 +8,22 @@ battery history + charge limit. It adds files alongside GL's; it patches nothing
 Rule of scope (owner): ship only what stock 4.10 lacks or does incompletely.
 
 ## How to work here
+- **Firmware and emulation live in mudi-emu** (`tools/mudi-emu`, a pinned git submodule:
+  `git submodule update --init`; its own repo is Antiman-cmyk/mudi-emu). Change emulation there,
+  push it, then bump the submodule here. `$MUDI_EMU` points the suites at another checkout's CLI.
 - **Firmware first.** Any question about how GL behaves is answered from the official image:
-  `tools/firmware.sh fetch && tools/firmware.sh extract` puts the 4.10.0 rootfs in
-  `firmware/rootfs/` (gitignored). Read Lua/JSON/JS there; for binaries use the scripts and
-  method in `reference/4.10/` (`re-notes.md`, `re-tools/`). Record new facts in
-  `docs/cellular-api-4.10.md` or `docs/knowledge.md` with their evidence.
-- **Emulation first.** Run code under the router's own userland on the dev box (`tools/emu.sh`:
-  the image's `lua`, `eco`, busybox `ash` + applets, `jsonfilter`, `ubusd`/`ubus`, `nginx` via
-  qemu). Fake GL services are eco scripts registering `cellular.*` etc. on the image's `ubusd`
-  (`docs/architecture.md` §6.1); installs run in a fake root (`MUDIMODEM_ROOT`). To learn what
-  GL itself does, run GL: `test/emu/gl-real.sh` starts the image's own `cellular_manager` (and the
-  `modem_AT` it spawns) against a fake RG650V (`test/emu/fake-modem.py`, logs every AT command).
-  `tools/test-local.sh` runs every suite this way, not on a router.
+  `tools/mudi-emu/bin/mudi-emu fetch && … extract` unpacks the pinned 4.10.0 rootfs
+  (`mudi-emu path rootfs`). Read Lua/JSON/JS there; for binaries use mudi-emu's `re/` tools and
+  method (`re/NOTES.md`, `docs/re-notes-4.10.md`). Record facts MudiModem relies on in
+  `docs/cellular-api-4.10.md` or `docs/knowledge.md` with their evidence; general GL facts in
+  mudi-emu's `docs/gl-behaviour.md` / `docs/re-notes-4.10.md`.
+- **Emulation first.** Run code under the router's own userland on the dev box (`mudi-emu run
+  lua|eco|sh|bin`: the image's `lua`, `eco`, busybox `ash` + applets, `jsonfilter`, `ubusd`/`ubus`,
+  `nginx` via qemu). Fake GL services: `mudi-emu fakebus` (the image's `ubusd` + a scripted fake
+  `cellular.*` etc.); installs run in a fake root (`MUDIMODEM_ROOT`). To learn what GL itself
+  does, run GL: `mudi-emu up` starts the image's own `cellular_manager` (and the `modem_AT` it
+  spawns) against mudi-emu's RG650V model, which logs every AT command with the evidence behind
+  each reply. `tools/test-local.sh` runs every suite this way, not on a router.
 - **A real box is the last resort**, only for what is genuinely runtime (RF state, modem replies,
   timing). Mark such items 🔴, batch them, and never make a change wait on one. Never run write
   commands (band/lock/CFUN/NV) on a box unprompted.
@@ -69,19 +73,22 @@ src/rpc/mudimodem       nginx Lua plugin (object "mudimodem"); src/validator/ it
 src/sbin/ src/lib/      daemons + helpers: mudimodemd (eco; src/lib/mudimodemd/: collector, AT queue +
                         direct port, jobs, speed test, change arming), revert watchdog, battery limit
 src/ws/mudimodem.lua    /ws seed module; src/nginx/ the gl-conf.d alias
-tools/                  build, deploy (ssh), verify (live box), firmware fetch/extract, AT/lib/speedtest tools
-test/                   every suite; tools/test-local.sh runs them all (host + router userland via qemu);
-                        test/emu/gl-bus.sh = the image's ubusd + a fake GL stack, for daemon tests;
-                        test/emu/gl-real.sh = GL's OWN cellular stack + a fake modem (root, namespaces)
-reference/4.10/         GL files copied from the image + RE notes/tools
+tools/                  build, deploy (ssh), verify (live box), page preview, i18n keys
+tools/mudi-emu/         SUBMODULE: firmware fetch/extract, router userland, fake GL bus, GL's own stack
+                        + the RG650V model, RE tools/notes (its README)
+test/                   every suite; tools/test-local.sh runs them all (host + router userland via
+                        mudi-emu); test/mudiemu.py = how the Python suites reach it; test/emu/ = our
+                        drivers + the gl-real scenario
+reference/4.10/         GL files copied from the image (integration evidence; theme-vars.txt)
 docs/                   architecture.md · cellular-api-4.10.md · knowledge.md · audit · design/ (history)
 ```
 
 ## Commands
 ```sh
-tools/firmware.sh fetch && tools/firmware.sh extract   # official 4.10.0 image -> firmware/rootfs
-tools/test-local.sh                                    # all suites; router userland via qemu if rootfs present
-tools/emu.sh sh|lua|eco|run …                          # the router's own userland under qemu
+git submodule update --init                            # tools/mudi-emu (once per clone)
+tools/mudi-emu/bin/mudi-emu fetch && tools/mudi-emu/bin/mudi-emu extract   # official 4.10.0 image
+tools/test-local.sh                                    # all suites; router userland via mudi-emu if extracted
+tools/mudi-emu/bin/mudi-emu run sh|lua|eco|bin …       # the router's own userland under qemu
 node tools/preview.js --matrix                         # every tab x phone/desktop x light/dark, GL's theme, fake data
 npm ci && npm run build:web                            # src/web -> dist/views (esbuild); test-local checks freshness
 node tools/i18n-keys.mjs --check zh-cn                 # UI strings missing from the Chinese table
@@ -90,14 +97,17 @@ tools/build.sh                                         # payload tarball (what d
 MUDI_HOST=mudi tools/deploy.sh                         # push to a box over ssh (no sftp: uses cat)
 MUDI_HOST=mudi tools/verify.sh                         # on-box assertions (optional, last)
 ```
-Dev-box packages the tests use: `lua5.1 lua-cjson busybox qemu-user-static
-binutils-aarch64-linux-gnu shellcheck`, Node ≥ 20, Python 3.
+Dev-box packages the tests use: `lua5.1 lua-cjson busybox qemu-user-static e2fsprogs
+binutils-aarch64-linux-gnu shellcheck`, Node ≥ 20, Python 3. `mudi-emu up` (the GL-real
+suite) also needs root.
 
 ## Where the truth lives
 - `docs/architecture.md` — current structure and the 3.0 refactor plan (phases R0–R4).
 - `docs/cellular-api-4.10.md` — every GL shape/RPC we depend on, with evidence.
 - `docs/knowledge.md` — platform + domain knowledge (band model, sub_id, AT, persistence, gotchas).
-- `reference/quectel-at-reference.md` — AT evidence; `reference/4.10/` — GL source copies + RE.
+- `reference/quectel-at-reference.md` — AT evidence; `reference/4.10/` — GL source copies.
+- mudi-emu: `docs/gl-behaviour.md` (GL measured by running it), `docs/re-notes-4.10.md` (read from
+  its binaries), `modem/README.md` (the model, its evidence and scenarios).
 - `docs/audit-2026-11-02.md` — open improvement list; `CHANGELOG.md` — what each release changed.
   `docs/design/` and `docs/history/` are background only (4.8-era unless dated later), not
   instructions.

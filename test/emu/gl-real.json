@@ -1,0 +1,14 @@
+{
+  "_doc": "test/gl-real.test.py: SIM 1 on T-Mobile NR5G-SA n71 (the captured cell; the model's default), active; SIM 2 on AT&T LTE B66 with its own carrier cap, so the AMBR per slot is distinguishable.",
+  "slot": 1,
+  "subs": {
+    "1": {},
+    "2": {
+      "sim": {"present": true, "imsi": "310410000000002", "iccid": "8901410000000000002", "mcc": "310", "mnc": "410",
+              "operator": "AT&T", "spn": "AT&T", "apn": "broadband", "ip": "10.0.1.2",
+              "ambr": {"dl_kbps": 150000, "ul_kbps": 50000}},
+      "serving": {"rat": "LTE", "state": "NOCONN", "duplex": "FDD", "cell_id": "A1B2C03", "tac": "1D2E",
+                  "pci": 136, "arfcn": 67036, "band": 66, "bw": 5, "rsrp": -117, "rsrq": -15, "rssi": -82, "sinr": 0}
+    }
+  }
+}

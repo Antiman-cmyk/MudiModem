@@ -2,7 +2,7 @@
 """Confirm-or-revert end to end, in emulation: the REAL plugin (src/rpc/mudimodem, host lua5.1,
 its oui.ubus going through the image's ubus CLI), mudimodemd under the image's eco, and the REAL
 sh watchdog (src/sbin/mudimodem-revert, spawned the way production spawns it, under the router's
-busybox), on the image's ubusd with a fake GL (test/emu/fake-gl.lua) that records every
+busybox), on the image's ubusd with a fake GL (mudi-emu fakebus) that records every
 `gl-session call` — the watchdog's way back into GL's store.
 
 The drills (docs/architecture.md R3 acceptance: crash, restart, timeout, ubus loss):
@@ -12,13 +12,14 @@ The drills (docs/architecture.md R3 acceptance: crash, restart, timeout, ubus lo
   * a watchdog that never arms -> no write at all;
   * mudimodemd not running -> the in-process arm (the pre-3.0 path) still protects the write;
   * a cell lock's Revert now -> the modem unlock on the pending sub_id, then GL's store.
-Skips when the firmware rootfs or qemu is absent (tools/emu.sh check)."""
+Skips when the firmware rootfs or qemu is absent (mudi-emu check)."""
 import json, os, shutil, signal, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
-EMU = os.path.join(ROOT, "tools", "emu.sh")
-BUS_SH = os.path.join(HERE, "emu", "gl-bus.sh")
+sys.path.insert(0, HERE)
+import mudiemu  # noqa: E402  (tools/mudi-emu: the router's userland + a fake GL bus)
+EMU = mudiemu.cmd("run")
 DRIVER = os.path.join(HERE, "emu", "plugin-driver.lua")
 WINDOW = 3
 OPEN = {"band_enable": False, "network_mode": "AUTO", "supports_band": True}
@@ -32,7 +33,7 @@ SCEN = {"modem_status": {"modems": [{"bus": "cpu", "current_sim_slot": 1}]},
 
 def emu_ok():
     return shutil.which("lua5.1") is not None and \
-        subprocess.run([EMU, "check"], capture_output=True).returncode == 0
+        mudiemu.ok()
 
 
 def jsonl(path):
@@ -42,7 +43,7 @@ def jsonl(path):
         return [json.loads(x) for x in f if x.strip()]
 
 
-@unittest.skipUnless(emu_ok(), "no firmware rootfs / qemu / lua5.1 (tools/emu.sh check)")
+@unittest.skipUnless(emu_ok(), "no firmware rootfs / qemu / lua5.1 (mudi-emu check)")
 class ChangeOnEmulatedBus(unittest.TestCase):
     def setUp(self):
         d = self.d = tempfile.mkdtemp(prefix="mm-chg-")
@@ -76,16 +77,16 @@ class ChangeOnEmulatedBus(unittest.TestCase):
 
     # ---- plumbing ---------------------------------------------------------------------------
     def start_bus(self):
-        subprocess.run(["sh", BUS_SH, "start", self.bus, os.path.join(self.bus, "scen.json")], check=True)
+        mudiemu.bus("start", self.bus, os.path.join(self.bus, "scen.json"))
 
     def stop_bus(self):
-        subprocess.run(["sh", BUS_SH, "stop", self.bus])
+        mudiemu.bus("stop", self.bus)
 
     def kill_watchdogs(self):
         subprocess.run(["pkill", "-f", self.revert + " watch"], capture_output=True)
 
     def daemon(self, **extra):
-        p = subprocess.Popen([EMU, "eco", os.path.join(ROOT, "src", "sbin", "mudimodemd")],
+        p = subprocess.Popen([*EMU, "eco", os.path.join(ROOT, "src", "sbin", "mudimodemd")],
                              env=dict(self.env, **extra), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: (p.poll() is None and p.kill(), p.stdout.close(), p.stderr.close()))
         ubus = os.path.join(self.bus, "bin", "ubus")

@@ -4,17 +4,24 @@
 # Two passes over the Lua isolation tests:
 #   host  : the dev box's lua5.1 + lua-cjson (fast; its cjson LACKS empty_array, so
 #           backend-history / backend-battery-history are expected to fail here);
-#   router: the ROUTER's own /usr/bin/lua + cjson.so out of an extracted 4.10
-#           rootfs, run through qemu-user-static -L <rootfs>. This is the
-#           interpreter GL ships — OpenWrt's Lua 5.1 carries the LNUM patch
-#           (32-bit integers: string.format("%d", <ms timestamp>) THROWS) and
-#           its cjson has empty_array — so this pass catches what the host pass
-#           cannot. Set MM_ROOTFS=<dir> (see firmware/README.md + reference/4.10/
-#           re-notes.md for the unpack recipe); skipped when absent.
+#   router: the ROUTER's own /usr/bin/lua + cjson.so (and eco) from the 4.10 image, through
+#           mudi-emu (tools/mudi-emu, a submodule: `mudi-emu run lua|eco|sh`). This is the
+#           interpreter GL ships — OpenWrt's Lua 5.1 carries the LNUM patch (32-bit
+#           integers: string.format("%d", <ms timestamp>) THROWS) and its cjson has
+#           empty_array — so this pass catches what the host pass cannot. Needs the image
+#           once: tools/mudi-emu/bin/mudi-emu fetch && tools/mudi-emu/bin/mudi-emu extract;
+#           skipped when absent. MUDI_EMU=<path to a mudi-emu CLI> uses another checkout.
 # backend-speedtest.test.lua needs a live ubusd and is skipped in both passes
 # (verify.sh runs it on the box).
 cd "$(dirname "$0")/.."
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+EMU=${MUDI_EMU:-$PWD/tools/mudi-emu/bin/mudi-emu}
+export MUDI_EMU_IMAGE=${MUDI_EMU_IMAGE:-e5800-4.10.0}    # GL firmware 4.10 only
+if [ ! -x "$EMU" ]; then
+  echo "note: no mudi-emu at $EMU (git submodule update --init tools/mudi-emu) - emulation passes skip"
+  EMU=false
+fi
+ROOTFS=$("$EMU" path rootfs 2>/dev/null || true)
 export MM_PLUGIN=$PWD/src/rpc/mudimodem MM_VALIDATOR=$PWD/src/validator/mudimodem.lua MM_TMP=$T/mmtmp
 export MM_WS_MODULE=$PWD/src/ws/mudimodem.lua
 export MUDIMODEM_PENDING=$T/pending MUDIMODEM_ARMED=$T/armed MUDIMODEM_LATEST=$T/latest.json
@@ -39,12 +46,12 @@ echo "== page build (src/web -> dist/views, esbuild) =="
 run "dist/views matches a fresh build of src/web" node tools/build-web.mjs --check
 echo "== node =="
 for f in test/*.test.js; do run "$f" node --test --test-reporter=tap "$f"; done
-if [ -f "${MM_ROOTFS:-firmware/rootfs}/www/theme/base.css" ] && node -e 'require("playwright")' 2>/dev/null; then
+if [ -n "$ROOTFS" ] && [ -f "$ROOTFS/www/theme/base.css" ] && node -e 'require("playwright")' 2>/dev/null; then
   echo "== page preview (headless Chromium, GL's theme CSS; every tab x desktop/phone x light/dark) =="
   run "preview matrix (no page errors, no sideways scroll)" node tools/preview.js --matrix
   run "preview i18n audit (every rendered string translated at zh-cn)" node tools/preview.js --i18n-audit --locale zh-cn
 else
-  echo "== page preview SKIPPED: needs firmware/rootfs + playwright =="
+  echo "== page preview SKIPPED: needs the extracted image (mudi-emu extract) + playwright =="
 fi
 echo "== lua (host lua5.1) =="
 for f in test/backend-*.test.lua test/ws-seed.test.lua test/daemon-*.test.lua; do
@@ -52,36 +59,34 @@ for f in test/backend-*.test.lua test/ws-seed.test.lua test/daemon-*.test.lua; d
     *backend-history.test.lua|*backend-battery-history*) echo "XFAIL $f on host cjson (no empty_array) — see router pass"; continue;; esac
   run "$f" lua5.1 "$f"
 done
-# Default to the extracted image under firmware/rootfs (gitignored; see firmware/README.md).
-[ -z "${MM_ROOTFS:-}" ] && [ -x firmware/rootfs/usr/bin/lua ] && MM_ROOTFS=firmware/rootfs
-if [ -n "${MM_ROOTFS:-}" ] && command -v qemu-aarch64-static >/dev/null && [ -x "$MM_ROOTFS/usr/bin/lua" ]; then
-  echo "== lua (ROUTER lua via qemu, rootfs $MM_ROOTFS) =="
+if "$EMU" check >/dev/null 2>&1; then
+  echo "== lua (ROUTER lua via mudi-emu, rootfs $ROOTFS) =="
   unset LUA_PATH
   for f in test/backend-*.test.lua test/ws-seed.test.lua test/daemon-*.test.lua; do
     case "$f" in *backend-speedtest*) continue;; esac
-    run "router:$f" qemu-aarch64-static -L "$MM_ROOTFS" "$MM_ROOTFS/usr/bin/lua" "$f"
+    run "router:$f" "$EMU" run lua "$f"
   done
   # the daemon's own runtime: the image's eco (Lua 5.4)
   for f in test/daemon-*.test.lua; do
-    run "router eco:$f" qemu-aarch64-static -L "$MM_ROOTFS" "$MM_ROOTFS/usr/bin/eco" "$f"
+    run "router eco:$f" "$EMU" run eco "$f"
   done
 else
-  echo "== lua (ROUTER lua) SKIPPED: set MM_ROOTFS=<extracted 4.10 rootfs> and install qemu-user-static =="
+  echo "== lua (ROUTER lua) SKIPPED: mudi-emu check fails (no extracted image or no qemu-user-static) =="
 fi
 SH_SUITES="revert.test.sh:src/sbin/mudimodem-revert selfupdate.test.sh:src/sbin/mudimodem-selfupdate battlimit-hotplug.test.sh: manifest.test.sh: static.test.sh: installer.test.sh:"
 echo "== sh (dash + busybox ash) =="
 for shell in sh "busybox sh"; do
   for s in $SH_SUITES; do run "$shell test/${s%%:*}" $shell "test/${s%%:*}" ${s#*:}; done
 done
-if [ -z "${MM_SKIP_ROUTER_SH:-}" ] && tools/emu.sh check >/dev/null 2>&1; then
-  echo "== sh (ROUTER busybox ash + applets via qemu; MM_SKIP_ROUTER_SH=1 skips) =="
-  for s in $SH_SUITES; do run "router:test/${s%%:*}" tools/emu.sh sh "test/${s%%:*}" ${s#*:}; done
+if [ -z "${MM_SKIP_ROUTER_SH:-}" ] && "$EMU" check >/dev/null 2>&1; then
+  echo "== sh (ROUTER busybox ash + applets via mudi-emu; MM_SKIP_ROUTER_SH=1 skips) =="
+  for s in $SH_SUITES; do run "router:test/${s%%:*}" "$EMU" run sh "test/${s%%:*}" ${s#*:}; done
 else
-  echo "== sh (ROUTER busybox) SKIPPED: tools/emu.sh check fails (no rootfs or qemu) =="
+  echo "== sh (ROUTER busybox) SKIPPED: mudi-emu check fails (no extracted image or no qemu) =="
 fi
 command -v shellcheck >/dev/null && run "shellcheck" shellcheck -s sh -S warning -e SC2086,SC2034,SC1090,SC2016,SC3043 \
   src/sbin/mudimodem-revert src/sbin/mudimodem-selfupdate install.sh uninstall.sh src/lib/mudimodem-detach \
   src/sbin/glbattlimit src/hotplug/20-glbattlimit src/etc/init.d/* \
-  src/installer/mudimodem-install tools/deploy.sh tools/build.sh tools/firmware.sh tools/emu.sh \
-  test/installer.test.sh test/manifest.test.sh test/static.test.sh test/emu/gl-bus.sh test/onbox/rpc-login.sh
+  src/installer/mudimodem-install tools/deploy.sh tools/build.sh \
+  test/installer.test.sh test/manifest.test.sh test/static.test.sh test/onbox/rpc-login.sh
 exit $rc

@@ -7,7 +7,7 @@ recs() { sed -e 's/#.*$//' -e '/^[[:space:]]*$/d' manifest.txt; }
 
 # Repo files that are deliberately NOT shipped (dev-box tools). Anything else under src/ or tools/
 # must be in the manifest — a new file nobody listed would silently never reach the router.
-UNSHIPPED="tools/build.sh tools/build-web.mjs tools/deploy.sh tools/verify.sh tools/test-local.sh tools/firmware.sh tools/emu.sh tools/preview.js tools/i18n-keys.mjs"
+UNSHIPPED="tools/build.sh tools/build-web.mjs tools/deploy.sh tools/verify.sh tools/test-local.sh tools/preview.js tools/i18n-keys.mjs"
 
 seen_dest=""; seen_svc=""; n=0
 recs | {
@@ -52,6 +52,7 @@ for f in $(git ls-files --cached --others --exclude-standard src tools dist 2>/d
   case " $UNSHIPPED " in *" $f "*) continue ;; esac
   case "$f" in src/web/*) continue ;; esac   # page sources: built into dist/views (tools/build-web.mjs)
   case "$f" in *.pyc|*/__pycache__/*) continue ;; esac
+  case "$f" in tools/mudi-emu|tools/mudi-emu/*) continue ;; esac   # the mudi-emu submodule: dev box only
   grep -qE "^(file|gz|cache|default) +$f " manifest.txt || fail "$f is neither in manifest.txt nor in UNSHIPPED"
 done
 recs | grep -qE '^file +src/installer/mudimodem-install ' || fail "the installer must ship (uninstall + updates run it)"
@@ -68,7 +69,7 @@ grep -q 'location ^~ /views/gl-sdk4-ui-mudimodem' src/nginx/mudimodem.conf \
 recs | awk '$1 == "gz" { print $3 }' | while read -r d; do
   case "$d" in /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem*.common.js.gz) ;; *) fail "chunk $d is outside the aliased path" ;; esac
 done
-json_ok() {  # python3 on the dev box, the router's own jsonfilter under tools/emu.sh
+json_ok() {  # python3 on the dev box, the router's own jsonfilter under `mudi-emu run sh`
   if command -v python3 >/dev/null 2>&1; then python3 -I -c 'import json,sys; json.load(open(sys.argv[1]))' "$1" 2>/dev/null
   else jsonfilter -i "$1" -e '@' >/dev/null 2>&1; fi
 }

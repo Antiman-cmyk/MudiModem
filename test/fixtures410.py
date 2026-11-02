@@ -73,7 +73,7 @@ NETWORK_INFO_410 = {"networks": [
 
 
 
-# ---- captured from GL's OWN cellular_manager under emulation (test/emu/gl-real.sh, the fake RG650V
+# ---- captured from GL's OWN cellular_manager under emulation (`mudi-emu up`, the RG650V model
 # replying the live T-Mobile QENG / an EN-DC pair / no service): cell_info exactly as GL built it.
 # The matching `cellular.collect get_signals` rows are these rows without the *_level / strength keys.
 GL_CELL_SA = {"bus": "cpu", "slot": 1, "network_type": 5, "tac": "870100", "cell_id": "187461035", "signal": [{"ca": 0, "network_type": 5, "band": 71, "bandwidth": 15.0, "pci": 721, "earfcn": 127490, "rsrp": -99, "rsrq": -13, "rssi": -32768, "sinr": 4, "rscp": -32768, "ecio": -32768, "snr": -32768, "rsrp_level": 4, "rsrq_level": 3, "rssi_level": 0, "sinr_level": 2, "rscp_level": 0, "ecio_level": 0, "snr_level": 0, "strength": 3}], "ret": 0, "resp": "Success"}
