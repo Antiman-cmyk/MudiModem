@@ -1,0 +1,243 @@
+-- mudimodemd/collector.lua — RF + battery sampling, history files, live push. Runs inside eco.
+--
+-- Replaces src/sbin/mudimodem-collectd (Python) with the same contract, so nothing downstream
+-- changes: /tmp/mudimodem/{samples,battery}.jsonl + latest.json / battery-latest.json (schema:
+-- cellular_compat.build_sample / battery.read_battery), the eMMC backup segments, and
+-- `gl-session notify {name:"mudimodem.collect"|"mudimodem.battery", data}` pushes.
+-- test/collectd-emu.test.py runs this and the Python collector on the same emulated GL bus and
+-- requires the same calls, samples and frames.
+--
+-- What differs is only HOW: the RF tick, the battery cadence and the eMMC flush are three
+-- coroutines sleeping on eco's timers (libev: monotonic, so a wall-clock step cannot stall or
+-- burst them), and ubus is one persistent connection instead of a fork+exec per call.
+-- ⚠️ `cellular.network cell_info` runs AT+QENG/AT+QCAINFO on the shared AT channel every call,
+-- hence the 10 s default and exactly ONE call per tick.
+local cjson = require "cjson"
+local time = require "eco.time"
+local cc = require "cellular_compat"
+local jsonl = require "mudimodemd.jsonl"
+local battery = require "mudimodemd.battery"
+
+local M = {}
+
+local DAY_MS = 24 * 3600 * 1000
+
+local function envnum(k, d) return tonumber(os.getenv(k) or "") or d end
+
+function M.config()
+  local hist = os.getenv("MUDIMODEM_HIST") or "/tmp/mudimodem"
+  return {
+    bus = os.getenv("MUDIMODEM_BUS") or "cpu",
+    poll = envnum("MUDIMODEM_POLL", 10),
+    carrier_interval = envnum("MUDIMODEM_CARRIER_INTERVAL", 60),
+    batt_interval = envnum("MUDIMODEM_BATT_INTERVAL", 20),
+    flush_interval = envnum("MUDIMODEM_FLUSH_INTERVAL", 600),
+    probe_idle = envnum("MUDIMODEM_WS_PROBE_IDLE", 30),
+    probe_attached = envnum("MUDIMODEM_WS_PROBE_ATTACHED", 60),
+    ws_push = os.getenv("MUDIMODEM_NO_WS_PUSH") ~= "1",
+    hist = hist,
+    samples = hist .. "/samples.jsonl",
+    events = hist .. "/events.jsonl",
+    latest = hist .. "/latest.json",
+    battery = hist .. "/battery.jsonl",
+    battery_latest = hist .. "/battery-latest.json",
+    batt_sysfs = os.getenv("MUDIMODEM_BATT_SYSFS") or "/sys/class/power_supply",
+    battlimit_pidf = os.getenv("MUDIMODEM_BATTLIMIT_PIDF") or "/tmp/glbattlimit.pid",
+    battlimit_limf = os.getenv("MUDIMODEM_BATTLIMIT_LIMF") or "/tmp/glbattlimit.limit",
+    history_cfg = os.getenv("MUDIMODEM_HISTORY_CFG") or "/etc/mudimodem/history.json",
+    history_persist = os.getenv("MUDIMODEM_HISTORY_PERSIST") or "/etc/mudimodem/history",
+    sample_max_age = DAY_MS, sample_max_line = 9000,      -- 24 h at 10 s = 8640
+    batt_max_age = DAY_MS, batt_max_line = 5200,          -- 24 h at 20 s = 4320
+    trim_every = 60,                                       -- RF ticks (~10 min)
+    event_trim_every = 360,                                -- RF ticks (~1 h)
+    ws_name = "mudimodem.collect", ws_batt_name = "mudimodem.battery",
+    cell_fail_log_every = 300, ws_fail_log_every = 60,
+  }
+end
+
+-- Seconds of monotonic time (sub-second; /proc/uptime), for the cache/probe/log gates.
+local function mono()
+  local f = io.open("/proc/uptime", "r")
+  if f then
+    local s = f:read("*l"); f:close()
+    local n = s and tonumber(s:match("^(%S+)"))
+    if n then return n end
+  end
+  return os.time()
+end
+M.mono = mono
+
+local function now_ms() return math.floor(time.now() * 1000) end
+
+-- A sample as GL's push delivers it is what eco.ubus sends anyway (nulls dropped); only an
+-- empty signals list needs a plain table, or the cjson.empty_array marker would vanish with it.
+local function for_wire(s)
+  local sig = s.signals
+  if not (sig == cjson.empty_array or (type(sig) == "table" and #sig == 0)) then return s end
+  local o = {}
+  for k, v in pairs(s) do o[k] = v end
+  o.signals = {}
+  return o
+end
+
+function M.new(conn, cfg, log)
+  cfg = cfg or M.config()
+  log = log or function(msg) io.stderr:write("mudimodemd: ", msg, "\n"); io.stderr:flush() end
+  local self = { running = true }
+  local st = {                                             -- also the `health` reply
+    started = os.time(), rf_ticks = 0, rf_samples = 0, rf_failed = 0, rf_last_t = 0,
+    batt_samples = 0, push_failures = 0, attached = true, flushed = false, last_error = "",
+  }
+  self.state = st
+
+  local function call(obj, method, args)
+    local r = conn:call(obj, method, args or {})
+    if type(r) ~= "table" then return nil end
+    return r
+  end
+
+  -- ---- carrier identity: `cellular.network info`, re-read per CARRIER_INTERVAL / slot change
+  local carrier = { at = nil, slot = nil, info = nil }
+  local function carrier_info(slot)
+    local now = mono()
+    if carrier.info == nil or slot ~= carrier.slot or now - carrier.at >= cfg.carrier_interval then
+      carrier.info = call("cellular.network", "info") or {}
+      carrier.at, carrier.slot = now, slot
+    end
+    return carrier.info
+  end
+
+  -- ---- a FAILED cell_info read is not "no service": skip the tick, say so (rate-limited)
+  local cell_fail = { n = 0, last = nil }
+  local function cell_failure(cell)
+    cell_fail.n = cell_fail.n + 1
+    st.rf_failed = st.rf_failed + 1
+    local now = mono()
+    if cell_fail.last == nil or now - cell_fail.last >= cfg.cell_fail_log_every then
+      cell_fail.last = now
+      local detail = cell == nil and "no reply (ubus failed or timed out)"
+        or ("error reply " .. cjson.encode(cell):sub(1, 200))
+      st.last_error = "cell_info: " .. detail
+      log(string.format("cell_info read failed, tick skipped (%d so far): %s", cell_fail.n, detail))
+    end
+  end
+
+  function self.collect_sample()
+    local modem = call("cellular.modem", "status")
+    local slot = cc.active_slot(modem, cfg.bus)
+    if slot == nil then return nil end
+    local cell = call("cellular.network", "cell_info", { bus = cfg.bus, slot = slot })
+    if cc.cell_info_failed(cell) then cell_failure(cell); return nil end
+    if cell_fail.n > 0 then
+      log(string.format("cell_info recovered after %d failed read(s)", cell_fail.n))
+      cell_fail.n, cell_fail.last = 0, nil
+    end
+    return cc.build_sample(modem, cell, carrier_info(slot), now_ms(), cfg.bus, nil, cjson.empty_array)
+  end
+
+  -- ---- browser-presence gate: no push while nobody is attached (a failed probe = attached)
+  local gate = { at = nil }
+  function self.ws_attached()
+    local now = mono()
+    local every = st.attached and cfg.probe_attached or cfg.probe_idle
+    if gate.at ~= nil and now - gate.at < every then return st.attached end
+    gate.at = now
+    local r = conn:call("gl-session", "has_websocket", {})
+    st.attached = not (type(r) == "table" and r.has_ws == false)
+    return st.attached
+  end
+
+  local ws_fail = { n = 0, last = nil }
+  function self.publish(name, sample)
+    if not cfg.ws_push then return false end
+    local r, err = conn:call("gl-session", "notify", { name = name, data = for_wire(sample) })
+    if r == nil then
+      ws_fail.n = ws_fail.n + 1
+      st.push_failures = st.push_failures + 1
+      local now = mono()
+      if ws_fail.n == 1 or ws_fail.last == nil or now - ws_fail.last >= cfg.ws_fail_log_every then
+        ws_fail.last = now
+        st.last_error = "notify: " .. tostring(err)
+        log(string.format("gl-session notify failed (%d so far): %s", ws_fail.n, tostring(err)))
+      end
+      return false
+    end
+    if ws_fail.n > 0 then
+      log(string.format("gl-session notify recovered after %d failure(s)", ws_fail.n))
+      ws_fail.n = 0
+    end
+    return true
+  end
+
+  local function guarded(what, fn)
+    local ok, err = pcall(fn)                              -- 5.4: yields across pcall are fine
+    if not ok then st.last_error = what .. ": " .. tostring(err); log(what .. ": " .. tostring(err)) end
+  end
+
+  local sleep = time.sleep                                 -- stop() ends the loop (eco.unloop)
+
+  function self.rf_tick()
+    local s = self.collect_sample()
+    st.rf_ticks = st.rf_ticks + 1
+    if s ~= nil then
+      local line = cjson.encode(s)
+      jsonl.append_line(cfg.samples, line)
+      jsonl.write_atomic(cfg.latest, line)
+      st.rf_samples, st.rf_last_t = st.rf_samples + 1, s.t
+      if self.ws_attached() then self.publish(cfg.ws_name, s) end
+    end
+    if st.rf_ticks % cfg.trim_every == 0 then
+      jsonl.trim(cfg.samples, cfg.sample_max_age, cfg.sample_max_line)
+      jsonl.trim(cfg.battery, cfg.batt_max_age, cfg.batt_max_line)
+    end
+    if st.rf_ticks % cfg.event_trim_every == 0 then
+      jsonl.trim(cfg.events, cfg.sample_max_age, 1000, nil, true)   -- others append to it
+    end
+  end
+
+  function self.battery_tick()
+    local b = battery.read_battery(cfg.batt_sysfs, now_ms(), cfg.battlimit_pidf, cfg.battlimit_limf)
+    if b == nil then return end
+    local line = cjson.encode(b)
+    jsonl.append_line(cfg.battery, line)
+    jsonl.write_atomic(cfg.battery_latest, line)
+    st.batt_samples = st.batt_samples + 1
+    if self.ws_attached() then self.publish(cfg.ws_batt_name, b) end
+  end
+
+  local streams = {
+    { "samples", cfg.sample_max_age, cfg.samples },
+    { "battery", cfg.batt_max_age, cfg.battery },
+  }
+  local cursors = { samples = 0, battery = 0 }
+  function self.flush()
+    st.flushed = jsonl.maybe_flush_persist(streams, cfg.history_persist, cursors, cfg.history_cfg, now_ms())
+  end
+
+  function self.start()
+    os.execute("mkdir -p '" .. cfg.hist .. "'")
+    jsonl.now_ms = now_ms
+    jsonl.sleep = time.sleep
+    if jsonl.read_history_config(cfg.history_cfg).enabled then
+      guarded("restore", function()
+        local c = jsonl.restore_from_persist(streams, cfg.history_persist, now_ms())
+        cursors.samples, cursors.battery = c.samples, c.battery
+      end)
+    end
+    -- battery first (no ubus), then RF, as the Python loop did; each on its own cadence
+    eco.run(function() while self.running do guarded("battery", self.battery_tick); sleep(cfg.batt_interval) end end)
+    eco.run(function() while self.running do guarded("collect", self.rf_tick); sleep(cfg.poll) end end)
+    eco.run(function() while self.running do guarded("flush", self.flush); sleep(cfg.flush_interval) end end)
+  end
+
+  -- Stop the loops; a clean stop flushes once more so up to FLUSH_INTERVAL of history is not
+  -- left only in RAM.
+  function self.stop()
+    self.running = false
+    if jsonl.read_history_config(cfg.history_cfg).enabled then guarded("final flush", self.flush) end
+  end
+
+  return self
+end
+
+return M

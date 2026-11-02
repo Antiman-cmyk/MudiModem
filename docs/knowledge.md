@@ -176,8 +176,25 @@ comma-separated reply. Nothing auto-runs; `{{params}}` must be filled; set/nv ne
   tree; only under `/etc /usr /lib /bin /sbin /data /var`). **`/etc/sysupgrade.conf` is never
   read; `/www` is never restored; opkg packages are gone** (python3 included). procd enable links
   (`/etc/rc.d/S<START>name`, `K<STOP>name`) must be listed or services come back disabled.
+- **`oui.ubus.call(obj, m, params, timeout_ms)` from the nginx plugin is non-blocking**: a cosocket to
+  `/var/run/ngx-ubus-proxy.sock`, served by `gl-ngx-session` (`handle_ubus_proxy`), which relays
+  with eco's global connection — so the bound is min(timeout_ms, default 30 s; eco's 30 s call
+  timeout). A plugin → daemon call must answer within that; longer work is a job (start, then poll).
 - Everything the image ships (lua 5.1/5.4, **lua-eco**, libubus-lua, luaposix, luasocket,
   lsqlite3, cjson, curl, jsonfilter, sqlite3) survives upgrades.
+- **lua-eco 3.19.1 as we use it** (probed under qemu on the image, `tools/emu.sh eco`):
+  `eco.ubus.connect(sock)` → `conn:call(obj, m, args)` yields and returns `(table)` or
+  `(nil, "not found" | "timeout" | "Unknown error")`; the default call timeout is **30 s**,
+  `conn:settimeout(s)` sets it per connection. A dead connection (ubusd restarted) also answers
+  "not found", for good, unless `conn:auto_reconnect()` was called (it re-dials and re-adds objects). Lua → blobmsg **drops `cjson.null` values** and
+  sends an empty table as `{}`; `conn:add` handlers run in their own coroutine and receive the
+  WHOLE request with the sender's types — the method policy is not enforced (`{id=20.0}` arrives as
+  a float, `{id="20"}` as a string), so every handler validates its own args. The loop runs while
+  anything is registered — end with `eco.unloop()`. `eco.time.now()` is wall-clock (float);
+  `eco.sys.uptime()` is whole seconds, so sub-second monotonic time comes from `/proc/uptime`.
+  `eco.sys.kill(pid, 0)` → `true` / `false, "No such process"`. `require "eco.ubus"` also opens a
+  connection to the default socket at load time (harmless when absent). cjson in eco is
+  2.1.0.10 (OpenResty: has `empty_array`; escapes `/` as `\/`).
 - Our web payload lives in `/usr/share/mudimodem/www`, served by the `gl-conf.d` alias
   (`/views/gl-sdk4-ui-mudimodem*`, `/mudimodem/`).
 - Factory reset wipes our files; it does NOT clear a modem NV band/cell lock — the panic restore

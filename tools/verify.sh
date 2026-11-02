@@ -189,20 +189,30 @@ ssh -o BatchMode=yes "root@$HOST" '
 # 7. History collector: service running + get_history parses telemetry.
 if [ -f src/sbin/mudimodem-collectd ]; then
   echo "7. history collector running + get_history"
-  ssh -o BatchMode=yes "root@$HOST" 'test -x /usr/sbin/mudimodem-collectd' \
+  ssh -o BatchMode=yes "root@$HOST" 'test -x /usr/sbin/mudimodem-collectd && test -x /usr/sbin/mudimodemd' \
     || fail "collector not installed (run ./tools/deploy.sh)"
-  ssh -o BatchMode=yes "root@$HOST" 'pgrep -f mudimodem-collectd >/dev/null' \
+  ssh -o BatchMode=yes "root@$HOST" 'pgrep -f "mudimodemd|mudimodem-collectd" >/dev/null' \
     || fail "collector process not running (/etc/init.d/mudimodem-collectd start)"
+  # Engine: mudimodemd on eco unless /etc/mudimodem/collector pins python (or there is no eco).
+  ENGINE=$(ssh -o BatchMode=yes "root@$HOST" '[ "$(cat /etc/mudimodem/collector 2>/dev/null)" != python ] && [ -x /usr/bin/eco ] && echo eco || echo python')
+  if [ "$ENGINE" = eco ]; then
+    ssh -o BatchMode=yes "root@$HOST" 'for i in 1 2 3 4 5 6; do ubus call mudimodem health 2>/dev/null | grep -q "\"engine\": \"eco\"" && exit 0; sleep 2; done; exit 1' \
+      || fail "mudimodemd is not answering ubus call mudimodem health (logread -e mudimodemd)"
+    echo "   engine: mudimodemd (eco)"
+  else
+    echo "   engine: python collector"
+  fi
   # It should be writing samples within a couple of poll intervals.
   ssh -o BatchMode=yes "root@$HOST" 'for i in 1 2 3 4 5 6; do [ -s /tmp/mudimodem/samples.jsonl ] && exit 0; sleep 5; done; exit 1' \
     || fail "no samples.jsonl written after ~30s"
   echo "   collector is sampling ($(ssh -o BatchMode=yes "root@$HOST" 'wc -l < /tmp/mudimodem/samples.jsonl' | tr -d " ") lines)"
   # AT budget: cell_info executes QENG/QCAINFO per call, so the cadence must be
   # the 4.10 default (10 s => <=6 reads/min), never the 1.x 4 s.
-  ssh -o BatchMode=yes "root@$HOST" 'grep -q "MUDIMODEM_POLL\", \"10\"" /usr/sbin/mudimodem-collectd && ! pgrep -f "MUDIMODEM_POLL=[0-9]" >/dev/null' \
+  ssh -o BatchMode=yes "root@$HOST" 'grep -q "MUDIMODEM_POLL\", \"10\"" /usr/sbin/mudimodem-collectd && grep -q "envnum(\"MUDIMODEM_POLL\", 10)" /usr/lib/mudimodem/mudimodemd/collector.lua && ! pgrep -f "MUDIMODEM_POLL=[0-9]" >/dev/null' \
     || fail "collector cadence is not the 10 s default (AT budget)"
-  # The newest sample must be 4.10-normalized: signals[] + PCC aliases.
-  ssh -o BatchMode=yes "root@$HOST" 'python3 -c "import json;d=json.load(open(\"/tmp/mudimodem/latest.json\"));assert isinstance(d.get(\"signals\"),list);assert \"rat\" in d and \"cell_id\" in d and \"rsrp\" in d"' \
+  # The newest sample must be 4.10-normalized: signals[] + PCC aliases (checked with the box's
+  # own lua + cjson: no python3 needed). A JSON null decodes to cjson.null, so `~= nil` = key present.
+  ssh -o BatchMode=yes "root@$HOST" 'lua -e "local c=require\"cjson\"; local f=assert(io.open(\"/tmp/mudimodem/latest.json\")); local d=c.decode(f:read(\"*a\")); assert(type(d.signals)==\"table\" and d.rat~=nil and d.cell_id~=nil and d.rsrp~=nil)"' \
     || fail "latest.json is not the 4.10 normalized sample (signals[] / rat / cell_id)"
   # get_history parses the jsonl (fixtures under a temp HIST dir; ngx-stubbed).
   ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-hist.test.lua' < test/backend-history.test.lua
@@ -475,7 +485,7 @@ fi
 
 echo "14. collectd latest.json + battery-latest.json are live (the ws seeds)"
 ssh -o BatchMode=yes "root@$HOST" \
-  '[ -f /tmp/mudimodem/latest.json ] && python3 -c "import json; json.load(open(\"/tmp/mudimodem/latest.json\")); json.load(open(\"/tmp/mudimodem/battery-latest.json\"))"' \
+  '[ -f /tmp/mudimodem/latest.json ] && lua -e "local c=require\"cjson\"; for _,p in ipairs({\"/tmp/mudimodem/latest.json\",\"/tmp/mudimodem/battery-latest.json\"}) do local f=assert(io.open(p)); c.decode(f:read(\"*a\")); f:close() end"' \
   || fail "latest.json / battery-latest.json missing or invalid (is the collector on the new build?)"
 ssh -o BatchMode=yes "root@$HOST" '[ ! -S /tmp/mudimodem/collectd.sock ]' \
   || fail "stale collectd.sock present (2.x has no socket consumer; old collector still running?)"

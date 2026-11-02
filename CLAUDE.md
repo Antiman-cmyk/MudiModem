@@ -58,10 +58,12 @@ src/web/tabs/          lazy tab chunks (tracking, console, speedtest, battery)
 src/web/kit/           shared: rpc, i18n, compose, chunks, fmt     src/web/locales/  zh-cn table
 dist/views/            BUILT chunks (committed, shipped)           src/menu/*.json   menu entries
 src/rpc/mudimodem       nginx Lua plugin (object "mudimodem"); src/validator/ its arg validator
-src/sbin/ src/lib/      daemons + helpers (collector, revert watchdog, speedtest, battery limit)
+src/sbin/ src/lib/      daemons + helpers: mudimodemd (eco; src/lib/mudimodemd/), revert watchdog,
+                        speedtest, battery limit; the Python collector is the fallback engine
 src/ws/mudimodem.lua    /ws seed module; src/nginx/ the gl-conf.d alias
 tools/                  build, deploy (ssh), verify (live box), firmware fetch/extract, AT/lib/speedtest tools
-test/                   every suite; tools/test-local.sh runs them all (host + router userland via qemu)
+test/                   every suite; tools/test-local.sh runs them all (host + router userland via qemu);
+                        test/emu/gl-bus.sh = the image's ubusd + a fake GL stack, for daemon tests
 reference/4.10/         GL files copied from the image + RE notes/tools
 docs/                   architecture.md · cellular-api-4.10.md · knowledge.md · audit · design/ (history)
 ```

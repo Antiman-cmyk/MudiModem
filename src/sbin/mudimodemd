@@ -1,0 +1,64 @@
+#!/usr/bin/eco
+-- mudimodemd — MudiModem's daemon on GL 4.10's own lua-eco (/usr/bin/eco, Lua 5.4).
+--
+-- Stage ① of the R3 plan (docs/architecture.md §6): the collector — RF + battery sampling, the
+-- history files, the eMMC backup and the live pushes — with the contract of the Python
+-- collector it replaces (src/lib/mudimodemd/collector.lua). Later stages move jobs, the AT
+-- queue and the change transaction here, behind the ubus object `mudimodem` registered below
+-- (server-side only: oui's /rpc dispatches to Lua plugins and glc, never to ubus).
+--
+--   ubus call mudimodem health      counters, last error, whether a browser is attached
+--
+-- Managed by procd (/etc/init.d/mudimodem-collectd), respawned on exit. Env overrides for tests:
+-- MUDIMODEM_LIB (module dir), MUDIMODEM_UBUS_SOCK, MUDIMODEM_UBUS_TIMEOUT (s, default 8), and the
+-- collector's MUDIMODEM_* knobs.
+local LIB = os.getenv("MUDIMODEM_LIB") or "/usr/lib/mudimodem"
+package.path = LIB .. "/?.lua;" .. package.path
+
+local cjson = require "cjson"
+local ubus = require "eco.ubus"
+local sys = require "eco.sys"
+local cc = require "cellular_compat"
+cc.init(cjson.null)
+local collector = require "mudimodemd.collector"
+
+local function log(msg) io.stderr:write("mudimodemd: ", msg, "\n"); io.stderr:flush() end
+
+local function version()
+  local f = io.open("/etc/mudimodem/version.json", "r")
+  if not f then return "" end
+  local ok, v = pcall(cjson.decode, f:read("*a") or ""); f:close()
+  return ok and type(v) == "table" and type(v.version) == "string" and v.version or ""
+end
+
+local conn, err = ubus.connect(os.getenv("MUDIMODEM_UBUS_SOCK"))
+if not conn then log("ubus connect failed: " .. tostring(err)); os.exit(1) end
+-- per call, as the Python collector's subprocess timeout (a wedged modem stack must not stall a tick)
+conn:settimeout(tonumber(os.getenv("MUDIMODEM_UBUS_TIMEOUT") or "") or 8)
+-- ubusd restarting would otherwise leave us alive and deaf: every call answers "not found" for
+-- good and our object is gone. auto_reconnect re-dials and re-registers it (test/collectd-emu).
+conn:auto_reconnect()
+
+local c = collector.new(conn, collector.config(), log)
+
+local ok, aerr = conn:add("mudimodem", {
+  health = { function(req)
+    local h = { engine = "eco", version = version(), pid = sys.getpid(), now = os.time() }
+    for k, v in pairs(c.state) do h[k] = v end
+    conn:reply(req, h)
+  end, {} },
+})
+if not ok then
+  -- another instance owns the object: two samplers would double the AT-backed cell_info
+  log("cannot register ubus object mudimodem (" .. tostring(aerr) .. "): already running?")
+  os.exit(1)
+end
+
+local function stop()
+  c.stop()
+  eco.unloop()
+end
+sys.signal(sys.SIGTERM, stop)
+sys.signal(sys.SIGINT, stop)
+
+c.start()

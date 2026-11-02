@@ -6,7 +6,7 @@
 | **R0 打基础** | ✅ 完成（2026-11-02） | `manifest.txt` + 唯一的安装器 `src/installer/mudimodem-install`（install / uninstall / deploy / 自更新都走它，keep.d 在安装时生成）；在假根目录里端到端跑安装/升级/卸载的模拟测试（dash、busybox、路由器自己的 ash）；清单 lint；`tools/firmware.sh`（固件拉取+解包，sha256 固定）；`tools/emu.sh`（qemu 运行镜像的 lua / eco / busybox / 任意程序）；主题变量 lint，并修掉了 16 个未定义变量；文档重组，去掉 superpowers 流程痕迹，CLAUDE.md 精简 |
 | **R1 前端结构** | ✅ 完成 | esbuild 构建（`src/web` → 提交的 `dist/views`，`--check` 防漂移）；主 chunk 拆成外壳 + 8 个模块，用 `kit/compose.js` 合成同一个组件，拆分前后 104 个方法逐字节一致；`kit/rpc.js` 是唯一碰 `/rpc` 的代码；全页简体中文（`kit/i18n.js` 跟随 GL 语言，`locales/zh-cn.js`），浏览器审计确保零漏翻；审计里的界面问题（确认、流量提示、控制台、手机布局、指标说明）已修。决定：频段 / 锁小区 / 配置仍在主 chunk 里（外壳本身需要它们的数据），按源码模块拆分而不是运行时懒加载 |
 | R2 插件模块化 + 事务 | 🟡 事务部分已完成 | 待确认文件记录 `DEADLINE`/`APPLIED`；新增 `change_status`；`confirm` 返回 `was_pending`；页面按路由器的截止时间倒计时，加载时恢复，横幅在所有标签页显示，Keep/Revert 如实报告结果。插件拆分模块还没做：R3 会把插件变成薄转发，现在拆的收益有限 |
-| R3 守护进程 | 待做 | 模拟环境已验证可行（§6.1） |
+| R3 守护进程 | 🟡 ① 采集器已完成 | `mudimodemd`（镜像自带的 eco）接管了采集器：射频 + 电池采样、历史文件、eMMC 备份和恢复、推送、浏览器在线检测，契约不变（文件格式、`/ws` 名字和结构都一样）。另外注册了 ubus 对象 `mudimodem`（目前只有 `health`）。`/etc/init.d/mudimodem-collectd` 默认用 eco，Python 采集器保留为回退（没有 eco 时）和逃生开关（`/etc/mudimodem/collector` 写 `python`）。影子比对在模拟环境里做：两套实现跑同一个假 GL 总线，样本、电池记录、推送、备份分段和 ubus 调用顺序都要一致（`test/collectd-emu.test.py`）；文件和电池辅助函数在宿主 Lua、路由器 Lua、eco 三个运行时下和 Python 逐字节一致（`test/jsonl-parity.test.py`）。上机只剩 🔴 确认（`tools/verify.sh` 第 7 步）。② 任务 ③ AT 队列 ④ 变更事务 ⑤ 删除 Python 待做 |
 | R4 新功能 | 待做 | |
 
 姊妹篇：`docs/audit-2026-11-02.md` 逐条列出了具体问题。这一篇回答的是另一个问题：**这些问题为什么会
@@ -241,7 +241,7 @@ idle ──apply/lock──▶ prepared ──写入成功──▶ applied(dead
 | 路由器 Lua（插件） | `tools/emu.sh lua`：镜像的 Lua 5.1（LNUM）+ GL 的 cjson | ✅ test-local 的 router 轮 |
 | 路由器 shell 脚本 | `tools/emu.sh sh`：镜像的 busybox ash，PATH 里只放镜像自己的 applet | ✅ 所有 sh 测试都在这里跑 |
 | 安装器 | 在假根目录（`MUDIMODEM_ROOT`）里跑完整的 install / update / uninstall | ✅ `test/installer.test.sh` |
-| **GL 的 ubus 服务** | 在 qemu 里跑镜像的 `ubusd -s <sock>`，用 eco 写假的 `cellular.*` / `modem.CPU.AT` / `gl-session` 对象（按契约文档的结构返回），被测代码通过真正的 ubus 协议去调用它们 | ✅ 可行性已验证：eco 注册的 `cellular.modem status` 被镜像的 `ubus` 命令行正确调用并返回。R3 的集成测试就建在这上面 |
+| **GL 的 ubus 服务** | `test/emu/gl-bus.sh start <dir> <场景.json>`：在 qemu 里跑镜像的 `ubusd -s <sock>`，加上 `test/emu/fake-gl.lua`（eco 写的假 `cellular.*` / `modem.CPU.AT` / `gl-session`，按契约文档的结构返回，支持失败、卡住、换小区的序列），把每次调用和推送记到 jsonl；被测代码通过真正的 ubus 协议调用 | ✅ 采集器的两套实现都在上面跑端到端测试（`test/collectd-emu.test.py`）。顺带用它确认了一个线上事实：推送到浏览器的帧没有 null 键，空数组变成 `{}`（GL 的 gl-session 就是这么转发的） |
 | **页面渲染** | `tools/preview.js`：无头 Chromium + 镜像里 GL 的主题 CSS + Vue 2.6.12 运行时 + 假的 `/ws`、`/rpc` 数据，按 GL SPA 的方式 eval 我们的 chunk；`--matrix` 覆盖所有标签页 × 桌面/手机 × 亮/暗，页面报错或出现横向滚动即失败 | ✅ 接入 test-local；已经抓出并修掉控制台在手机上溢出、存储被禁用时报错这两个问题 |
 | nginx + oui 插件 | 镜像的 nginx 在 qemu 下用临时配置运行（2026-10-28 已用来检查 alias） | 可用；如果需要端到端测 `/rpc`，再在它上面搭 |
 

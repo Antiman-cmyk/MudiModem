@@ -7,7 +7,8 @@
 -- scenario.json (every key optional):
 --   modem_status / modem_info / network_info / sim_info   replies of the no-arg calls
 --   cell_info: [payload, ...]        cycled one per call (a handover is the next payload);
---                                    {"fail": true} answers with UBUS_STATUS_UNKNOWN_ERROR
+--                                    {"fail": true} answers with UBUS_STATUS_UNKNOWN_ERROR,
+--                                    {"hang": s} answers only after s seconds (a wedged modem)
 --   collect_signals: {...}           cellular.collect get_signals reply
 --   has_ws: true|false               gl-session has_websocket
 --   at: {"AT+CSQ": "\r\n+CSQ: 20,99\r\n\r\nOK\r\n", ...}   modem.CPU.AT get_result_AT by cmd
@@ -49,6 +50,7 @@ conn:add("cellular.network", {
     cell_i = cell_i % #list + 1
     local p = list[cell_i]
     if p.fail then return ubus.STATUS_UNKNOWN_ERROR end
+    if p.hang then time.sleep(p.hang); return ubus.STATUS_UNKNOWN_ERROR end
     conn:reply(req, p)
   end, { bus = ubus.STRING, slot = ubus.INT32 } },
 })

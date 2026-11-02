@@ -1,8 +1,8 @@
 # Changelog
 
 ## Unreleased (toward 3.0)
-Groundwork from the 3.0 refactor plan (`docs/architecture.md`: R0, and the change-transaction
-part of R2), plus the fixes it surfaced.
+Groundwork from the 3.0 refactor plan (`docs/architecture.md`: R0, R1, the change-transaction
+part of R2 and the first step of R3), plus the fixes it surfaced.
 - **One manifest, one installer.** `manifest.txt` lists what ships where. `install.sh`,
   `uninstall.sh`, `tools/deploy.sh` and the self-updater all run `src/installer/mudimodem-install`.
   install.sh downloads everything before touching the router. The firmware-upgrade keep list
@@ -20,6 +20,11 @@ part of R2), plus the fixes it surfaced.
   theme does not define, so they rendered without colour or background. They now use GL's own
   tokens, and a test enforces this. "Good" signal is now `--secondary`, as on GL's own pages;
   before, it was the same grey as "no data" in the dark theme.
+- **The collector runs on GL's own Lua (eco), not Python.** `mudimodemd` writes the same history
+  files and pushes as before, so live data works right after a firmware upgrade, without waiting
+  for python3 to be reinstalled, and nothing is forked per sample. The Python collector is still
+  installed as the fallback; writing `python` to `/etc/mudimodem/collector` selects it.
+  `ubus call mudimodem health` shows the collector's counters and last error.
 - **Chinese:** the whole Modem page is available in Simplified Chinese and follows GL's language
   setting (switching GL's language switches the page). Technical terms (RSRP, n71, AT commands)
   stay as they are; the community AT library stays English.

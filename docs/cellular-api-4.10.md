@@ -40,8 +40,8 @@ Rules that follow from the merge code:
 ### 1.1 MudiModem's own sockets — the whole live path, no polling anywhere
 | name | seed (`/usr/share/gl-ngx/websocket/mudimodem.lua`) | pushed by | consumer |
 |---|---|---|---|
-| `mudimodem.collect` | `collect()` = `/tmp/mudimodem/latest.json` | collectd, every RF sample (10 s) | status strip, Tracking (+ console labels via the parent) |
-| `mudimodem.battery` | `battery()` = `/tmp/mudimodem/battery-latest.json` | collectd, every battery sample (20 s) | Battery tab |
+| `mudimodem.collect` | `collect()` = `/tmp/mudimodem/latest.json` | the collector (`mudimodemd`), every RF sample (10 s) | status strip, Tracking (+ console labels via the parent) |
+| `mudimodem.battery` | `battery()` = `/tmp/mudimodem/battery-latest.json` | the collector, every battery sample (20 s) | Battery tab |
 | `mudimodem.event` | `event()` = `{}` (history comes over RPC) | backend `append_event` (Keep/Revert/lock) and `mudimodem-revert` (auto-revert) | Tracking timeline |
 
 Pushes are `ubus call gl-session notify '{"name":…,"data":…}'` — the bus `cellular_manager`
@@ -237,6 +237,9 @@ Settled from the image (second pass, 2026-09-02):
    in `libcm_modem.so`; the code ignores extras either way.
 5. How long `scan_cell_tower` really takes — it must finish inside the 300 s glc timeout (§5).
 6. The nginx worker count on a running box (`ps | grep "nginx: worker"`) — the image says 1.
+7. `mudimodemd` on a real box: `ubus call mudimodem health` answers `engine: eco` and `rf_samples`
+   grows by ~6/min (`tools/verify.sh` step 7, read-only). Everything it calls and writes is
+   covered in emulation on the image's own eco/ubusd; only the live process is runtime.
 
 Closed by binary analysis (was "needs `ubus -v list`"): **band config has no dotted ubus
 object to call directly** — `get/set_band_config` are in-process C functions reached through
