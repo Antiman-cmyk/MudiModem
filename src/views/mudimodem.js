@@ -1213,6 +1213,12 @@ module.exports = {
     // The deadline passed: ask the box what the watchdog did instead of assuming it reverted.
     awaitWatchdog(tries) {
       var self = this;
+      if (typeof window === "undefined" || !window.$axios) {          // no transport: cannot ask
+        var k0 = this.pending && this.pending.kind;
+        this.clearCountdown();
+        this.pending = { kind: k0, done: true, unknown: true };
+        return;
+      }
       this.rpcSilent("change_status", {}, 8000).then(function (res) {
         var p = self.pending;
         if (!p || p.done || self.pollStopped) return;
@@ -1237,6 +1243,7 @@ module.exports = {
     // `tries` > 0 keeps asking while the box is unreachable (the apply's redial drops the link).
     restoreChange(tries) {
       var self = this;
+      if (typeof window === "undefined" || !window.$axios) return;   // no transport: nothing to ask
       this.rpcSilent("change_status", {}, 8000).then(function (res) {
         if (self.pollStopped) return;
         if (!res) {
