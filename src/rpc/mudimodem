@@ -1301,7 +1301,7 @@ function M.at_result(args)
 end
 
 -- ======================= Phase: AT library sync (check/refresh) ==============
--- mudimodem-lib (python3 + a GitHub fetch) runs as a mudimodemd job; its JSON comes back
+-- The library check/refresh (a GitHub fetch) runs as a mudimodemd job (tasks.lua); its answer comes back
 -- verbatim: check -> {local_revision, remote_revision, update_available, checked, error?},
 -- refresh -> {ok, revision, count, error?}. Either may come back {pending, id} (job_result).
 function M.library_status(args)

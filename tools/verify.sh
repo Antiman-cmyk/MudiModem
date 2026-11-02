@@ -272,8 +272,8 @@ ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/mudimodem/www/views/gl-sdk
   || fail "console chunk .gz missing"
 ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/mudimodem/www/mudimodem/at-library.json.gz' \
   || fail "at-library .gz missing"
-ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/lib/mudimodem/mudimodem-at.py' \
-  || fail "AT tool missing"
+ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/lib/mudimodem/mudimodemd/atport.lua' \
+  || fail "the direct AT port module is missing"
 
 echo "8a. library gz parses on-device and is served via gzip_static"
 ssh -o BatchMode=yes "root@$HOST" 'gzip -dc /usr/share/mudimodem/www/mudimodem/at-library.json.gz > /tmp/mm-lib.json' \
@@ -316,23 +316,23 @@ echo "8d1. LIVE: the same read-only AT through mudimodemd's queue (what the cons
 ssh -o BatchMode=yes "root@$HOST" \
   'id=$(ubus call mudimodem at_start "{\"cmd\":\"AT\",\"timeout\":5}" | jsonfilter -e "@.id") && [ -n "$id" ] && ubus -t 30 call mudimodem at_wait "{\"id\":$id,\"wait\":15}" | jsonfilter -e "@.steps[0].status" | grep -qx ok' \
   || fail "live AT through mudimodemd did not come back ok (logread -e mudimodemd)"
-echo "8d2. LIVE: one read-only AT through the direct-port fallback tool (per-step envelope)"
+echo "8d2. LIVE: one read-only AT through the direct-port fallback (mudimodemd/atport.lua under eco)"
+ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-atport.lua' < test/emu/atport-driver.lua
 ssh -o BatchMode=yes "root@$HOST" \
-  'python3 /usr/lib/mudimodem/mudimodem-at.py --envelope --timeout 6 "AT" | head -1 | grep -qE "^MM-AT:ok:[0-9]+:1/1$"' \
-  || fail "live AT through /dev/at_mdm0 did not return a per-step MM-AT:ok frame"
+  'eco /tmp/mm-atport.lua /usr/lib/mudimodem /dev/at_mdm0 /tmp/mudimodem/at.inflight 6 AT | jsonfilter -e "@.steps[0].status" | grep -qx ok; rc=$?; rm -f /tmp/mm-atport.lua; exit $rc' \
+  || fail "live AT through /dev/at_mdm0 did not come back ok"
 
 echo "8e. GL's AT server (modem_AT) alive and untouched after our AT call"
 ssh -o BatchMode=yes "root@$HOST" \
   'pids=$(pidof modem_AT); [ -n "$pids" ] || exit 1; for p in $pids; do s=$(cut -d" " -f3 "/proc/$p/stat"); [ "$s" = "T" ] && exit 1; done; exit 0' \
   || fail "modem_AT missing or left stopped (our tool must never signal GL processes)"
 
-echo "8f. library check/refresh tool installed + backend methods present"
-ssh -o BatchMode=yes "root@$HOST" 'test -x /usr/lib/mudimodem/mudimodem-lib' \
-  || fail "mudimodem-lib not installed (run ./tools/deploy.sh)"
-# `check` must always return valid JSON, even when the remote repo/dist is absent
-# (fail-silent -> checked:false). Tolerant: we only assert it emits parseable JSON.
-ssh -o BatchMode=yes "root@$HOST" 'python3 /usr/lib/mudimodem/mudimodem-lib check | python3 -c "import json,sys;d=json.load(sys.stdin);assert \"local_revision\" in d and \"checked\" in d"' \
-  || fail "mudimodem-lib check did not emit a valid status envelope"
+echo "8f. library check (a mudimodemd job) + backend methods present"
+# `check` always answers, even when the remote repo is unreachable (fail-silent -> checked:false):
+# only that it names the local revision is asserted.
+ssh -o BatchMode=yes "root@$HOST" \
+  'id=$(ubus call mudimodem job_start "{\"kind\":\"lib_check\",\"args\":{}}" | jsonfilter -e "@.id") && [ -n "$id" ] && ubus -t 30 call mudimodem job_wait "{\"id\":$id,\"wait\":20}" | jsonfilter -e "@.local_revision" | grep -q .' \
+  || fail "the library check job did not answer with a local revision"
 # Backend exposes both methods (dofile under the ngx stub is overkill here; grep the source is enough).
 ssh -o BatchMode=yes "root@$HOST" 'grep -q "function M.library_status" /usr/lib/oui-httpd/rpc/mudimodem && grep -q "function M.refresh_library" /usr/lib/oui-httpd/rpc/mudimodem' \
   || fail "backend missing library_status/refresh_library"

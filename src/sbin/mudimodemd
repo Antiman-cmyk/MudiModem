@@ -61,7 +61,7 @@ local c = os.getenv("MUDIMODEMD_COLLECTOR") ~= "0" and collector.new(conn, colle
 local atconn = assert(ubus.connect(os.getenv("MUDIMODEM_UBUS_SOCK")))
 atconn:auto_reconnect()
 local q = atq.new(conn, atconn, { bus = os.getenv("MUDIMODEM_BUS") or "cpu", log = log,
-                                  tool = os.getenv("MUDIMODEM_AT_TOOL"), python = os.getenv("MUDIMODEM_PYTHON") })
+                                  port = os.getenv("MUDIMODEM_AT_PORT"), state = os.getenv("MUDIMODEM_AT_STATE") })
 
 -- Jobs: the slow I/O the plugin used to do inline (tasks.lua). A scan and a library refresh
 -- never run twice at once; a second start joins the running one.
@@ -69,8 +69,6 @@ local J = jobs.new({ log = log })
 local tcfg = {
   bus = os.getenv("MUDIMODEM_BUS") or "cpu",
   curl = os.getenv("MUDIMODEM_CURL") or "curl",
-  python = os.getenv("MUDIMODEM_PYTHON") or "/usr/bin/python3",
-  lib_tool = os.getenv("MUDIMODEM_LIB_TOOL") or "/usr/lib/mudimodem/mudimodem-lib",
 }
 local event = tasks.event_writer(conn, (os.getenv("MUDIMODEM_HIST") or "/tmp/mudimodem") .. "/events.jsonl")
 J.register("version_fetch", function(a) return tasks.version_fetch(a, tcfg) end)

@@ -21,8 +21,8 @@ code src/installer/mudimodem-install install.sh tools/deploy.sh | grep -q 'opkg'
 code src/installer/mudimodem-install install.sh tools/deploy.sh | grep -q '>>[[:space:]]*.*sysupgrade.conf' \
   && fail "never register files in /etc/sysupgrade.conf (abfota_update never reads it)"
 
-# The AT tool must never touch gl_modem (no such daemon on 4.10; SIGSTOP-ing it was a 4.8 hack).
-if grep 'gl_modem' tools/mudimodem-at.py | grep -v poller | grep -q .; then fail "AT tool must not touch gl_modem"; fi
+# The direct AT port never signals a GL process (1.x SIGSTOPped the 4.8 poller; 4.10 has none).
+if grep -nE 'kill|SIGSTOP|gl_modem' src/lib/mudimodemd/atport.lua | grep -q .; then fail "the direct AT port must not signal GL processes"; fi
 # Watchdog boot hook: restores a pending change after a reboot, in the background.
 grep -q 'boot-check' src/etc/init.d/mudimodem-revert || fail "boot hook must run mudimodem-revert boot-check"
 grep -qE 'mudimodem-revert boot-check.*&[[:space:]]*$' src/etc/init.d/mudimodem-revert || fail "boot-check must run in the background"

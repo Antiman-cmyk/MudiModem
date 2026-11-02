@@ -600,16 +600,17 @@ read this project ever made was correct.
   **`modem_AT` too** (they're one stack) → AT access disappears entirely. Restart with
   `/etc/init.d/gl_cellular_manager start`. (procd-managed; graceful `cleanup_resources` on stop.)
 
-### ⭐ Our own AT channel: `/dev/at_mdm0` + `tools/mudimodem-at.py`
+### ⭐ Our own AT channel: `/dev/at_mdm0` (now `src/lib/mudimodemd/atport.lua`)
 `/dev/at_mdm0` is a free, world-accessible, fully-working AT port **independent of GL's smd9** — so
 its responses never cross with GL's polling. Verified: `ATI`, `QSPN`, `QNWPREFCFG`, `CSQ` all return
 clean, correctly-paired responses, ~instant.
 
-**Compile-free client:** `tools/mudimodem-at.py` (CPython 3.11 stdlib only — the box ships it; no
-`pyserial`, no C). ~40 lines: open blocking, write `CMD\r`, `select`-timed read until `OK`/`ERROR`,
-filter URCs. Intended transport for the **Phase 3 AT console**.
+**Client:** first `tools/mudimodem-at.py` (CPython stdlib), since R3 ⑤ `src/lib/mudimodemd/atport.lua`
+on GL's own eco: open blocking, write `CMD\r`, read with a timeout until `OK`/`ERROR`, filter URCs.
+Since 2026-10-28 it is only the console's FALLBACK (GL's `modem.CPU.AT` first; see
+`docs/cellular-api-4.10.md` — port-bridge reads this port continuously).
 
-Gotchas (all in the file's header):
+Gotchas (all in the module's header):
 - **Open BLOCKING.** A non-blocking write returns **`EBUSY`** on this SMD channel.
 - `/dev/at_mdm0` is **not a tty** → `termios` raises `ENOTTY`; skip it, it's already a raw byte stream.
 - **URCs arrive unprompted** (`RDY`, `+CPIN:`, `+QUSIM:`) — a real client must pair responses and drop

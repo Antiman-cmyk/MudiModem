@@ -7,17 +7,15 @@
 --                           steps so far }            waits up to wait_s for the job to finish
 local time = require "eco.time"
 local sync = require "eco.sync"
-local sys = require "eco.sys"
 local cc = require "cellular_compat"
 local at = require "mudimodemd.at"
+local atport = require "mudimodemd.atport"
 
 local M = {}
 
 function M.new(conn, atconn, opts)
   opts = opts or {}
   local bus = opts.bus or "cpu"
-  local tool = opts.tool or "/usr/lib/mudimodem/mudimodem-at.py"
-  local python = opts.python or "/usr/bin/python3"
   local keep_s = opts.keep_s or 300                  -- a finished job's result stays this long
   local max_queue = opts.max_queue or 4
   local log = opts.log or function() end
@@ -47,23 +45,9 @@ function M.new(conn, atconn, opts)
     return r.data
   end
 
-  -- The direct-port tool (python, /dev/at_mdm0) holds the channel window itself (flock,
-  -- drain/terminator loop, timeouts); we only bound the whole run.
-  local function direct(steps, timeout)
-    local f = io.open(python, "r")
-    if not f then
-      return nil, "GL's AT service is not running and the direct-port tool needs python3 (not installed)"
-    end
-    f:close()
-    local argv = { python, tool, "--envelope", "--timeout", tostring(timeout), "--" }
-    for _, s in ipairs(steps) do argv[#argv + 1] = s end
-    local p, err = sys.exec(table.unpack(argv))
-    if not p then return nil, "failed to spawn the AT tool: " .. tostring(err) end
-    local out = p:read_stdout("*a", (timeout + 5) * #steps + 10)
-    p:close()
-    if out == nil then return nil, "the AT tool did not finish" end
-    return out
-  end
+  -- The direct port (/dev/at_mdm0), only when GL's AT service is not registered (atport.lua).
+  local port = atport.new({ port = opts.port, state = opts.state })
+  local function direct(steps, timeout) return port.run(steps, timeout) end
 
   -- The active slot, or nil. 0 is not a slot (no SIM / modem resetting): it must never become
   -- sub_id=0 (CLAUDE.md invariant) — no slot means no sub_id, as the plugin always did.

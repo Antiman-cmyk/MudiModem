@@ -19,7 +19,6 @@ export MM_PLUGIN=$PWD/src/rpc/mudimodem MM_VALIDATOR=$PWD/src/validator/mudimode
 export MM_WS_MODULE=$PWD/src/ws/mudimodem.lua
 export MUDIMODEM_PENDING=$T/pending MUDIMODEM_ARMED=$T/armed MUDIMODEM_LATEST=$T/latest.json
 export MUDIMODEM_BIN=$PWD/src/sbin/mudimodem-revert MUDIMODEM_DETACH=$T/detach MUDIMODEM_HIST=$T/hist
-export MUDIMODEM_AT_TOOL=$PWD/test/fake-at-tool.py MUDIMODEM_LIB_TOOL=$PWD/test/fake-lib-tool.py
 export MUDIMODEM_VERSION_FILE=$T/mmtmp/local.json
 export MUDIMODEM_HISTORY_CFG=$T/history.json MUDIMODEM_HISTORY_PERSIST=$T/persist
 export MUDIMODEM_BATTLIMIT_FILE=$T/mmtmp/battlimit.json MUDIMODEM_BATTLIMIT_BIN=$T/mmtmp/glbattlimit

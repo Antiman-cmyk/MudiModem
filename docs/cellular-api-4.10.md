@@ -164,7 +164,7 @@ awareness. Written to `/tmp/mudimodem/samples.jsonl` + `latest.json` and pushed 
 - `port-bridge at_mdm0 at_usb0 0` (`/usr/bin/port-bridge`): its modem→USB thread
   (`modem_to_usb_bridge_*`) opens `at_mdm0`, then loops `poll()` → `read()` → write to the USB
   port, holding its mutex only around each call — it reads `at_mdm0` continuously, USB host
-  attached or not. A reply that lands after `mudimodem-at.py` gave up is therefore normally
+  attached or not. A reply that lands after the direct port (`mudimodemd/atport.lua`) gave up is therefore normally
   consumed by port-bridge, not left for the next invocation (the AT tool keeps only the known
   minutes-long commands "owed"). ⇒ The AT console no longer reads this port in normal operation:
 - `modem_AT` (`/usr/bin/modem_AT`, gl-sdk4-cellular 2026.236; `modem.CPU.AT get_result_AT

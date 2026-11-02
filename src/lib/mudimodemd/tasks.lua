@@ -1,9 +1,9 @@
 -- mudimodemd/tasks.lua — what the daemon's jobs do (eco): the slow I/O the nginx plugin used to
--- do inline, holding GL's ONE nginx worker (curl up to 8 s, python3 + a GitHub fetch). The
+-- do inline, holding GL's ONE nginx worker (curl up to 8 s, a GitHub fetch for the library). The
 -- plugin keeps the policy (which URL, how to present the answer); these only do the waiting.
 --
 --   version_fetch {url}  curl the remote version.json        -> { version } | { error }
---   library {mode}       the AT-library tool, check|refresh   -> its JSON verbatim | { error }
+--   library {mode}       the community AT library, check|refresh (below)
 --   scan {slot}          GL's cell scan (AT+QSCAN via modem.scan_cell_tower), minutes long
 --                        -> { towers, ts, slot } | { error }
 -- The scan goes through GL's own /rpc on 127.0.0.1 with the `glinet` header — the loop-back
@@ -53,16 +53,107 @@ function M.version_fetch(args, cfg)
   return { version = tostring(obj.version) }
 end
 
-function M.library(mode, cfg)
-  if mode ~= "check" and mode ~= "refresh" then return { error = "bad library mode" } end
-  if not exists(cfg.python) then
-    return { error = "the library tool needs python3, which is not installed yet" }
+-- ---- the community AT library (a port of tools/mudimodem-lib, retired with python3) ------------
+-- check   -> { local_revision, remote_revision, update_available, checked, error? }
+-- refresh -> { ok, revision, count } | { ok = false, error }
+-- The cache is what nginx serves gzip_static at /mudimodem/at-library.json. The fetched body is
+-- cached VERBATIM once it passes the sanity check: re-encoding it through cjson would turn every
+-- empty [] into {} (the console iterates them).
+local LIB_DEFAULT_URL = "https://raw.githubusercontent.com/kevinherzig/mudi7-at-library/main/dist"
+local LIB_MAX_BYTES = 1048576
+
+local function shq(s) return "'" .. tostring(s):gsub("'", "'\\''") .. "'" end
+
+function M.lib_base_url()
+  local env = os.getenv("MUDIMODEM_LIB_URL")
+  if env and env ~= "" then return (env:gsub("/+$", "")) end
+  local f = io.open("/etc/mudimodem/library-url", "r")
+  local u = f and f:read("*a") or ""
+  if f then f:close() end
+  u = u:match("^%s*(.-)%s*$")
+  if u ~= "" then return (u:gsub("/+$", "")) end
+  return LIB_DEFAULT_URL
+end
+
+local function lib_cache()
+  return os.getenv("MUDIMODEM_CACHE") or "/usr/share/mudimodem/www/mudimodem/at-library.json.gz"
+end
+
+-- body | nil, error
+local function fetch(cfg, url, max_time)
+  local p, err = sys.exec(cfg.curl, "-fsS", "--max-time", tostring(max_time), url)
+  if not p then return nil, "cannot run curl: " .. tostring(err) end
+  local out = p:read_stdout("*a", max_time + 5)
+  local errtext = p:read_stderr("*a", 1) or ""
+  p:close()
+  if out == nil then return nil, "curl did not finish" end
+  if out == "" then
+    errtext = errtext:match("^%s*(.-)%s*$")
+    return nil, errtext ~= "" and errtext or "no response"
   end
-  local out, err = run({ cfg.python, cfg.lib_tool, mode }, 90)
-  if not out then return { error = err } end
-  local ok, obj = pcall(cjson.decode, out)
-  if not ok or type(obj) ~= "table" then return { error = "library tool returned no JSON" } end
-  return obj
+  if #out > LIB_MAX_BYTES then return nil, "response too large" end
+  return out
+end
+
+local function local_revision()
+  local cache = lib_cache()
+  if not exists(cache) then return "unknown" end
+  local body = run({ "gzip", "-dc", cache }, 10)
+  local ok, obj = pcall(cjson.decode, body or "")
+  if ok and type(obj) == "table" and type(obj.revision) == "string" then return obj.revision end
+  return "unknown"                         -- best effort: a status line, never a failed check
+end
+
+local function is_e5800()
+  if os.getenv("MUDIMODEM_SKIP_MODEL_GUARD") == "1" then return true end
+  local f = io.open("/proc/device-tree/model", "r")
+  local m = f and f:read("*a") or ""
+  if f then f:close() end
+  return m:find("E5800", 1, true) ~= nil
+end
+
+local function lib_check(cfg)
+  local out = { local_revision = local_revision(), remote_revision = cjson.null,
+                update_available = false, checked = false }
+  local body, err = fetch(cfg, M.lib_base_url() .. "/version.json", 8)
+  if not body then out.error = err; return out end
+  local ok, obj = pcall(cjson.decode, body)
+  local remote = ok and type(obj) == "table" and obj.revision
+  if type(remote) ~= "string" or remote == "" then out.error = "remote version.json malformed"; return out end
+  out.remote_revision, out.checked = remote, true
+  out.update_available = remote ~= out.local_revision
+  return out
+end
+
+local function lib_refresh(cfg)
+  if not is_e5800() then return { ok = false, error = "refusing: not a GL-E5800" } end
+  local body, err = fetch(cfg, M.lib_base_url() .. "/at-library.json", 20)
+  if not body then return { ok = false, error = "fetch failed: " .. tostring(err) } end
+  local ok, data = pcall(cjson.decode, body)
+  if not (ok and type(data) == "table" and type(data.entries) == "table" and #data.entries > 0
+          and data.revision and data.revision ~= cjson.null and data.revision ~= ""
+          and data.version ~= nil and data.version ~= cjson.null) then
+    return { ok = false, error = "fetched library failed sanity check" }
+  end
+  local cache = lib_cache()
+  local dir = cache:match("^(.*)/[^/]*$") or "."
+  local tmp, tgz = cache .. ".json.tmp", cache .. ".gz.tmp"
+  os.execute("mkdir -p " .. shq(dir))
+  local f = io.open(tmp, "w")
+  if not f then return { ok = false, error = "write failed: cannot write " .. tmp } end
+  f:write(body); f:close()
+  local gout = run({ "/bin/sh", "-c", "gzip -9 -c < " .. shq(tmp) .. " > " .. shq(tgz) .. " && chmod 0644 "
+                                       .. shq(tgz) .. " && echo ok" }, 30)
+  os.remove(tmp)
+  if not (gout and gout:find("ok", 1, true)) then os.remove(tgz); return { ok = false, error = "write failed: gzip" } end
+  if not os.rename(tgz, cache) then os.remove(tgz); return { ok = false, error = "write failed: rename" } end
+  return { ok = true, revision = tostring(data.revision), count = #data.entries }
+end
+
+function M.library(mode, cfg)
+  if mode == "check" then return lib_check(cfg) end
+  if mode == "refresh" then return lib_refresh(cfg) end
+  return { error = "bad library mode" }
 end
 
 -- http://127.0.0.1[:port]/rpc, the port from GL's own nginx config (as gl-session reads it).

@@ -47,7 +47,8 @@ recs | {
   done
 }
 
-for f in $(git ls-files src tools dist 2>/dev/null || find src tools dist -type f); do
+# tracked AND new (untracked, not ignored) files: a new file must be checked before its first commit
+for f in $(git ls-files --cached --others --exclude-standard src tools dist 2>/dev/null || find src tools dist -type f); do
   case " $UNSHIPPED " in *" $f "*) continue ;; esac
   case "$f" in src/web/*) continue ;; esac   # page sources: built into dist/views (tools/build-web.mjs)
   case "$f" in *.pyc|*/__pycache__/*) continue ;; esac
@@ -58,7 +59,7 @@ recs | grep -qE '^file +manifest.txt ' || fail "manifest.txt must ship (uninstal
 
 # The library refresher must write the copy nginx serves — the manifest's cache destination.
 cache=$(recs | awk '$1 == "cache" { print $3 }')
-grep -q "DEFAULT_CACHE = \"$cache\"" tools/mudimodem-lib || fail "mudimodem-lib DEFAULT_CACHE must be the manifest's cache path $cache"
+grep -q "\"$cache\"" src/lib/mudimodemd/tasks.lua || fail "the library refresh (mudimodemd/tasks.lua) must write the manifest's cache path $cache"
 # The nginx alias must serve the web payload's own directory.
 grep -q 'location ^~ /views/gl-sdk4-ui-mudimodem' src/nginx/mudimodem.conf \
   && grep -q 'location ^~ /mudimodem/' src/nginx/mudimodem.conf \

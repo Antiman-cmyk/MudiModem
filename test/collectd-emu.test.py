@@ -391,12 +391,30 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         p.send_signal(signal.SIGTERM)
         p.wait(timeout=20)
 
-    def test_eco_at_falls_back_to_the_direct_port_tool(self):
-        """GL's AT service not registered: the whole sequence goes to the direct-port tool
-        (faked here), decided before anything was sent."""
+    def test_eco_at_falls_back_to_the_direct_port(self):
+        """GL's AT service not registered: the whole sequence goes to the direct port (a pty
+        playing the modem here), decided before anything was sent."""
+        import tty, threading
+        master, slave = os.openpty()
+        tty.setraw(slave)
+        got = []
+
+        def serve():
+            buf = b""
+            while True:
+                try:
+                    b = os.read(master, 64)
+                except OSError:
+                    return
+                buf += b
+                while b"\r" in buf:
+                    line, buf = buf.split(b"\r", 1)
+                    got.append(line.decode())
+                    os.write(master, b"\r\n+ECHO: " + line + b"\r\n\r\nOK\r\n")
+        threading.Thread(target=serve, daemon=True).start()
         scen = {"modem_status": ct.MODEM_STATUS_410, "cell_info": [ct.CELL_INFO_410_SA], "no_at": True}
         d, bus, env = self.start_bus(scen)
-        env.update(MUDIMODEM_AT_TOOL=os.path.join(HERE, "fake-at-tool.py"), MUDIMODEM_PYTHON=shutil.which("python3"))
+        env.update(MUDIMODEM_AT_PORT=os.ttyname(slave), MUDIMODEM_AT_STATE=os.path.join(d, "at.inflight"))
         p = self.spawn_eco(env)
         self.wait_health(bus)
         r = self.ubus(bus, "at_wait", {"id": self.ubus(bus, "at_start", {"cmd": "AT+ONE\nAT+TWO", "timeout": 3})["id"],
@@ -404,9 +422,10 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         self.assertTrue(r["done"] and r["ok"], r)
         self.assertEqual(r["transport"], "direct")
         self.assertEqual([s["cmd"] for s in r["steps"]], ["AT+ONE", "AT+TWO"])
-        self.assertIn("--timeout 3", r["steps"][0]["response"])
-        b = self.ubus(bus, "at_wait", {"id": self.ubus(bus, "at_start", {"cmd": "AT__BUSY__"})["id"], "wait": 10})
-        self.assertIn("busy", b.get("error", ""))
+        self.assertIn("+ECHO: AT+TWO", r["steps"][1]["response"])
+        self.assertEqual(got, ["AT+ONE", "AT+TWO"])
+        ats = [c for c in jsonl(os.path.join(bus, "calls.jsonl")) if c["method"] == "get_result_AT"]
+        self.assertEqual(ats, [], "GL's AT service was not there to be called")
         p.send_signal(signal.SIGTERM)
         p.wait(timeout=20)
 
@@ -456,16 +475,15 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         self.assertIn("id", j, j)
         return self.ubus(bus, "job_wait", {"id": j["id"], "wait": wait})
 
-    def test_eco_jobs_version_library(self):
-        """The version fetch (curl) and the AT-library tool run in the daemon, bounded, with the
-        plugin's semantics: the URL charset is re-checked, the tool's JSON comes back verbatim."""
+    def test_eco_jobs_version_fetch(self):
+        """The version fetch (curl) runs in the daemon, bounded, with the plugin's semantics: the
+        URL charset is re-checked. (The library jobs: test/library-emu.test.py.)"""
         d, bus, env = self.start_bus({"modem_status": ct.MODEM_STATUS_410})
         curl = os.path.join(d, "curl.sh")
         with open(curl, "w") as f:
             f.write('#!/bin/sh\necho "$@" >> %s/curl.args\necho \'{"version":"9.9.9"}\'\n' % d)
         os.chmod(curl, 0o755)
-        env.update(MUDIMODEMD_COLLECTOR="0", MUDIMODEM_CURL=curl, MUDIMODEM_PYTHON=shutil.which("python3"),
-                   MUDIMODEM_LIB_TOOL=os.path.join(HERE, "fake-lib-tool.py"))
+        env.update(MUDIMODEMD_COLLECTOR="0", MUDIMODEM_CURL=curl)
         p = self.spawn_eco(env)
         self.wait_health(bus)
         r = self.job(bus, "version_fetch", {"url": "https://raw.githubusercontent.com/x/MudiModem/main/version.json"})
@@ -476,18 +494,8 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         self.assertIn("bad version URL", bad.get("error", ""))
         with open(os.path.join(d, "curl.args")) as f:
             self.assertEqual(len(f.read().strip().splitlines()), 1, "a bad URL never reaches curl")
-        c = self.job(bus, "lib_check")
-        self.assertEqual((c["checked"], c["update_available"], c["remote_revision"]), (True, True, "new222"), c)
-        r = self.job(bus, "lib_refresh")
-        self.assertEqual((r["ok"], r["count"]), (True, 7), r)
         self.assertIn("unknown job kind", self.ubus(bus, "job_start", {"kind": "rm"}).get("error", ""))
         self.assertIn("unknown job", self.ubus(bus, "job_wait", {"id": 5}).get("error", ""))
-        # no python3 yet (just after a firmware upgrade): a plain error, not a hang
-        p.send_signal(signal.SIGTERM); p.wait(timeout=20)
-        env["MUDIMODEM_PYTHON"] = os.path.join(d, "no-python3")
-        p = self.spawn_eco(env)
-        self.wait_health(bus)
-        self.assertIn("python3", self.job(bus, "lib_check").get("error", ""))
         p.send_signal(signal.SIGTERM); p.wait(timeout=20)
 
     def test_eco_a_hung_fetch_is_bounded_and_blocks_nothing(self):
@@ -495,15 +503,15 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         health call are served — the daemon is one process, but none of this blocks it."""
         d, bus, env = self.start_bus({"modem_status": ct.MODEM_STATUS_410})
         curl = os.path.join(d, "curl.sh")
-        with open(curl, "w") as f:
-            f.write("#!/bin/sh\nexec sleep 60\n")   # exec: the killed child IS the sleeper
+        with open(curl, "w") as f:   # hangs for the version URL only (exec: the killed child IS the sleeper)
+            f.write('#!/bin/sh\ncase "$*" in *slow*) exec sleep 60 ;; esac\necho \'{"revision":"r1"}\'\n')
         os.chmod(curl, 0o755)
-        env.update(MUDIMODEMD_COLLECTOR="0", MUDIMODEM_CURL=curl, MUDIMODEM_PYTHON=shutil.which("python3"),
-                   MUDIMODEM_LIB_TOOL=os.path.join(HERE, "fake-lib-tool.py"))
+        env.update(MUDIMODEMD_COLLECTOR="0", MUDIMODEM_CURL=curl, MUDIMODEM_LIB_URL="https://lib.example/dist",
+                   MUDIMODEM_CACHE=os.path.join(d, "lib.json.gz"))
         p = self.spawn_eco(env)
         self.wait_health(bus)
         t0 = time.monotonic()
-        v = self.ubus(bus, "job_start", {"kind": "version_fetch", "args": {"url": "https://x/version.json"}})
+        v = self.ubus(bus, "job_start", {"kind": "version_fetch", "args": {"url": "https://x/slow/version.json"}})
         c = self.job(bus, "lib_check", wait=10)
         self.assertTrue(c["done"] and c["checked"], c)
         self.assertLess(time.monotonic() - t0, 8, "another job finished while curl hung")

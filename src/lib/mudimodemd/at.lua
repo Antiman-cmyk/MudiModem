@@ -1,6 +1,6 @@
 -- mudimodemd/at.lua — the AT console's engine: validate a request, then run its steps through
 -- GL's AT service, or — only when that service is not registered, decided before anything was
--- sent, so no command ever runs twice — through the direct-port tool.
+-- sent, so no command ever runs twice — through the direct port (atport.lua).
 --
 -- Moved out of the nginx plugin (which blocked GL's ONE nginx worker for every step) into the
 -- daemon; the semantics are the plugin's, case for case (test/daemon-at.test.lua):
@@ -48,41 +48,9 @@ function M.final(data)
   return kind
 end
 
--- The direct-port tool's output (per-step envelope MM-AT:<status>:<elapsed_ms>:<i>/<n>, or a
--- channel-level MM-AT:<status>:<ms> first line) -> a result table, or { error = ... }.
-function M.parse_envelope(out, steps)
-  out = out or ""
-  local cstatus = out:match("^MM%-AT:(%w+):%d+%s*\n") or out:match("^MM%-AT:(%w+):%d+%s*$")
-  if cstatus == "busy" then
-    -- the tool may say WHY: an earlier command's reply is still owed
-    local why = out:match("^MM%-AT:busy:%d+%s*\n([^\n]+)")
-    return { error = "channel busy - " .. (why and why:gsub("%s+$", "") or "another command in flight") }
-  end
-  if cstatus == "openfail" then return { error = "cannot open the AT port (/dev/at_mdm0)" } end
-  local frames, cur = {}, nil
-  for line in (out .. "\n"):gmatch("(.-)\n") do
-    local st, msv, idx, cnt = line:match("^MM%-AT:(%w+):(%d+):(%d+)/(%d+)$")
-    if st then
-      cur = { status = st, elapsed_ms = tonumber(msv), idx = tonumber(idx), count = tonumber(cnt), response = "" }
-      frames[#frames + 1] = cur
-    elseif cur then
-      cur.response = cur.response .. line .. "\n"
-    end
-  end
-  if #frames == 0 then return { error = "AT tool returned no envelope (is the AT tool deployed?)" } end
-  local res = { ok = true, requested = #steps, ran = #frames, aborted = (#frames < #steps), steps = {} }
-  for i, s in ipairs(frames) do
-    if s.status ~= "ok" and s.status ~= "error" and s.status ~= "timeout" then
-      return { error = "AT tool returned unexpected status: " .. s.status }
-    end
-    res.steps[i] = { cmd = steps[i] or "", status = s.status, response = s.response, elapsed_ms = s.elapsed_ms }
-  end
-  return res
-end
-
 -- Run one sequence. t = {
 --   gl(cmd, timeout, sub_id) -> data string | nil, "not_found" | "timeout" | reason
---   direct(steps, timeout)   -> tool output | nil, reason
+--   direct(steps, timeout)   -> { ok, requested, ran, aborted, steps } | { error } (atport.lua)
 --   now_ms()                 -> ms clock (elapsed_ms)
 --   on_step(i, step, res)    -> optional progress callback (the daemon's long-poll)
 -- }
@@ -98,9 +66,8 @@ function M.run(steps, timeout, slot, t)
     elseif i == 1 and err == "not_found" then
       -- GL's AT service isn't registered (cellular stack down): nothing has been sent, so the
       -- whole sequence can go to the direct port instead.
-      local out, derr = t.direct(steps, timeout)
-      if out == nil then return { error = derr or "the direct-port AT tool failed" } end
-      local d = M.parse_envelope(out, steps)
+      local d = t.direct(steps, timeout)
+      if type(d) ~= "table" then return { error = "the direct AT port gave no answer" } end
       if d.ok then d.transport = "direct"; d.slot = slot end
       return d
     elseif err == "timeout" then

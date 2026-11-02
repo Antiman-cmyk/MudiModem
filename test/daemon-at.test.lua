@@ -1,17 +1,13 @@
 -- The AT console's engine (src/lib/mudimodemd/at.lua), against FAKES only — no modem traffic:
--- a Lua stand-in for GL's AT service (the markers of test/fake-ubus-at.py) and the real
--- test/fake-at-tool.py for the direct-port fallback. These are the cases the nginx plugin's
--- at_console was tested with before the engine moved into mudimodemd.
--- Runs under the host's lua5.1, the router's lua and eco. Env: MUDIMODEM_AT_TOOL=<fake tool>.
+-- a Lua stand-in for GL's AT service and one for the direct port. These are the cases the nginx
+-- plugin's at_console was tested with before the engine moved into mudimodemd; the direct
+-- port's own channel rules (drain, terminators, late replies) are drilled over a pty in
+-- test/collectd-emu.test.py. Runs under the host's lua5.1, the router's lua and eco.
 local dir = (arg and arg[0] and arg[0]:match("^(.*)/[^/]*$") or ".") .. "/../src/lib/"
 package.path = dir .. "?.lua;" .. package.path
 local at = require "mudimodemd.at"
 local cjson = require "cjson"
 
-local TOOL = os.getenv("MUDIMODEM_AT_TOOL") or ""
-assert(TOOL:find("fake", 1, true), "refusing to run: MUDIMODEM_AT_TOOL must point at test/fake-at-tool.py")
-
-local function shq(s) return "'" .. s:gsub("'", "'\\''") .. "'" end
 
 -- ---- fakes ----------------------------------------------------------------------------------
 local calls, absent = {}, false
@@ -24,12 +20,14 @@ local function gl(cmd, timeout, sub_id)
   if cmd:find("__NOTERM__", 1, true) then return "\r\n+PARTIAL: 1\r\n" end
   return "\r\nREQ:" .. cmd .. "\r\n\r\nOK\r\n"
 end
+-- the direct port: echoes what it was given; DIRECT_REPLY overrides (a channel error, nil)
+local direct_calls, DIRECT_REPLY = {}, false
 local function direct(steps, timeout)
-  local parts = { "python3", shq(TOOL), "--envelope", "--timeout", tostring(timeout), shq("--") }
-  for _, s in ipairs(steps) do parts[#parts + 1] = shq(s) end
-  local f = io.popen(table.concat(parts, " ") .. " 2>/dev/null")
-  local out = f:read("*a"); f:close()
-  return out
+  direct_calls[#direct_calls + 1] = { steps = steps, timeout = timeout }
+  if DIRECT_REPLY ~= false then return DIRECT_REPLY end
+  local r = { ok = true, requested = #steps, ran = #steps, aborted = false, steps = {} }
+  for i, c in ipairs(steps) do r.steps[i] = { cmd = c, status = "ok", response = "\r\nOK\r\n", elapsed_ms = 1 } end
+  return r
 end
 local clock = 0
 local T = { gl = gl, direct = direct, now_ms = function() clock = clock + 7; return clock end }
@@ -94,35 +92,19 @@ at.run({ "AT+A", "AT+B" }, 8, 1, { gl = gl, direct = direct, now_ms = T.now_ms,
   on_step = function(i, s, r) seen[#seen + 1] = i .. ":" .. s.status .. ":" .. r.ran end })
 assert(table.concat(seen, ",") == "1:ok:1,2:ok:2", "on_step per step: " .. table.concat(seen, ","))
 
--- ---- fallback: GL's AT service not registered -> the direct-port tool ----------------------
-absent = true; reset()
-local r = run('AT+QNWPREFCFG="nr5g_band"', 999, 2)
+-- ---- fallback: GL's AT service not registered -> the direct port -------------------------------
+absent = true; reset(); direct_calls = {}
+local r = run('AT+QNWPREFCFG="nr5g_band"\nAT+TWO', 999, 2)
 assert(r.ok and r.transport == "direct" and r.slot == 2, "fell back to the direct port: " .. tostring(r.error))
-assert(#calls == 1, "exactly one probe of GL's service")
-assert(r.requested == 1 and r.ran == 1 and not r.aborted and r.steps[1].status == "ok", "single step via tool")
-assert(r.steps[1].cmd == 'AT+QNWPREFCFG="nr5g_band"', "step cmd echoed")
-assert(r.steps[1].response:find("--timeout 60", 1, true), "timeout clamps to 60")
-assert(r.steps[1].response:find('AT+QNWPREFCFG="nr5g_band"', 1, true), "inner quotes intact")
-assert(r.steps[1].response:find(" -- ", 1, true), "a -- sentinel precedes the steps")
-assert(run("AT", 0, 1).steps[1].response:find("--timeout 1", 1, true), "timeout clamps up to 1")
-local rm = run("AT+ONE\nAT+TWO", nil, 1)
-assert(rm.ran == 2 and rm.steps[1].cmd == "AT+ONE" and rm.steps[2].cmd == "AT+TWO", "two frames, in order")
-local re = run("AT+BAD__ERR__\nAT+NEVER", nil, 1)
-assert(re.ok and re.ran == 1 and re.aborted and re.steps[1].status == "error" and #re.steps == 1, "stop on error")
-assert(run("AT+X='y'", nil, 1).steps[1].response:find("AT+X='y'", 1, true), "single quotes survive")
-assert(run("AT__BUSY__", nil, 1).error:lower():find("busy", 1, true), "busy")
-local rob = run("AT__OWED__", nil, 1)
-assert(rob.error:find("busy", 1, true) and rob.error:find("AT+QSCAN=*,1 still owed", 1, true), "busy reason")
-assert(run("AT__OPENFAIL__", nil, 1).error:find("cannot open", 1, true), "openfail")
-assert(run("AT__GARBAGE__", nil, 1).error:find("no envelope", 1, true), "no envelope")
-assert(run("AT__WEIRD__", nil, 1).error:find("unexpected status", 1, true), "unknown status")
-local eight = {}
-for i = 1, 8 do eight[i] = "AT+C" .. i end
-assert(run(table.concat(eight, "\n"), nil, 1).ran == 8, "exactly 8 steps accepted")
-assert(run("AT+" .. string.rep("X", 253), nil, 1).ok, "a 256-char step accepted")
--- a direct transport that cannot run at all
-local nd = at.run({ "AT" }, 8, 1, { gl = gl, direct = function() return nil, "no python3" end, now_ms = T.now_ms })
-assert(nd.error == "no python3", "the direct transport's failure is the reply")
+assert(#calls == 1, "exactly one probe of GL's service, nothing else sent there")
+assert(#direct_calls == 1 and #direct_calls[1].steps == 2 and direct_calls[1].timeout == 60,
+       "the WHOLE sequence goes to the port, timeout clamped")
+assert(direct_calls[1].steps[1] == 'AT+QNWPREFCFG="nr5g_band"', "inner quotes intact")
+DIRECT_REPLY = { error = "channel busy - still waiting for the reply to AT+QSCAN=3,1" }
+assert(run("AT", nil, 1).error:find("channel busy", 1, true), "the port's channel error is the reply")
+DIRECT_REPLY = nil
+assert(run("AT", nil, 1).error:find("no answer", 1, true), "a port that returns nothing -> plain error")
+DIRECT_REPLY = false
 absent = false
 
 print("daemon at engine OK (" .. cjson.encode({ cases = "all" }) .. ")")
