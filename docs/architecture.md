@@ -4,8 +4,8 @@
 | 阶段 | 状态 | 已落地的内容 |
 |---|---|---|
 | **R0 打基础** | ✅ 完成（2026-11-02） | `manifest.txt` + 唯一的安装器 `src/installer/mudimodem-install`（install / uninstall / deploy / 自更新都走它，keep.d 在安装时生成）；在假根目录里端到端跑安装/升级/卸载的模拟测试（dash、busybox、路由器自己的 ash）；清单 lint；`tools/firmware.sh`（固件拉取+解包，sha256 固定）；`tools/emu.sh`（qemu 运行镜像的 lua / eco / busybox / 任意程序）；主题变量 lint，并修掉了 16 个未定义变量；文档重组，去掉 superpowers 流程痕迹，CLAUDE.md 精简 |
-| R1 前端结构 | 待做 | esbuild 构建步骤从 R0 挪到这里，和 kit 拆分一起做 |
-| R2 插件模块化 + 事务 | 待做 | |
+| R1 前端结构 | 待做（已有页面预览工具 `tools/preview.js`） | esbuild 构建步骤从 R0 挪到这里，和 kit 拆分一起做；手机标签栏和控制台溢出已先修 |
+| R2 插件模块化 + 事务 | 🟡 事务部分已完成 | 待确认文件记录 `DEADLINE`/`APPLIED`；新增 `change_status`；`confirm` 返回 `was_pending`；页面按路由器的截止时间倒计时，加载时恢复，横幅在所有标签页显示，Keep/Revert 如实报告结果。插件拆分模块还没做：R3 会把插件变成薄转发，现在拆的收益有限 |
 | R3 守护进程 | 待做 | 模拟环境已验证可行（§6.1） |
 | R4 新功能 | 待做 | |
 

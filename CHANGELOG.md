@@ -1,14 +1,21 @@
 # Changelog
 
 ## Unreleased (toward 3.0)
-Groundwork from the 3.0 refactor plan (`docs/architecture.md`, phase R0). Nothing changes on the
-page except colours.
+Groundwork from the 3.0 refactor plan (`docs/architecture.md`: R0, and the change-transaction
+part of R2), plus the fixes it surfaced.
 - **One manifest, one installer.** `manifest.txt` lists what ships where. `install.sh`,
   `uninstall.sh`, `tools/deploy.sh` and the self-updater all run `src/installer/mudimodem-install`.
   install.sh downloads everything before touching the router. The firmware-upgrade keep list
   (`/lib/upgrade/keep.d/mudimodem`) is generated at install time instead of being kept by hand.
   The installer and manifest are installed under `/usr/lib/mudimodem/`, so uninstall knows
   exactly what to remove.
+- **Confirm-or-revert follows the router:** the countdown runs to the watchdog's real deadline
+  (box clock), comes back after a reload, and is shown on every tab. Keep and Revert wait for the
+  router's answer: a Keep that could not reach it keeps the banner, a refused Revert says why, and
+  a Keep that arrived after the auto-revert says so instead of being logged as kept
+  (new `change_status`; `confirm` reports `was_pending`).
+- **Phones:** the tab bar scrolls sideways instead of the whole page, and the AT console no longer
+  overflows. The console also mounts when browser storage is blocked.
 - **UI:** the console's read/set/nv risk badges and the battery cards used CSS variables that GL's
   theme does not define, so they rendered without colour or background. They now use GL's own
   tokens, and a test enforces this. "Good" signal is now `--secondary`, as on GL's own pages;
@@ -17,6 +24,8 @@ page except colours.
   - `tools/firmware.sh` fetches and unpacks the pinned 4.10.0 image.
   - `tools/emu.sh` runs the router's own Lua, eco, busybox and binaries under qemu.
   - Every shell suite now also runs under the router's busybox.
+  - `tools/preview.js` renders every tab in headless Chromium with GL's theme, at phone and
+    desktop width, light and dark.
   - A fake-root installer test covers install, update and uninstall.
 - **Docs:**
   - Short CLAUDE.md.
