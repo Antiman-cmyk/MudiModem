@@ -36,6 +36,12 @@ echo "== python =="
 for f in test/*.test.py test/test_collectd.py; do run "$f" env -u MUDIMODEM_CURL python3 "$f"; done
 echo "== node =="
 for f in test/*.test.js; do run "$f" node --test --test-reporter=tap "$f"; done
+if [ -f "${MM_ROOTFS:-firmware/rootfs}/www/theme/base.css" ] && node -e 'require("playwright")' 2>/dev/null; then
+  echo "== page preview (headless Chromium, GL's theme CSS; every tab x desktop/phone x light/dark) =="
+  run "preview matrix (no page errors, no sideways scroll)" node tools/preview.js --matrix
+else
+  echo "== page preview SKIPPED: needs firmware/rootfs + playwright =="
+fi
 echo "== lua (host lua5.1) =="
 for f in test/backend-*.test.lua test/ws-seed.test.lua; do
   case "$f" in *backend-speedtest*) echo "SKIP  $f (live ubusd only)"; continue;;

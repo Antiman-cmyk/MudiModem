@@ -140,9 +140,8 @@ module.exports = (function () {
   created() {
     var self = this;
     this.injectStyle();
-    if (typeof window !== "undefined" && window.localStorage) {
-      this.riskOK = window.localStorage.getItem("mudimodem.riskEnabled") === "1";
-    }
+    // Storage can be blocked (privacy settings): touching window.localStorage then THROWS.
+    try { this.riskOK = window.localStorage.getItem("mudimodem.riskEnabled") === "1"; } catch (e) { /* default off */ }
     this.fetchLib();
     // library_status curls GitHub on the router (up to ~8 s). Once per PAGE,
     // not once per tab open; a re-created tab reuses the answer (or waits on
@@ -214,9 +213,7 @@ module.exports = (function () {
     },
     toggleGate() {
       this.riskOK = !this.riskOK;
-      if (typeof window !== "undefined" && window.localStorage) {
-        window.localStorage.setItem("mudimodem.riskEnabled", this.riskOK ? "1" : "0");
-      }
+      try { window.localStorage.setItem("mudimodem.riskEnabled", this.riskOK ? "1" : "0"); } catch (e) { /* session only */ }
     },
     pick(e) {
       this.selId = e.id;
@@ -416,13 +413,13 @@ module.exports = (function () {
         '.mmc-caution{display:flex;gap:8px;align-items:baseline;background:var(--error-background);border:1px solid var(--error-disabled);border-radius:3px;padding:8px 10px;font-size:11.5px;color:var(--error-hover);margin-bottom:11px;flex-wrap:wrap}' +
         '.mmc-caution b{color:var(--error);flex:none}' +
         '.mmc-gate{margin-left:auto;display:flex;gap:5px;align-items:center;white-space:nowrap;cursor:pointer;font-size:11.5px}' +
-        '.mmc-split{display:grid;grid-template-columns:270px 1fr;gap:10px}' +
-        '@media(max-width:820px){.mmc-split{grid-template-columns:1fr}}' +
+        '.mmc-split{display:grid;grid-template-columns:270px minmax(0,1fr);gap:10px}.mmc-split>*{min-width:0}' +
+        '@media(max-width:820px){.mmc-split{grid-template-columns:minmax(0,1fr)}}' +
         '.mmc-card{background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px var(--shadow);padding:11px 12px}' +
         '.mmc-sect{font-size:13px;font-weight:600;color:var(--text-title)}' +
         '.mmc-hint{font-size:11.5px;color:var(--text-badge)}' +
         '.mmc-row{display:flex;justify-content:space-between;align-items:center;gap:12px}' +
-        '.mmc-search{width:100%;font:12px inherit;padding:5px 9px;border:1px solid var(--border);border-radius:3px;background:var(--background-card);color:var(--text-regular);margin-top:8px}' +
+        '.mmc-search{width:100%;box-sizing:border-box;font:12px inherit;padding:5px 9px;border:1px solid var(--border);border-radius:3px;background:var(--background-card);color:var(--text-regular);margin-top:8px}' +
         '.mmc-search:focus{outline:0;border-color:var(--primary)}' +
         '.mmc-libbody{overflow-y:auto;max-height:430px;margin:6px -12px 0;padding:0}' +
         '.mmc-cat{font-size:9.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-badge);padding:8px 12px 4px}' +

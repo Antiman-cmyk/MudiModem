@@ -178,7 +178,8 @@ and AT commands are Quectel- and firmware-specific; treat other hardware as unte
 No router is needed to work on MudiModem. `tools/firmware.sh fetch && tools/firmware.sh extract`
 unpacks GL's official 4.10.0 image, and `tools/test-local.sh` runs every test suite on the dev box —
 including passes under the **router's own** Lua, busybox shell and tools via qemu
-(`tools/emu.sh`). What ships where is listed once, in `manifest.txt`; `tools/deploy.sh` pushes a
+(`tools/emu.sh`) — and renders every tab of the page in headless Chromium with GL's own theme
+(`tools/preview.js`). What ships where is listed once, in `manifest.txt`; `tools/deploy.sh` pushes a
 working tree to a real box over ssh when one is genuinely needed.
 
 Start with `CLAUDE.md` (rules of the road), then `docs/architecture.md` (structure and the

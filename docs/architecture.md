@@ -242,6 +242,7 @@ idle ──apply/lock──▶ prepared ──写入成功──▶ applied(dead
 | 路由器 shell 脚本 | `tools/emu.sh sh`：镜像的 busybox ash，PATH 里只放镜像自己的 applet | ✅ 所有 sh 测试都在这里跑 |
 | 安装器 | 在假根目录（`MUDIMODEM_ROOT`）里跑完整的 install / update / uninstall | ✅ `test/installer.test.sh` |
 | **GL 的 ubus 服务** | 在 qemu 里跑镜像的 `ubusd -s <sock>`，用 eco 写假的 `cellular.*` / `modem.CPU.AT` / `gl-session` 对象（按契约文档的结构返回），被测代码通过真正的 ubus 协议去调用它们 | ✅ 可行性已验证：eco 注册的 `cellular.modem status` 被镜像的 `ubus` 命令行正确调用并返回。R3 的集成测试就建在这上面 |
+| **页面渲染** | `tools/preview.js`：无头 Chromium + 镜像里 GL 的主题 CSS + Vue 2.6.12 运行时 + 假的 `/ws`、`/rpc` 数据，按 GL SPA 的方式 eval 我们的 chunk；`--matrix` 覆盖所有标签页 × 桌面/手机 × 亮/暗，页面报错或出现横向滚动即失败 | ✅ 接入 test-local；已经抓出并修掉控制台在手机上溢出、存储被禁用时报错这两个问题 |
 | nginx + oui 插件 | 镜像的 nginx 在 qemu 下用临时配置运行（2026-10-28 已用来检查 alias） | 可用；如果需要端到端测 `/rpc`，再在它上面搭 |
 
 真机只用来确认 🔴 项：射频状态、模组的真实回复、实际耗时。这些项集中列在 `docs/cellular-api-4.10.md` §6，攒在一起统一确认。

@@ -63,6 +63,7 @@ docs/                   architecture.md · cellular-api-4.10.md · knowledge.md 
 tools/firmware.sh fetch && tools/firmware.sh extract   # official 4.10.0 image -> firmware/rootfs
 tools/test-local.sh                                    # all suites; router userland via qemu if rootfs present
 tools/emu.sh sh|lua|eco|run …                          # the router's own userland under qemu
+node tools/preview.js --matrix                         # every tab x phone/desktop x light/dark, GL's theme, fake data
 tools/build.sh                                         # payload tarball (what deploy pushes)
 MUDI_HOST=mudi tools/deploy.sh                         # push to a box over ssh (no sftp: uses cat)
 MUDI_HOST=mudi tools/verify.sh                         # on-box assertions (optional, last)
