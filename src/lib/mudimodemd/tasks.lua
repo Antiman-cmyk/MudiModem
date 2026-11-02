@@ -192,9 +192,12 @@ end
 
 -- The plugin's append_event, for events the daemon now owns: one line in events.jsonl (others
 -- append to it too, one O_APPEND write each) and a push for the Tracking timeline.
+-- `extra` adds fields (never t/kind/label/detail): t is always now, so the file stays in time order
+-- (the plugin's read_window stops at the first line older than the window).
 function M.event_writer(conn, path)
-  return function(kind, label, detail)
+  return function(kind, label, detail, extra)
     local ev = { t = os.time() * 1000, kind = kind, label = label, detail = detail or "" }
+    for k, v in pairs(extra or {}) do if ev[k] == nil then ev[k] = v end end
     local f = io.open(path, "a")
     if not f then                        -- nothing has created the history dir yet (collector off)
       os.execute("mkdir -p '" .. (path:match("^(.*)/[^/]*$") or "."):gsub("'", "'\\''") .. "'")

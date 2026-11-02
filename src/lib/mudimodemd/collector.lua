@@ -18,12 +18,14 @@ local cc = require "cellular_compat"
 local jsonl = require "mudimodemd.jsonl"
 local battery = require "mudimodemd.battery"
 local net = require "mudimodemd.net"
+local link = require "mudimodemd.link"
 
 local M = {}
 
 local DAY_MS = 24 * 3600 * 1000
 
 local function envnum(k, d) return tonumber(os.getenv(k) or "") or d end
+local function tasks() return require "mudimodemd.tasks" end   -- run(); loaded on first probe
 
 function M.config()
   local hist = os.getenv("MUDIMODEM_HIST") or "/tmp/mudimodem"
@@ -39,12 +41,24 @@ function M.config()
     hist = hist,
     samples = hist .. "/samples.jsonl",
     events = hist .. "/events.jsonl",
+    crash_seen = hist .. "/crash-seen",                    -- /tmp: a reboot re-baselines
     latest = hist .. "/latest.json",
     battery = hist .. "/battery.jsonl",
     battery_latest = hist .. "/battery-latest.json",
     batt_sysfs = os.getenv("MUDIMODEM_BATT_SYSFS") or "/sys/class/power_supply",
     net_sysfs = os.getenv("MUDIMODEM_NET_SYSFS") or "/sys/class/net",
     netdev_interval = envnum("MUDIMODEM_NETDEV_INTERVAL", 60),
+    -- connectivity probe (link.lua): every LINK_INTERVAL s, every LINK_RETRY s while failing;
+    -- LINK_FAIL_AFTER misses in a row = an outage. 0 turns the probe off.
+    ping = os.getenv("MUDIMODEM_PING") or "ping",
+    uci = os.getenv("MUDIMODEM_UCI") or "uci",
+    link_targets = os.getenv("MUDIMODEM_LINK_TARGETS"),  -- else GL's glconfig.general.track_ip
+    link_interval = envnum("MUDIMODEM_LINK_INTERVAL", 30),
+    link_retry = envnum("MUDIMODEM_LINK_RETRY", 10),
+    link_fail_after = envnum("MUDIMODEM_LINK_FAIL_AFTER", 2),
+    link_wait = envnum("MUDIMODEM_LINK_WAIT", 2),           -- ping -W, per target
+    crash_dir = os.getenv("MUDIMODEM_CRASH_DIR") or "/data/vendor/modem_crash_log",
+    crash_interval = envnum("MUDIMODEM_CRASH_INTERVAL", 60),
     battlimit_pidf = os.getenv("MUDIMODEM_BATTLIMIT_PIDF") or "/tmp/glbattlimit.pid",
     battlimit_limf = os.getenv("MUDIMODEM_BATTLIMIT_LIMF") or "/tmp/glbattlimit.limit",
     history_cfg = os.getenv("MUDIMODEM_HISTORY_CFG") or "/etc/mudimodem/history.json",
@@ -83,13 +97,16 @@ local function for_wire(s)
   return o
 end
 
-function M.new(conn, cfg, log)
+-- event(kind, label, detail, extra): the daemon's event writer (tasks.event_writer); nil = none
+function M.new(conn, cfg, log, event)
   cfg = cfg or M.config()
   log = log or function(msg) io.stderr:write("mudimodemd: ", msg, "\n"); io.stderr:flush() end
+  event = event or function() end
   local self = { running = true }
   local st = {                                             -- also the `health` reply
     started = os.time(), rf_ticks = 0, rf_samples = 0, rf_failed = 0, rf_last_t = 0,
     batt_samples = 0, push_failures = 0, attached = true, flushed = false, last_error = "",
+    link = "unknown", link_probes = 0, link_lost = 0, outages = 0, modem_crashes = 0,
   }
   self.state = st
 
@@ -127,20 +144,101 @@ function M.new(conn, cfg, log)
 
   -- ---- throughput: the cellular device's byte counters, read every tick (sysfs: no AT, no ubus;
   -- the device itself is looked up in `network.interface dump` per NETDEV_INTERVAL)
-  local nd = { at = nil, dev = nil, prev = nil }
-  function self.throughput()
+  local nd = { at = nil, dev = nil, up = false, prev = nil }
+  local function netdev()
     local now = mono()
     if nd.at == nil or now - nd.at >= cfg.netdev_interval then
       nd.at = now
-      nd.dev = net.resolve_iface(call("network.interface", "dump"), "cellular")
+      nd.dev, nd.up = net.resolve_iface(call("network.interface", "dump"), "cellular")
     end
-    if not nd.dev then nd.prev = nil; return nil, nil end
+    return nd.dev, nd.up
+  end
+  function self.throughput()
+    local now = mono()
+    if not netdev() then nd.prev = nil; return nil, nil end
     local rx, tx = net.counters(cfg.net_sysfs, nd.dev)
     if not rx then nd.prev = nil; return nil, nil end
     local cur = { dev = nd.dev, rx = rx, tx = tx, t = now }
     local down, up = net.rate(nd.prev, cur)
     nd.prev = cur
     return down, up
+  end
+
+  -- ---- connectivity probe: one ping out of the cellular device per LINK_INTERVAL (link.lua).
+  -- The result rides on the next RF sample (ping_ms, or ping_lost), so it shares the samples'
+  -- history, backup and push; an outage and its end are events.
+  local lk = { pending = nil, targets = nil, targets_at = nil, trk = link.tracker(cfg.link_fail_after) }
+  local function targets()
+    if cfg.link_targets then return link.parse_targets(cfg.link_targets) end
+    local now = mono()
+    if lk.targets == nil or now - lk.targets_at >= cfg.netdev_interval then
+      lk.targets_at = now
+      lk.targets = link.parse_targets(tasks().run({ cfg.uci, "-q", "get", "glconfig.general.track_ip" }, 5))
+      if #lk.targets == 0 then lk.targets = { "1.1.1.1", "8.8.8.8" } end
+    end
+    return lk.targets
+  end
+  -- -> rtt ms | false (sent, no reply) | nil (no cellular interface up: nothing sent)
+  function self.probe()
+    local dev, up = netdev()
+    local why
+    local rtt
+    if dev and up then
+      why = "No reply to ping"
+      for i, ip in ipairs(targets()) do
+        if i > 3 then break end
+        local out = tasks().run({ cfg.ping, "-I", dev, "-c", "1", "-W", tostring(cfg.link_wait), ip },
+                                cfg.link_wait + 3)
+        rtt = link.parse_ping(out)
+        if rtt then break end
+      end
+      st.link_probes = st.link_probes + 1
+      lk.pending = { t = now_ms(), rtt = rtt }
+      if not rtt then st.link_lost = st.link_lost + 1 end
+    else
+      why = "Cellular interface down"
+    end
+    local ev = lk.trk.feed(rtt or false, now_ms(), why)
+    st.link = lk.trk.state
+    if ev and ev.label == "Offline" then
+      st.outages = st.outages + 1
+      log("link: offline (" .. why .. ")")
+      event("link", "Offline", why, { from = ev.since })
+    elseif ev then
+      log(string.format("link: back online after %d s", ev.secs))
+      event("link", "Back online", "after " .. ev.secs .. " s", { secs = ev.secs })
+    end
+    if rtt then return rtt end
+    if dev and up then return false end
+    return nil
+  end
+  function self.link_delay()
+    if cfg.link_interval <= 0 then return nil end
+    return lk.trk.fails > 0 and math.min(cfg.link_retry, cfg.link_interval) or cfg.link_interval
+  end
+  -- the latest probe, if it finished since the previous sample (and not too long ago)
+  local function take_probe(s)
+    local p = lk.pending
+    lk.pending = nil
+    if not p or s.t - p.t > (cfg.poll * 2 + 5) * 1000 then return end
+    if p.rtt then s.ping_ms = math.floor(p.rtt + 0.5) else s.ping_lost = true end
+  end
+
+  -- ---- modem crash: GL moves a new dump into crash_dir (link.crash_signature); a changed
+  -- listing since the last look = one "Modem crash" event. The first look after boot only
+  -- remembers what is there.
+  function self.crash_tick()
+    local sig = link.crash_signature(require("eco.file"), cfg.crash_dir)
+    if sig == nil then return end                          -- no crash collection on this box
+    local f = io.open(cfg.crash_seen, "r")
+    local seen = f and f:read("*a"); if f then f:close() end
+    if seen == sig then return end
+    jsonl.write_atomic(cfg.crash_seen, sig)
+    if seen ~= nil and sig ~= "" then
+      st.modem_crashes = st.modem_crashes + 1
+      log("modem crash dump in " .. cfg.crash_dir)
+      event("modem", "Modem crash", "The modem restarted after a crash; GL saved a dump in " .. cfg.crash_dir)
+    end
   end
 
   function self.collect_sample()
@@ -204,6 +302,7 @@ function M.new(conn, cfg, log)
     if s ~= nil then
       -- kbit/s on the cellular device since the previous tick (absent across a reconnect)
       s.rx_kbps, s.tx_kbps = down, up
+      take_probe(s)
       local line = cjson.encode(s)
       jsonl.append_line(cfg.samples, line)
       jsonl.write_atomic(cfg.latest, line)
@@ -252,6 +351,15 @@ function M.new(conn, cfg, log)
     eco.run(function() while self.running do guarded("battery", self.battery_tick); sleep(cfg.batt_interval) end end)
     eco.run(function() while self.running do guarded("collect", self.rf_tick); sleep(cfg.poll) end end)
     eco.run(function() while self.running do guarded("flush", self.flush); sleep(cfg.flush_interval) end end)
+    if self.link_delay() then
+      eco.run(function()
+        sleep(math.min(5, cfg.link_interval))             -- let the first RF tick resolve the device
+        while self.running do guarded("link", self.probe); sleep(self.link_delay()) end
+      end)
+    end
+    if cfg.crash_interval > 0 then
+      eco.run(function() while self.running do guarded("crash", self.crash_tick); sleep(cfg.crash_interval) end end)
+    end
   end
 
   -- Stop the loops; a clean stop flushes once more so up to FLUSH_INTERVAL of history is not

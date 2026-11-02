@@ -55,7 +55,8 @@ conn:auto_reconnect()
 
 -- MUDIMODEMD_COLLECTOR=0 runs everything but the collector (the tests use it to look at one
 -- part of the daemon at a time).
-local c = os.getenv("MUDIMODEMD_COLLECTOR") ~= "0" and collector.new(conn, collector.config(), log) or nil
+local event = tasks.event_writer(conn, (os.getenv("MUDIMODEM_HIST") or "/tmp/mudimodem") .. "/events.jsonl")
+local c = os.getenv("MUDIMODEMD_COLLECTOR") ~= "0" and collector.new(conn, collector.config(), log, event) or nil
 
 -- AT requests get their own connection: its timeout is set per step, and a 65 s AT wait must
 -- not stretch the collector's 8 s calls.
@@ -71,7 +72,6 @@ local tcfg = {
   bus = os.getenv("MUDIMODEM_BUS") or "cpu",
   curl = os.getenv("MUDIMODEM_CURL") or "curl",
 }
-local event = tasks.event_writer(conn, (os.getenv("MUDIMODEM_HIST") or "/tmp/mudimodem") .. "/events.jsonl")
 J.register("version_fetch", function(a) return tasks.version_fetch(a, tcfg) end)
 J.register("lib_check", function() return tasks.library("check", tcfg) end, { single = true })
 J.register("lib_refresh", function() return tasks.library("refresh", tcfg) end, { single = true })

@@ -107,7 +107,9 @@ class CollectorOnEmulatedBus(unittest.TestCase):
                    MUDIMODEM_HIST=hist, MUDIMODEM_HISTORY_PERSIST=persist, MUDIMODEM_HISTORY_CFG=cfg,
                    MUDIMODEM_BATT_SYSFS=os.path.join(d, "sysfs"),
                    MUDIMODEM_BATTLIMIT_PIDF=os.path.join(d, "glbattlimit.pid"),
-                   MUDIMODEM_BATTLIMIT_LIMF=os.path.join(d, "glbattlimit.limit"), **(extra_env or {}))
+                   MUDIMODEM_BATTLIMIT_LIMF=os.path.join(d, "glbattlimit.limit"),
+                   MUDIMODEM_LINK_INTERVAL="0", MUDIMODEM_CRASH_INTERVAL="0")   # their own drills
+        env.update(extra_env or {})
         env.pop("MUDIMODEM_NO_WS_PUSH", None)
         p = subprocess.Popen(ENGINES[engine], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         calls = os.path.join(bus, "calls.jsonl")
@@ -122,6 +124,7 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         return {"calls": jsonl(calls), "notify": jsonl(os.path.join(bus, "notify.jsonl")),
                 "samples": jsonl(os.path.join(hist, "samples.jsonl")),
                 "battery": jsonl(os.path.join(hist, "battery.jsonl")),
+                "events": jsonl(os.path.join(hist, "events.jsonl")),
                 "latest": jsonl(os.path.join(hist, "latest.json")),
                 "batt_latest": jsonl(os.path.join(hist, "battery-latest.json")),
                 "persist": {n: jsonl(os.path.join(persist, n)) for n in
@@ -266,6 +269,71 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         self.assertIn(None, [x[0] for x in rates[2:]], "the counter reset gave one tick without a rate")
         dumps = [c for c in r["calls"] if c["method"] == "dump"]
         self.assertEqual(len(dumps), 1, "the device is looked up per NETDEV_INTERVAL, not per tick")
+
+    def test_eco_link_probe_outage_and_modem_crash(self):
+        """The connectivity probe pings out of the cellular device (GL's own check: ping -I <dev>
+        -c 1) at GL's tracking IPs (`uci get glconfig.general.track_ip`), trying the next target
+        when one is silent. Its result rides on the next sample (ping_ms / ping_lost); two misses in
+        a row after the link worked = one "Offline" event, the first reply after that one "Back
+        online" with the outage's length. A new dump in GL's crash-dump directory = one "Modem
+        crash" event; what was there at start is only remembered."""
+        d = tempfile.mkdtemp(prefix="mm-link-")
+        self.addCleanup(shutil.rmtree, d, True)
+        ok, argv_log, crash = os.path.join(d, "ping-ok"), os.path.join(d, "ping.argv"), os.path.join(d, "crash")
+        os.makedirs(crash)
+        with open(os.path.join(crash, "old.elf"), "w") as f:
+            f.write("an old dump\n")
+        ping, uci = os.path.join(d, "ping.sh"), os.path.join(d, "uci.sh")
+        with open(ping, "w") as f:                    # busybox ping's output, when ping-ok exists
+            f.write('#!/bin/sh\necho "$*" >> %s\nfor a; do ip=$a; done\n'
+                    '[ -f %s ] || { echo "PING $ip ($ip): 56 data bytes"; exit 1; }\n'
+                    'echo "PING $ip ($ip): 56 data bytes"\n'
+                    'echo "64 bytes from $ip: seq=0 ttl=57 time=23.456 ms"\n' % (argv_log, ok))
+        with open(uci, "w") as f:
+            f.write('#!/bin/sh\n[ "$*" = "-q get glconfig.general.track_ip" ] && echo "9.9.9.9 1.0.0.1 bad;ip"\n')
+        os.chmod(ping, 0o755); os.chmod(uci, 0o755)
+        open(ok, "w").close()
+        stop = threading.Event()
+        def script():                                 # up, then 2.5 s without replies, a crash, up
+            t0 = time.monotonic()
+            for at, act in ((2.5, lambda: os.unlink(ok)), (3.5, lambda: open(os.path.join(crash, "new.elf"), "w").close()),
+                            (5.0, lambda: open(ok, "w").close())):
+                while not stop.is_set() and time.monotonic() - t0 < at:
+                    time.sleep(0.05)
+                act()
+        th = threading.Thread(target=script, daemon=True); th.start()
+        self.addCleanup(stop.set)
+        scen = {"modem_status": ct.MODEM_STATUS_410, "network_info": ct.NETWORK_INFO_410,
+                "cell_info": [ct.CELL_INFO_410_SA], "has_ws": True,
+                "network_dump": {"interface": [{"interface": "modem_1_1_2", "proto": "rmnet", "up": True,
+                                                "l3_device": "rmnet_data1"}]}}
+        r = self.run_collector("eco", scen, ticks=40, extra_env={
+            "MUDIMODEM_PING": ping, "MUDIMODEM_UCI": uci, "MUDIMODEM_LINK_INTERVAL": "0.6",
+            "MUDIMODEM_LINK_RETRY": "0.3", "MUDIMODEM_LINK_WAIT": "1", "MUDIMODEM_CRASH_DIR": crash,
+            "MUDIMODEM_CRASH_INTERVAL": "0.3"})
+        self.assertEqual(r["rc"], 0, r["stderr"])
+        with open(argv_log) as f:
+            argv = [x.split() for x in f.read().splitlines()]
+        self.assertEqual(argv[0], ["-I", "rmnet_data1", "-c", "1", "-W", "1", "9.9.9.9"])
+        self.assertEqual({a[-1] for a in argv}, {"9.9.9.9", "1.0.0.1"}, "GL's targets, the malformed one dropped")
+        self.assertIn(["-I", "rmnet_data1", "-c", "1", "-W", "1", "1.0.0.1"], argv, "a silent target -> the next")
+        pings = [s.get("ping_ms") for s in r["samples"] if "ping_ms" in s]
+        lost = [s for s in r["samples"] if s.get("ping_lost")]
+        self.assertGreaterEqual(len(pings), 3)
+        self.assertEqual(set(pings), {23})
+        self.assertGreaterEqual(len(lost), 2)
+        self.assertLess(len(pings) + len(lost), len(r["samples"]), "a probe rides on ONE sample")
+        link = [(e["label"], e["detail"]) for e in r["events"] if e["kind"] == "link"]
+        self.assertEqual([x[0] for x in link], ["Offline", "Back online"])
+        self.assertEqual(link[0][1], "No reply to ping")
+        back = [e for e in r["events"] if e["label"] == "Back online"][0]
+        self.assertTrue(1 <= back["secs"] <= 5, back)
+        self.assertTrue(isinstance(back["t"], int) and back["t"] >= r["events"][0]["t"])
+        crashes = [e for e in r["events"] if e["kind"] == "modem"]
+        self.assertEqual([e["label"] for e in crashes], ["Modem crash"], "the old dump is no event")
+        pushed = [n["data"]["label"] for n in r["notify"] if n.get("name") == "mudimodem.event"]
+        self.assertEqual(sorted(pushed), sorted(e["label"] for e in r["events"]))
+        self.assertIn("link: offline", r["stderr"])
 
     def test_eco_shared_trim_loses_no_line(self):
         """events.jsonl is appended to by the plugin and the watchdog while the daemon trims it:

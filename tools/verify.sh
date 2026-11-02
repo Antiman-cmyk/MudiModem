@@ -180,6 +180,12 @@ if [ -f src/sbin/mudimodemd ]; then
   # own lua + cjson). A JSON null decodes to cjson.null, so `~= nil` = key present.
   ssh -o BatchMode=yes "root@$HOST" 'lua -e "local c=require\"cjson\"; local f=assert(io.open(\"/tmp/mudimodem/latest.json\")); local d=c.decode(f:read(\"*a\")); assert(type(d.signals)==\"table\" and d.rat~=nil and d.cell_id~=nil and d.rsrp~=nil)"' \
     || fail "latest.json is not the 4.10 normalized sample (signals[] / rat / cell_id)"
+  # Connectivity probe (read-only; a ping every 30 s out of the cellular device): after ~40 s it
+  # has run and, on a box with cellular data, sees the link up. Wired-only boxes stay "unknown",
+  # so this only reports.
+  ssh -o BatchMode=yes "root@$HOST" 'for i in 1 2 3 4 5 6 7 8; do ubus call mudimodem health | grep -q "\"link_probes\": [1-9]" && exit 0; sleep 5; done; exit 1' \
+    || echo "   note: no connectivity probe yet (it pings only while the cellular interface is up)"
+  echo "   link: $(ssh -o BatchMode=yes "root@$HOST" 'ubus call mudimodem health | jsonfilter -e "@.link" -e "@.link_lost" -e "@.link_probes"' | tr '\n' ' ')(state, lost, probes)"
   # get_history parses the jsonl (fixtures under a temp HIST dir; ngx-stubbed).
   ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-hist.test.lua' < test/backend-history.test.lua
   ssh -o BatchMode=yes "root@$HOST" 'MUDIMODEM_HIST=/tmp/mmhist-test lua /tmp/mm-hist.test.lua; rc=$?; rm -f /tmp/mm-hist.test.lua; exit $rc' \

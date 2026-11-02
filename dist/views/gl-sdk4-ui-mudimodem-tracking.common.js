@@ -41,15 +41,6 @@ var __mm = (() => {
     });
   }
 
-  // src/web/kit/fmt.js
-  function p2(n) {
-    return (n < 10 ? "0" : "") + n;
-  }
-  function hhmm(t2) {
-    var d = new Date(t2);
-    return p2(d.getHours()) + ":" + p2(d.getMinutes());
-  }
-
   // src/web/locales/zh-cn.js
   var zh_cn_default = {
     "(carrier change)": "（载波变化）",
@@ -89,6 +80,7 @@ var __mm = (() => {
     "Automatic background tests": "后台自动测速",
     "BAND": "频段",
     "BW": "带宽",
+    "Back online": "恢复联网",
     "Backup size": "备份大小",
     "Band": "频段",
     "Band change confirmed": "已确认频段修改",
@@ -116,6 +108,7 @@ var __mm = (() => {
     "Cell scan": "基站扫描",
     "Cell {from} → {to}": "小区 {from} → {to}",
     "Cellular": "蜂窝网络",
+    "Cellular interface down": "蜂窝网络接口未连接",
     "Ch": "信道",
     "Charge blocked (limit)": "充电已暂停（充电上限）",
     "Charge limit not available on this device.": "此设备不支持充电上限。",
@@ -164,6 +157,7 @@ var __mm = (() => {
     "Detail": "详情",
     "Device": "设备",
     "Down": "下载",
+    "Down / Up": "下载 / 上传",
     "Download": "下载",
     "Draining on power": "接电源仍在放电",
     "Each edited band group needs at least one band": "每个修改过的频段组至少要保留一个频段",
@@ -191,6 +185,7 @@ var __mm = (() => {
     "Holding at {pct} %": "保持在 {pct} %",
     "IC Reported Charge": "电量芯片读数",
     "If the auto-revert is still running it will undo this within ~60s - {keep} to make it stick, or {revert} to remove it now.": "如果自动恢复仍在运行，它会在约 60 秒内撤销此修改 - 点击{keep}使其生效，或点击{revert}立即撤销。",
+    "Internet": "互联网",
     "Invert": "反选",
     "Keep": "保留",
     "Keep signal & battery history across reboots": "重启后保留信号和电池历史",
@@ -226,6 +221,7 @@ var __mm = (() => {
     "Mbps up": "Mbps 上传",
     "Model": "型号",
     "Modem": "Modem",
+    "Modem crash": "Modem 崩溃",
     "MudiModem (version unknown)": "MudiModem（版本未知）",
     "Nearby cells": "附近基站",
     "Network": "网络",
@@ -235,6 +231,7 @@ var __mm = (() => {
     "No battery history yet — sampling starts within 20 s.": "还没有电池历史 — 20 秒内开始采样。",
     "No changes": "没有修改",
     "No matches.": "没有匹配项。",
+    "No reply to ping": "ping 无应答",
     "No results yet for this interface. Run a speed test above.": "这个接口还没有结果。请在上方开始测速。",
     "No samples yet. The collector runs on the router and gathers continuously — check back in a minute, or confirm the mudimodem-collectd service is running.": "还没有采样。采集器在路由器上持续运行 — 请稍后再看，或确认 mudimodem-collectd 服务正在运行。",
     "None": "全不选",
@@ -243,9 +240,11 @@ var __mm = (() => {
     "Off under {mode} - 5G selections are not sent (GL clears them under 4G-only). Set the mode to {need} to use them.": "在“{mode}”模式下不生效 - 5G 的选择不会下发（仅 4G 时 GL 会清空它们）。要使用请把模式设为“{need}”。",
     "Off under {mode} - these won't apply. Set the mode to {need} to use them.": "在“{mode}”模式下不生效 - 这些选择不会应用。要使用请把模式设为“{need}”。",
     "Off · current {cur}": "关闭 · 当前 {cur}",
+    "Offline": "断网",
     "On battery": "电池供电",
     "PAUSED": "已暂停",
     "Pin the modem to the cell it is using now - the safest lock target.": "把 Modem 固定在当前使用的基站上 - 最安全的锁定目标。",
+    "Ping": "Ping",
     "RPC helper unavailable": "RPC 不可用",
     "RPC unavailable": "RPC 不可用",
     "RSRP · dBm": "RSRP · dBm",
@@ -309,6 +308,7 @@ var __mm = (() => {
     "The connection dropped while applying, and nothing is pending on the router now - the change did not take, or was already reverted.": "应用时连接中断，且路由器上现在没有待确认的修改 - 修改没有生效，或已被恢复。",
     "The frequency band in use: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter.": "当前使用的频段：n 表示 5G NR，B 表示 LTE。低频覆盖远；高频速度快但覆盖近。",
     "The lock request was cut off by a connection drop and no lock is set - try again.": "锁定请求因连接中断而失败，目前没有设置锁定 - 请重试。",
+    "The modem restarted after a crash; GL saved a dump in /data/vendor/modem_crash_log": "Modem 崩溃后已自动重启；GL 已把转储保存在 /data/vendor/modem_crash_log",
     "The watchdog reverted a lock, but {gl} still remembers it - GL may re-apply it later. Clear it to reconcile.": "看门狗已撤销一次锁定，但 {gl} 仍然记着它 - GL 之后可能会重新应用。请清除以保持一致。",
     "Time": "时间",
     "Too late to keep: the auto-revert had already restored your previous bands. Apply it again if you want it.": "来不及保留了：自动恢复已经还原了之前的频段。如需要请重新应用。",
@@ -345,6 +345,7 @@ var __mm = (() => {
     "Your connection dropped while applying, but the band change ({what}) most likely applied.": "应用时连接中断了，但频段修改（{what}）很可能已经生效。",
     "Your connection dropped while applying, but the {lock} did apply.": "应用时连接中断了，但 {lock} 已经生效。",
     "a tick marks the moment — everything to its right is the radio's answer": "竖线标记操作的时刻 — 它右侧就是无线信号的反应",
+    "after {d} offline": "断网 {d} 后恢复",
     "allowed": "已允许",
     "apply failed": "应用失败",
     "band change": "频段修改",
@@ -379,6 +380,7 @@ var __mm = (() => {
     "modem": "Modem",
     "ms latency": "ms 延迟",
     "newest first": "最新的在前",
+    "no reply": "无应答",
     "nv": "nv",
     "one clock, all three metrics — hover for a slice, click to pin": "同一时间轴上的三个指标 — 悬停查看某一时刻，点击固定",
     "permitted, not active": "允许但未生效",
@@ -452,6 +454,7 @@ var __mm = (() => {
     "≈ {pct} % IC Reported Charge": "约 {pct} %（电量芯片读数）",
     "■ User": "■ 用户",
     "▲ Watchdog": "▲ 看门狗",
+    "◆ Internet / modem": "◆ 互联网 / Modem",
     "○ Network": "○ 网络",
     "⚠ Modem is cell-locked to {lock}, ": "⚠ Modem 已锁定到基站 {lock}，"
   };
@@ -540,6 +543,24 @@ var __mm = (() => {
     return component;
   }
 
+  // src/web/kit/fmt.js
+  function p2(n) {
+    return (n < 10 ? "0" : "") + n;
+  }
+  function hhmm(t2) {
+    var d = new Date(t2);
+    return p2(d.getHours()) + ":" + p2(d.getMinutes());
+  }
+  function dur(secs) {
+    secs = Math.max(0, Math.round(Number(secs) || 0));
+    if (secs < 60) return t("{n} s", { n: secs });
+    var m = Math.floor(secs / 60), s = secs % 60;
+    if (m < 60) return s ? t("{n} min", { n: m }) + " " + t("{n} s", { n: s }) : t("{n} min", { n: m });
+    var h = Math.floor(m / 60);
+    m %= 60;
+    return m ? t("{n} h", { n: h }) + " " + t("{n} min", { n: m }) : t("{n} h", { n: h });
+  }
+
   // src/web/tabs/tracking.js
   var tracking_default = localize(function() {
     "use strict";
@@ -580,6 +601,7 @@ var __mm = (() => {
     var RETRY_BASE_MS = 2e3, RETRY_MAX_MS = 3e4;
     var PADL = 42, PADR = 36, BUS_H = 20, PLOT_H = 230;
     var TP_H = 56;
+    var PING_H = 30;
     var Y_INTERVALS = 4;
     var component = {
       name: "mudimodem-tracking",
@@ -1022,6 +1044,35 @@ var __mm = (() => {
         clock: function(t2) {
           return hhmm(t2);
         },
+        // Event colour on the chart: ours (user) primary, the watchdog's warning, the link and the
+        // modem going wrong error (coming back: success), the derived net ticks a hint.
+        evColor: function(e) {
+          if (e.kind === "user") return "var(--primary)";
+          if (e.kind === "dog") return "var(--warning)";
+          if (e.kind === "link") return e.label === "Back online" ? "var(--success)" : "var(--error)";
+          if (e.kind === "modem") return "var(--error)";
+          return "var(--text-hint)";
+        },
+        // The detail line, in the page's language: the daemon writes English, plus the outage's
+        // length as a number so it can be said here.
+        evDetail: function(e) {
+          if (e.kind === "link" && e.label === "Back online" && e.secs != null)
+            return t("after {d} offline", { d: dur(e.secs) });
+          return e.detail ? t(e.detail) : "";
+        },
+        // The probe result shown for sample `s`: its own, or the latest one up to 40 s before it
+        // (a probe rides on one sample in three).
+        probeNear: function(s) {
+          if (s.ping_ms != null || s.ping_lost) return s;
+          var ss = this.samples;
+          for (var i = ss.length - 1; i >= 0; i--) {
+            var x = ss[i];
+            if (x.t > s.t) continue;
+            if (s.t - x.t > 4e4) return null;
+            if (x.ping_ms != null || x.ping_lost) return x;
+          }
+          return null;
+        },
         freqOf: function(b) {
           return FREQ_N[b];
         },
@@ -1401,6 +1452,50 @@ var __mm = (() => {
             });
             y = tpBot + 10;
           }
+          if (ss.some(function(s) {
+            return s.ping_ms != null || s.ping_lost;
+          })) {
+            var pMax = 0;
+            ss.forEach(function(s) {
+              if (s.ping_ms > pMax) pMax = s.ping_ms;
+            });
+            var pTop = pMax <= 100 ? 100 : pMax <= 250 ? 250 : pMax <= 500 ? 500 : 1e3, pBot = y + PING_H;
+            kids.push(h("text", { attrs: { x: 6, y: y + 9, "font-size": 9, fill: "var(--text-badge)" } }, "PING"));
+            kids.push(h(
+              "text",
+              { attrs: { x: W - PADR + 5, y: y + 9, "font-size": 9, fill: "var(--text-badge)" } },
+              String(pTop)
+            ));
+            kids.push(h("line", { attrs: {
+              x1: PADL,
+              x2: W - PADR,
+              y1: pBot,
+              y2: pBot,
+              stroke: "var(--divider)",
+              "stroke-width": 1
+            } }));
+            var dots = "", miss = "";
+            ss.forEach(function(s) {
+              var x = self.xOf(s.m).toFixed(1);
+              if (s.ping_lost) miss += "M" + x + " " + (y + 2) + "V" + pBot + " ";
+              else if (s.ping_ms != null)
+                dots += "M" + x + " " + (pBot - Math.min(s.ping_ms, pTop) / pTop * (PING_H - 4)).toFixed(1) + "h0 ";
+            });
+            if (dots) kids.push(h("path", { attrs: {
+              fill: "none",
+              stroke: "var(--text-weak)",
+              "stroke-width": 3,
+              "stroke-linecap": "round",
+              d: dots.trim()
+            } }));
+            if (miss) kids.push(h("path", { attrs: {
+              fill: "none",
+              stroke: "var(--error)",
+              "stroke-width": 1.5,
+              d: miss.trim()
+            } }));
+            y = pBot + 10;
+          }
           BUSES.forEach(function(B) {
             kids.push(h("text", { attrs: {
               x: 6,
@@ -1438,7 +1533,7 @@ var __mm = (() => {
           });
           var evTop = plotTop, evBot = y - 7;
           this.winEvents().forEach(function(e) {
-            var col = e.kind === "user" ? "var(--primary)" : e.kind === "dog" ? "var(--warning)" : "var(--text-hint)";
+            var col = self.evColor(e);
             var ex = self.xOf(e.m);
             kids.push(h("line", { attrs: {
               x1: ex.toFixed(1),
@@ -1522,10 +1617,14 @@ var __mm = (() => {
             row("SIM", (s.carrier || "SIM") + " · " + s.slot, "", null)
           ];
           var mbps = function(k) {
-            return k == null ? null : Math.round(k / 100) / 10;
+            return k == null ? "—" : String(Math.round(k / 100) / 10);
           };
+          var extra = [];
           if (s.rx_kbps != null || s.tx_kbps != null)
-            rows.splice(3, 0, row("Down", mbps(s.rx_kbps), "Mbps", null), row("Up", mbps(s.tx_kbps), "Mbps", null));
+            extra.push(row(t("Down / Up"), mbps(s.rx_kbps) + " / " + mbps(s.tx_kbps), "Mbps", null));
+          var p = this.probeNear(s);
+          if (p) extra.push(p.ping_lost ? row("Ping", t("no reply"), "", "poor") : row("Ping", p.ping_ms, "ms", null));
+          rows.splice.apply(rows, [3, 0].concat(extra));
           var kids = [h(
             "div",
             { staticClass: "t" },
@@ -1535,9 +1634,9 @@ var __mm = (() => {
             "div",
             {
               staticClass: "e",
-              staticStyle: { color: near.kind === "user" ? "var(--primary)" : near.kind === "dog" ? "var(--warning-hover,#c4851c)" : "var(--text-weak)" }
+              staticStyle: { color: near.kind === "dog" ? "var(--warning-hover,#c4851c)" : near.kind === "net" ? "var(--text-weak)" : this.evColor(near) }
             },
-            near.label + " — " + near.detail
+            t(near.label) + " — " + this.evDetail(near)
           ));
           kids.push(h("table", rows));
           return h("div", { staticClass: "mmt-tip" }, kids);
@@ -1548,12 +1647,12 @@ var __mm = (() => {
             return e.t <= top;
           })).reverse();
           var rows = evs.map(function(e, i) {
-            var src = { user: "User", dog: "Watchdog", net: "Network" }[e.kind];
+            var src = { user: "User", dog: "Watchdog", net: "Network", link: "Internet", modem: "Modem" }[e.kind];
             return h("tr", { key: i }, [
               h("td", { staticClass: "tm" }, self.clock(e.t)),
               h("td", [h("span", { staticClass: "mmt-chip " + e.kind }, src)]),
               h("td", { staticStyle: { fontWeight: "600", color: "var(--text-title)" } }, e.label),
-              h("td", { staticStyle: { color: "var(--text-weak)" } }, e.detail || "")
+              h("td", { staticStyle: { color: "var(--text-weak)" } }, self.evDetail(e))
             ]);
           });
           return h("div", { staticClass: "mmt-card" }, [
@@ -1625,6 +1724,7 @@ var __mm = (() => {
             h("span", { staticClass: "mmt-lg" }, "■ User"),
             h("span", { staticClass: "mmt-lg" }, "▲ Watchdog"),
             h("span", { staticClass: "mmt-lg" }, "○ Network"),
+            h("span", { staticClass: "mmt-lg" }, "◆ Internet / modem"),
             h("span", "a tick marks the moment — everything to its right is the radio's answer")
           ]);
           return h("div", { staticClass: "mmt" }, [
@@ -1634,7 +1734,7 @@ var __mm = (() => {
         },
         injectStyle: function() {
           if (typeof document === "undefined" || document.getElementById(this.styleId)) return;
-          var css = ".mmt{color:var(--text-regular);font-variant-numeric:tabular-nums}.mmt-card{background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);margin-bottom:11px}.mmt-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 14px 10px}.mmt-title{font-size:14px;font-weight:600;color:var(--text-title)}.mmt-hint{font-size:11.5px;color:var(--text-badge)}.mmt-sp{flex:1}.mmt-crumb{background:none;border:0;font:inherit;font-size:12px;color:var(--primary);cursor:pointer;padding:0}.mmt-seg{display:inline-flex;border:1px solid var(--border);border-radius:3px;overflow:hidden}.mmt-seg button{font:inherit;font-size:11.5px;background:transparent;border:0;padding:5px 12px;cursor:pointer;color:var(--text-weak);border-right:1px solid var(--border)}.mmt-seg button:last-child{border-right:0}.mmt-seg button.on{background:var(--primary);color:#fff;font-weight:600}.mmt-live{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--success);cursor:pointer;background:none;border:1px solid var(--border);border-radius:3px;padding:5px 10px}.mmt-live .d{width:7px;height:7px;border-radius:50%;background:var(--success)}.mmt-live.off{color:var(--text-badge)}.mmt-live.off .d{background:var(--text-hint)}.mmt-held{font-size:11px;color:var(--text-badge)}.mmt-note{font-size:11.5px;color:var(--warning-hover,#c4851c);padding:0 14px 8px}.mmt-lanes{position:relative;padding:2px 0 6px;cursor:crosshair}.mmt-lanes svg{display:block;width:100%;overflow:visible}.mmt-foot{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:8px 14px 11px;border-top:1px solid var(--divider);font-size:11px;color:var(--text-badge)}.mmt-lg{display:inline-flex;align-items:center;gap:5px}.mmt-tip{position:absolute;top:26px;left:8px;pointer-events:none;z-index:5;background:var(--background-card);border:1px solid var(--border);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.12);padding:8px 10px;width:184px;height:158px;overflow:hidden}.mmt-tip .t{font-size:10.5px;color:var(--text-badge);margin-bottom:5px}.mmt-tip .e{font-size:11px;font-weight:600;margin:-1px 0 5px;padding-bottom:5px;border-bottom:1px solid var(--divider);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mmt-tip table{border-collapse:collapse;width:100%}.mmt-tip td{padding:1px 0;font-size:11.5px}.mmt-tip td.k{color:var(--text-badge);font-size:10px;text-transform:uppercase;letter-spacing:.04em;padding-right:10px}.mmt-tip td.v{font-weight:600;color:var(--text-title);text-align:right;white-space:nowrap}.mmt-empty{padding:30px 14px;text-align:center;color:var(--text-hint);font-size:12.5px;line-height:1.6}.mmt-log{width:100%;border-collapse:collapse}.mmt-log th{font-size:10px;font-weight:500;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge);text-align:left;padding:7px 14px 6px;border-bottom:1px solid var(--divider)}.mmt-log td{font-size:12px;padding:6px 14px;border-bottom:1px solid var(--divider);color:var(--text-regular)}.mmt-log td.tm{font-family:var(--mono,ui-monospace,monospace);font-size:11px;color:var(--text-weak);white-space:nowrap}.mmt-chip{display:inline-block;font-size:10px;font-weight:600;border-radius:2px;padding:1px 6px}.mmt-chip.user{background:var(--primary-background,#eef1fe);color:var(--primary)}.mmt-chip.dog{background:var(--warning-background,#fef6e9);color:var(--warning-hover,#c4851c)}.mmt-chip.net{background:var(--background-title,#f2f2f7);color:var(--text-badge)}@media(max-width:720px){.mmt-hint{display:none}}";
+          var css = ".mmt{color:var(--text-regular);font-variant-numeric:tabular-nums}.mmt-card{background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);margin-bottom:11px}.mmt-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 14px 10px}.mmt-title{font-size:14px;font-weight:600;color:var(--text-title)}.mmt-hint{font-size:11.5px;color:var(--text-badge)}.mmt-sp{flex:1}.mmt-crumb{background:none;border:0;font:inherit;font-size:12px;color:var(--primary);cursor:pointer;padding:0}.mmt-seg{display:inline-flex;border:1px solid var(--border);border-radius:3px;overflow:hidden}.mmt-seg button{font:inherit;font-size:11.5px;background:transparent;border:0;padding:5px 12px;cursor:pointer;color:var(--text-weak);border-right:1px solid var(--border)}.mmt-seg button:last-child{border-right:0}.mmt-seg button.on{background:var(--primary);color:#fff;font-weight:600}.mmt-live{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--success);cursor:pointer;background:none;border:1px solid var(--border);border-radius:3px;padding:5px 10px}.mmt-live .d{width:7px;height:7px;border-radius:50%;background:var(--success)}.mmt-live.off{color:var(--text-badge)}.mmt-live.off .d{background:var(--text-hint)}.mmt-held{font-size:11px;color:var(--text-badge)}.mmt-note{font-size:11.5px;color:var(--warning-hover,#c4851c);padding:0 14px 8px}.mmt-lanes{position:relative;padding:2px 0 6px;cursor:crosshair}.mmt-lanes svg{display:block;width:100%;overflow:visible}.mmt-foot{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:8px 14px 11px;border-top:1px solid var(--divider);font-size:11px;color:var(--text-badge)}.mmt-lg{display:inline-flex;align-items:center;gap:5px}.mmt-tip{position:absolute;top:26px;left:8px;pointer-events:none;z-index:5;background:var(--background-card);border:1px solid var(--border);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.12);padding:8px 10px;width:184px;height:184px;overflow:hidden}.mmt-tip .t{font-size:10.5px;color:var(--text-badge);margin-bottom:5px}.mmt-tip .e{font-size:11px;font-weight:600;margin:-1px 0 5px;padding-bottom:5px;border-bottom:1px solid var(--divider);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mmt-tip table{border-collapse:collapse;width:100%}.mmt-tip td{padding:1px 0;font-size:11.5px}.mmt-tip td.k{color:var(--text-badge);font-size:10px;text-transform:uppercase;letter-spacing:.04em;padding-right:10px}.mmt-tip td.v{font-weight:600;color:var(--text-title);text-align:right;white-space:nowrap}.mmt-empty{padding:30px 14px;text-align:center;color:var(--text-hint);font-size:12.5px;line-height:1.6}.mmt-log{width:100%;border-collapse:collapse}.mmt-log th{font-size:10px;font-weight:500;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge);text-align:left;padding:7px 14px 6px;border-bottom:1px solid var(--divider)}.mmt-log td{font-size:12px;padding:6px 14px;border-bottom:1px solid var(--divider);color:var(--text-regular)}.mmt-log td.tm{font-family:var(--mono,ui-monospace,monospace);font-size:11px;color:var(--text-weak);white-space:nowrap}.mmt-chip{display:inline-block;font-size:10px;font-weight:600;border-radius:2px;padding:1px 6px}.mmt-chip.user{background:var(--primary-background,#eef1fe);color:var(--primary)}.mmt-chip.dog{background:var(--warning-background,#fef6e9);color:var(--warning-hover,#c4851c)}.mmt-chip.net{background:var(--background-title,#f2f2f7);color:var(--text-badge)}.mmt-chip.link,.mmt-chip.modem{background:var(--error-background);color:var(--error-hover)}@media(max-width:720px){.mmt-hint{display:none}}";
           var el = document.createElement("style");
           el.id = this.styleId;
           el.textContent = css;

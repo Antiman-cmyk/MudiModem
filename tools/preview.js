@@ -60,7 +60,10 @@ const history = [];
 for (let i = 90; i >= 0; i--) {
   const w = Math.sin(i / 7) * 6;
   history.push(Object.assign({}, SAMPLE, { t: NOW - i * 10000, rsrp: Math.round(-101 + w), sinr: Math.round(4 + w / 2),
-    rsrq: Math.round(-14 + w / 3), signals: [Object.assign({}, SAMPLE.signals[0], { rsrp: Math.round(-101 + w) })] }));
+    rsrq: Math.round(-14 + w / 3), signals: [Object.assign({}, SAMPLE.signals[0], { rsrp: Math.round(-101 + w) })],
+    rx_kbps: i === 90 ? undefined : Math.round(24000 + w * 3000), tx_kbps: i === 90 ? undefined : Math.round(1800 + w * 200) }));
+  const h = history[history.length - 1];
+  if (i % 3 === 0) { if (i >= 30 && i <= 36) h.ping_lost = true; else h.ping_ms = Math.round(38 + Math.abs(w) * 4); }
 }
 const WS = {
   "cellular.modems_info": { modems: [{ bus: "cpu", name: "RG650V-NA", type: 0,
@@ -86,7 +89,10 @@ const RPC = {
   get_lock: { lock: { l4g: { locked: false }, l5g: { locked: false }, save_ctrl: {} }, gl: { locked: false, tower: {} },
               serving: { rat: "NR5G-SA", pci: 516, arfcn: 127490, band: 71, cell_id: "187461035", source: "collector" },
               stale: false, meta: { slot: 1, sub_id: 1, plmn: "310260", plmn_matched: true } },
-  get_history: { now: NOW, samples: history, events: [{ t: NOW - 300000, kind: "user", label: "Bands applied", detail: "SA n71" }] },
+  get_history: { now: NOW, samples: history, events: [
+    { t: NOW - 600000, kind: "user", label: "Bands applied", detail: "SA n71" },
+    { t: NOW - 350000, kind: "link", label: "Offline", detail: "No reply to ping" },
+    { t: NOW - 290000, kind: "link", label: "Back online", detail: "after 70 s", secs: 70 }] },
   get_battery_history: { now: NOW, samples: [] },
   change_status: flag("pending")
     ? { now: nowS, pending: { kind: "bands", slot: 1, deadline: nowS + 42, window: 60, applied: { sa: "41:71", mode: "AUTO" } } }
@@ -194,7 +200,7 @@ async function shot(browser, o) {
     await browser.close();
     // A string "needs translation" when it has a word of 2+ Latin letters that is not a
     // technical token, and the page did not translate it (it reached h() as English).
-    const TECH = /^(RSRP|RSRQ|SINR|RSSI|PCI|ARFCN|EARFCN|SCS|SA|NSA|LTE|NR|NR5G|NR5G-SA|NR5G-NSA|5G|4G|AT|ATI|SIM|ms|MHz|kHz|dBm|dB|mA|mV|V|Mbps|ID|TAC|CA|PCC|SCC\d*|B\d+|n\d+|IMSI|ICCID|MCC|MNC|PLMN|AMBR|GL|eMMC|T-Mobile|AT&T|USB|API|JSON|OK|Wi-Fi|GitHub|Cloudflare|Modem|MudiModem|WAN|NV|nv|VPN|Tailscale|ChiliApple|CPU|RAT|RG650V-NA|RG650V-EU|ssh|root|router|usr|sbin|mudimodem-revert|mudimodem-collectd|panic|unknown|Ch|BW|KiB|MiB|GiB)$/;
+    const TECH = /^(RSRP|RSRQ|SINR|RSSI|PCI|ARFCN|EARFCN|SCS|SA|NSA|LTE|NR|NR5G|NR5G-SA|NR5G-NSA|5G|4G|AT|ATI|SIM|ms|MHz|kHz|dBm|dB|mA|mV|V|Mbps|ID|TAC|CA|PCC|SCC\d*|B\d+|n\d+|IMSI|ICCID|MCC|MNC|PLMN|AMBR|GL|eMMC|T-Mobile|AT&T|USB|API|JSON|OK|Wi-Fi|GitHub|Cloudflare|Modem|MudiModem|WAN|NV|nv|VPN|Tailscale|ChiliApple|CPU|RAT|RG650V-NA|RG650V-EU|ssh|root|router|usr|sbin|mudimodem-revert|mudimodem-collectd|panic|unknown|Ch|BW|KiB|MiB|GiB|ping|Ping|PING|MBPS)$/;
     // AT-library entries are community data (English by design), never page copy.
     const lib = JSON.parse(fs.readFileSync(path.join(ROOT, "src/at-library.snapshot.json"), "utf8"));
     const libText = new Set();

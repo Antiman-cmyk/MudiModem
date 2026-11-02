@@ -44,6 +44,12 @@ part of R2 and the first step of R3), plus the fixes it surfaced.
 - **Tracking has a throughput lane:** download and upload rate of the cellular link under the
   signal chart, from the interface's byte counters every RF tick (no extra modem commands), with a
   gap after a reconnect or SIM switch. The readout shows the current Down / Up rate.
+- **Tracking shows when the internet stopped, not just the signal.** Every 30 s the router pings
+  out of the cellular interface, at the tracking IPs set on GL's own Multi-WAN page (the same
+  check GL itself uses). A ping lane shows the round trip and every miss; losing the link records
+  "Offline" and getting it back "Back online, after 3 min 20 s offline" in the event log.
+- **Modem crashes are logged.** When GL saves a modem crash dump (the modem restarted on its own),
+  Tracking records a "Modem crash" event at that time.
 - **Chinese:** the whole Modem page is available in Simplified Chinese and follows GL's language
   setting (switching GL's language switches the page). Technical terms (RSRP, n71, AT commands)
   stay as they are; the community AT library stays English.

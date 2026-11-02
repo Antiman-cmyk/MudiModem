@@ -117,7 +117,53 @@ test('the throughput lane appears only with throughput data, and the readout sho
   assert.strictEqual(paths.length, 2, 'one down + one up line');
   vm.pinnedT = withTp[withTp.length - 1].t;
   const tip = textOf(vm.sliceReadout(h));
-  assert.match(tip, /Down/); assert.match(tip, /4 Mbps/); assert.match(tip, /0\.3 Mbps/);
+  assert.match(tip, /Down \/ Up/); assert.match(tip, /4 \/ 0\.3 Mbps/);
+});
+
+test('the ping lane: dots for replies, error ticks for misses, the nearest probe in the readout', () => {
+  const c = loadChunk();
+  const plain = makeVm(c, { samples: seedSamples(), events: [], winW: 60 });
+  assert.doesNotMatch(textOf(c.render.call(plain, h)), /PING/, 'no lane without probe data');
+  const ss = seedSamples();
+  ss.forEach((x, i) => { if (i % 3 === 0) x.ping_ms = 20 + i; });
+  ss[4].ping_lost = true; delete ss[4].ping_ms;
+  ss[1].t = ss[0].t + 10000;                              // probes ride on one sample in three
+  const vm = makeVm(c, { samples: ss, events: [], winW: 60 });
+  const tree = c.render.call(vm, h);
+  assert.match(textOf(tree), /PING/);
+  const paths = walk(tree).filter((n) => n.tag === 'path' && n.data.attrs);
+  const dots = paths.filter((n) => n.data.attrs['stroke-linecap'] === 'round' && n.data.attrs['stroke-width'] === 3);
+  const miss = paths.filter((n) => n.data.attrs.stroke === 'var(--error)' && n.data.attrs['stroke-width'] === 1.5);
+  assert.strictEqual(dots.length, 1, 'all replies in ONE path');
+  assert.strictEqual(miss.length, 1, 'all misses in ONE path');
+  assert.strictEqual((miss[0].data.attrs.d.match(/M/g) || []).length, 1);
+  assert.ok((dots[0].data.attrs.d.match(/M/g) || []).length >= 3);
+  vm.pinnedT = ss[1].t;                                   // no probe of its own: the one before it
+  assert.match(textOf(vm.sliceReadout(h)), /Ping\s*20 ms/);
+  vm.pinnedT = ss[4].t;
+  assert.match(textOf(vm.sliceReadout(h)), /no reply/);
+  assert.strictEqual(vm.probeNear({ t: ss[0].t - 1 }), null, 'never a probe from after the sample');
+});
+
+test('link and modem events: colours, sources, the outage length in the page language', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const events = [
+    { t: now - 300000, kind: 'link', label: 'Offline', detail: 'No reply to ping', from: now - 310000 },
+    { t: now - 100000, kind: 'link', label: 'Back online', detail: 'after 200 s', secs: 200 },
+    { t: now - 50000, kind: 'modem', label: 'Modem crash', detail: 'x' },
+  ];
+  const vm = makeVm(c, { samples: seedSamples(), events: events, winW: 60 });
+  assert.strictEqual(vm.evColor(events[0]), 'var(--error)');
+  assert.strictEqual(vm.evColor(events[1]), 'var(--success)');
+  assert.strictEqual(vm.evColor(events[2]), 'var(--error)');
+  assert.strictEqual(vm.evDetail(events[1]), 'after 3 min 20 s offline');
+  assert.strictEqual(vm.evDetail({ kind: 'link', label: 'Back online', secs: 3725 }), 'after 1 h 2 min offline');
+  assert.strictEqual(vm.evDetail(events[0]), 'No reply to ping');
+  const log = textOf(vm.renderLog(h));
+  assert.match(log, /Internet/); assert.match(log, /Modem crash/); assert.match(log, /after 3 min 20 s offline/);
+  const src = fs.readFileSync(SRC, 'utf8');
+  assert.match(src, /\.mmt-chip\.link,\.mmt-chip\.modem\{/);
 });
 
 test('renders one overlaid plot (RSRP/SINR/RSRQ) + three buses + a derived handover tick', () => {

@@ -117,8 +117,10 @@ awareness. The collector adds `rx_kbps` / `tx_kbps`: the cellular data device's 
 previous RF tick, from `/sys/class/net/<dev>/statistics/{rx,tx}_bytes`, the device re-resolved from
 `network.interface dump` (the non-`_6` `proto: rmnet` interface's `l3_device`) at most once a
 minute; absent on the first tick, when no cellular interface exists, and across a device change or a
-counter reset (reconnect). Written to `/tmp/mudimodem/samples.jsonl` + `latest.json` and pushed as
-`mudimodem.collect`.
+counter reset (reconnect). The connectivity probe's result rides on the first sample after it:
+`ping_ms` (round trip, integer ms) or `ping_lost: true` (no target answered); about one sample in
+three carries one (§5, connectivity). Written to `/tmp/mudimodem/samples.jsonl` + `latest.json` and
+pushed as `mudimodem.collect`.
 
 ## 4. GL web RPC used by MudiModem (undotted `modem.*`, browser- or glc-callable)
 
@@ -186,6 +188,28 @@ counter reset (reconnect). Written to `/tmp/mudimodem/samples.jsonl` + `latest.j
   mudimodemd's AT queue, `src/lib/mudimodemd/atq.lua`; the plugin's `at_console` forwards to it).
 - `cell_info` failure reply: `{"ret": <code>, "resp": "<text>"}` and no `network_type`
   (handler @0x85dc–0x8624) — what `cellular_compat.cell_info_failed` keys on.
+- **Connectivity: GL already tracks it, we keep the history.** 🟢 GL's multi-WAN (`kmwan`, a
+  kernel module + `etc/init.d/kmwan`) tracks every WAN member, the modem's included:
+  `lib/functions/modem.sh generate_kmwan_config` adds the modem interface as a `passive` member
+  whose `tracks` are `ping,<ip>` for each `glconfig.general.track_ip` (the "tracking IP" list of
+  GL's Multi-WAN page, rpc `kmwan` `track_ipv4`; per-region defaults in
+  `etc/uci-defaults/15_fix_glconfig_track_ip`: 1.1.1.1, 8.8.8.8, 208.67.222.222/220.220, or
+  Alibaba/Tencent DNS when `country_code` is CN). The verdict is a boolean per interface in
+  `/proc/gl-kmwan/config` (`<iface>:<status>` lines, as `usr/lib/lua/gl/kmwan.lua` parses them);
+  no latency, no history. GL's own modem check (`__check_modem_kmwan_network`) is
+  `/bin/ping -I <data ifname> -c 1 -W 1 <ip>` over each tracking IP until one answers.
+  mudimodemd's probe (`src/lib/mudimodemd/link.lua`) does exactly that — the cellular
+  `l3_device`, GL's tracking IPs (up to 3), `-W 2` — every 30 s, every 10 s while failing; two
+  misses in a row after the link was seen working = an `Offline` event (kind `link`), the next
+  reply `Back online` with `secs`. The probe leaves the box only over the cellular device, so it
+  measures that link even while wired WAN carries the traffic. ~1 KB of ICMP per minute.
+- **Modem crash dumps** 🟢: `/etc/init.d/gl_check_crash` (START=99) runs
+  `/usr/bin/check_modem_crash.sh` ONLY when `AT+QCFG="modemrstlevel"` and `"aprstlevel"` are both
+  1 (the modem restarts on its own instead of taking the AP down); it then enables remoteproc
+  coredumps and, every 60 s, moves `/data/vendor/ramdump/*` into a freshly re-created
+  `/data/vendor/modem_crash_log/`. mudimodemd lists that directory once a minute: a changed
+  listing = one `Modem crash` event (kind `modem`); the first look after boot only remembers it
+  (`/tmp/mudimodem/crash-seen`). Without the directory (other reset levels) there is no event.
 - `quec_battery` (START=04) actively manages `vreg/charge_en/hiz_mode` on the same sysfs
   nodes `glbattlimit` writes. Read in the binary: `thermal_battery_state_change →
   set_sgm41542s_func` writes `vreg = full_volt_mv*1000` — **4180 mV when warm, charge
@@ -248,6 +272,10 @@ Settled from the image (second pass, 2026-09-02):
    next scan someone runs on a box confirms, and the first Apply / Revert now on a box after
    3.0 (the daemon arming the watchdog; restore-now --reconcile clearing GL's store) — both
    drilled end to end in emulation (`test/change-emu.test.py`).
+8. The connectivity probe on a box: `ping -I <rmnet_dataN>` from mudimodemd answers like GL's
+   own check (`ubus call mudimodem health` → `link: "up"`, `link_probes` growing, `link_lost`
+   near 0), and the names a real modem crash leaves in `/data/vendor/modem_crash_log/`
+   (any change to the listing counts, so the names only matter for the docs).
 
 Closed by binary analysis (was "needs `ubus -v list`"): **band config has no dotted ubus
 object to call directly** — `get/set_band_config` are in-process C functions reached through
