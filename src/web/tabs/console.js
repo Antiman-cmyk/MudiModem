@@ -21,7 +21,7 @@
 // component — so anything that must outlive a tab switch (the transcript,
 // the command history, the once-per-page library status) lives in STORE,
 // bounded, not in the instance.
-module.exports = (function () {
+export default (function () {
   var HISTORY_MAX = 100;
   var STORE = {
     // Shared BY REFERENCE with every instance's `lines` / `history` (data()

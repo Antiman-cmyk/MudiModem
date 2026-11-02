@@ -16,7 +16,7 @@
 // user-initiated calls (run, schedule save, clear) stay on $rpcRequest.
 //
 // Vue is runtime-only here too: render(h) only, never template:.
-module.exports = (function () {
+export default (function () {
   "use strict";
 
   var IFACES = [["cellular", "Cellular"], ["wired", "Wired WAN"]];

@@ -3,11 +3,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
-const SRC = path.join(__dirname, '..', 'src', 'views', 'mudimodem-battery.js');
+const SRC = path.join(__dirname, '..', 'src', 'web', 'tabs', 'battery.js');          // source (static checks)
+const CHUNK = path.join(__dirname, '..', 'dist', 'views', 'gl-sdk4-ui-mudimodem-battery.common.js');  // what ships (eval)
 
 function loadChunk() {
   const module = { exports: {} };   // eslint-disable-line no-unused-vars
-  return eval(fs.readFileSync(SRC, 'utf8'));
+  return eval(fs.readFileSync(CHUNK, 'utf8'));
 }
 function makeVm(c, over) {
   const vm = Object.assign({}, c.data());

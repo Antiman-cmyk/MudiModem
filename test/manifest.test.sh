@@ -7,7 +7,7 @@ recs() { sed -e 's/#.*$//' -e '/^[[:space:]]*$/d' manifest.txt; }
 
 # Repo files that are deliberately NOT shipped (dev-box tools). Anything else under src/ or tools/
 # must be in the manifest — a new file nobody listed would silently never reach the router.
-UNSHIPPED="tools/build.sh tools/deploy.sh tools/verify.sh tools/test-local.sh tools/firmware.sh tools/emu.sh tools/preview.js"
+UNSHIPPED="tools/build.sh tools/build-web.mjs tools/deploy.sh tools/verify.sh tools/test-local.sh tools/firmware.sh tools/emu.sh tools/preview.js"
 
 seen_dest=""; seen_svc=""; n=0
 recs | {
@@ -47,8 +47,9 @@ recs | {
   done
 }
 
-for f in $(git ls-files src tools 2>/dev/null || find src tools -type f); do
+for f in $(git ls-files src tools dist 2>/dev/null || find src tools dist -type f); do
   case " $UNSHIPPED " in *" $f "*) continue ;; esac
+  case "$f" in src/web/*) continue ;; esac   # page sources: built into dist/views (tools/build-web.mjs)
   case "$f" in *.pyc|*/__pycache__/*) continue ;; esac
   grep -qE "^(file|gz|cache|default) +$f " manifest.txt || fail "$f is neither in manifest.txt nor in UNSHIPPED"
 done

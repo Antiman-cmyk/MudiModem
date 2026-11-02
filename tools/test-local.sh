@@ -34,6 +34,9 @@ run() { local name="$1"; shift
   if "$@" > "$T/out.txt" 2>&1; then echo "PASS  $name"; else echo "FAIL  $name"; tail -n 12 "$T/out.txt" | sed 's/^/      /'; rc=1; fi; }
 echo "== python =="
 for f in test/*.test.py test/test_collectd.py; do run "$f" env -u MUDIMODEM_CURL python3 "$f"; done
+echo "== page build (src/web -> dist/views, esbuild) =="
+[ -x node_modules/.bin/esbuild ] || npm ci --no-audit --no-fund >/dev/null 2>&1 || echo "npm ci failed (needs the npm registry once)"
+run "dist/views matches a fresh build of src/web" node tools/build-web.mjs --check
 echo "== node =="
 for f in test/*.test.js; do run "$f" node --test --test-reporter=tap "$f"; done
 if [ -f "${MM_ROOTFS:-firmware/rootfs}/www/theme/base.css" ] && node -e 'require("playwright")' 2>/dev/null; then

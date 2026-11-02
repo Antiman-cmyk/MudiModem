@@ -17,3 +17,4 @@ firmware/*
 
 # Scratch dump older copies of reference/4.10/re-tools/strrefs.py wrote to the cwd.
 seg.bin
+node_modules/

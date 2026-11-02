@@ -23,7 +23,7 @@
 // partial-window stretch, per-lane value+observed range, richer hover readout
 // with sample dots, binary-search nearest sample, stale-fetch ignore, frozen
 // sample arrays. Data plane and chargeState model are unchanged.
-module.exports = (function () {
+export default (function () {
   "use strict";
 
   // Four lanes stacked on ONE shared x-axis — deliberately NOT the Tracking

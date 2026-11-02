@@ -31,7 +31,9 @@
 // the strip's "History ->". User/watchdog events for that timeline are persisted
 // server-side by the backend (set_bands/confirm/revert_now) + the watchdog, so
 // nothing is recorded here.
-module.exports = {
+import { loadChunk } from "../kit/chunks.js";
+
+export default {
   name: "mudimodem",
 
   data() {
@@ -374,19 +376,15 @@ module.exports = {
 
     // Open the in-page Tracking tab, lazy-loading its chunk on first use.
     openTracking() { this.tab = "tracking"; this.loadTracking(); },
-    // Fetch + eval the tracking chunk the same way the SPA's route loader does
-    // (axios GET, then `eval` with `module` in scope → the component object).
+    // Fetch + evaluate the tracking chunk the way the SPA's route loader does (kit/chunks.js).
     // Cached on the instance; a failed load shows a message and can be retried.
     loadTracking() {
       var self = this;
       if (this.trackingComp || this.trackingLoading) return;
       if (typeof window === "undefined" || !window.$axios) return;
       this.trackingLoading = true; this.trackingErr = "";
-      window.$axios.get("/views/gl-sdk4-ui-mudimodem-tracking.common.js?_t=" + Date.now())
-        .then(function (res) {
-          var module = { exports: {} };            // eslint-disable-line no-unused-vars
-          var comp = eval(res.data);               // chunk is `module.exports = {...}`
-          if (!comp || typeof comp.render !== "function") throw new Error("bad chunk");
+      loadChunk("tracking")
+        .then(function (comp) {
           self.trackingComp = comp; self.trackingLoading = false;
         })
         .catch(function (e) {
@@ -401,11 +399,8 @@ module.exports = {
       if (this.consoleComp || this.consoleLoading) return;
       if (typeof window === "undefined" || !window.$axios) return;
       this.consoleLoading = true; this.consoleErr = "";
-      window.$axios.get("/views/gl-sdk4-ui-mudimodem-console.common.js?_t=" + Date.now())
-        .then(function (res) {
-          var module = { exports: {} };            // eslint-disable-line no-unused-vars
-          var comp = eval(res.data);               // chunk is `module.exports = {...}`
-          if (!comp || typeof comp.render !== "function") throw new Error("bad chunk");
+      loadChunk("console")
+        .then(function (comp) {
           self.consoleComp = comp; self.consoleLoading = false;
         })
         .catch(function (e) {
@@ -421,11 +416,8 @@ module.exports = {
       if (this.speedtestComp || this.speedtestLoading) return;
       if (typeof window === "undefined" || !window.$axios) return;
       this.speedtestLoading = true; this.speedtestErr = "";
-      window.$axios.get("/views/gl-sdk4-ui-mudimodem-speedtest.common.js?_t=" + Date.now())
-        .then(function (res) {
-          var module = { exports: {} };            // eslint-disable-line no-unused-vars
-          var comp = eval(res.data);
-          if (!comp || typeof comp.render !== "function") throw new Error("bad chunk");
+      loadChunk("speedtest")
+        .then(function (comp) {
           self.speedtestComp = comp; self.speedtestLoading = false;
         })
         .catch(function (e) {
@@ -441,11 +433,8 @@ module.exports = {
       if (this.batteryComp || this.batteryLoading) return;
       if (typeof window === "undefined" || !window.$axios) return;
       this.batteryLoading = true; this.batteryErr = "";
-      window.$axios.get("/views/gl-sdk4-ui-mudimodem-battery.common.js?_t=" + Date.now())
-        .then(function (res) {
-          var module = { exports: {} };            // eslint-disable-line no-unused-vars
-          var comp = eval(res.data);               // chunk is `module.exports = {...}`
-          if (!comp || typeof comp.render !== "function") throw new Error("bad chunk");
+      loadChunk("battery")
+        .then(function (comp) {
           self.batteryComp = comp; self.batteryLoading = false;
         })
         .catch(function (e) {

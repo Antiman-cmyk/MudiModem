@@ -28,11 +28,12 @@ file    src/installer/mudimodem-install   /usr/lib/mudimodem/mudimodem-install  
 file    manifest.txt                      /usr/lib/mudimodem/manifest.txt        0644
 
 # Web payload (served from /usr/share/mudimodem/www by the gl-conf.d alias) + menu entries.
-gz      src/views/mudimodem.js            /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem.common.js.gz            0644
-gz      src/views/mudimodem-tracking.js   /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-tracking.common.js.gz   0644
-gz      src/views/mudimodem-console.js    /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-console.common.js.gz    0644
-gz      src/views/mudimodem-speedtest.js  /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-speedtest.common.js.gz  0644
-gz      src/views/mudimodem-battery.js    /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz    0644
+# The chunks are BUILT from src/web by tools/build-web.mjs and committed under dist/.
+gz      dist/views/gl-sdk4-ui-mudimodem.common.js /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem.common.js.gz            0644
+gz      dist/views/gl-sdk4-ui-mudimodem-tracking.common.js /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-tracking.common.js.gz   0644
+gz      dist/views/gl-sdk4-ui-mudimodem-console.common.js /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-console.common.js.gz    0644
+gz      dist/views/gl-sdk4-ui-mudimodem-speedtest.common.js /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-speedtest.common.js.gz  0644
+gz      dist/views/gl-sdk4-ui-mudimodem-battery.common.js /usr/share/mudimodem/www/views/gl-sdk4-ui-mudimodem-battery.common.js.gz    0644
 cache   src/at-library.snapshot.json      /usr/share/mudimodem/www/mudimodem/at-library.json.gz                       0644
 file    src/nginx/mudimodem.conf          /etc/nginx/gl-conf.d/mudimodem.conf             0644
 file    src/menu/mudimodem.json           /usr/share/oui/menu.d/mudimodem.json            0644

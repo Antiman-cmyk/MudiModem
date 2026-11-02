@@ -7,7 +7,7 @@
 //   node tools/preview.js --matrix            every tab x {desktop, phone} x {default, dark}
 //
 // What is real: GL's theme CSS (from firmware/rootfs, tools/firmware.sh), Vue 2.6.12 runtime
-// (fetched once into build/.cache with `npm pack`), the chunk files from src/views loaded by
+// (fetched once into build/.cache with `npm pack`), the BUILT chunks from dist/views loaded by
 // eval exactly as GL's SPA does (lazy tab chunks through a fake $axios.get). What is fake: the
 // /ws status (cellular.* + mudimodem.collect) and /rpc replies — FIXTURE below. A page error,
 // an uncaught exception or a horizontal page scroll fails the run.
@@ -92,12 +92,9 @@ const RPC = {
   get_speedtest_history: { results: [] }, get_speedtest_schedule: { enabled: false, interval_seconds: 21600 },
   get_speedtest_status: { running: false }, get_battlimit: { enabled: false, limit_gui: 80, state: "off" }
 };
-function chunk(name) { return fs.readFileSync(path.join(ROOT, "src/views", name), "utf8"); }
+function chunk(name) { return fs.readFileSync(path.join(ROOT, "dist/views", name), "utf8"); }
 const CHUNKS = {};
-for (const f of fs.readdirSync(path.join(ROOT, "src/views"))) {
-  const m = f.match(/^mudimodem-(.+)\.js$/);
-  if (m) CHUNKS["/views/gl-sdk4-ui-mudimodem-" + m[1] + ".common.js"] = chunk(f);
-}
+for (const f of fs.readdirSync(path.join(ROOT, "dist/views"))) CHUNKS["/views/" + f] = chunk(f);
 CHUNKS["/mudimodem/at-library.json"] = JSON.parse(fs.readFileSync(path.join(ROOT, "src/at-library.snapshot.json"), "utf8"));
 
 function page(theme) {
@@ -124,7 +121,7 @@ html,body{margin:0;background:var(--background-content);color:var(--text-regular
   Vue.prototype.$store = { getters: { moduleStatus: function (n) { return WS[n] || {}; } }, state: {} };
   Vue.prototype.$t = function (k) { return k; };
   var module = { exports: {} };
-  var comp = eval(${JSON.stringify(chunk("mudimodem.js"))});
+  var comp = eval(${JSON.stringify(chunk("gl-sdk4-ui-mudimodem.common.js"))});
   window.__vm = new Vue({ render: function (h) { return h(comp); } }).$mount("#app");
 })();
 </script></body></html>`;

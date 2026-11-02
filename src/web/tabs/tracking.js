@@ -17,7 +17,7 @@
 // The middle bus is CELL ID + ARFCN (4.10 collector samples also carry PCI) — over
 // ubus. Metrics arrive as numbers already (parsed by the collector); _level
 // buckets drive the GL quality ramp. All colour is GL theme tokens.
-module.exports = (function () {
+export default (function () {
   "use strict";
 
   // Three metrics OVERLAID in one plot. Each keeps its own domain (`dom`) but

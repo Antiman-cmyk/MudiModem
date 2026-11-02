@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""The band metadata lives in two languages on purpose (the chunk is shipped as a
-plain file, no build step): src/views/mudimodem.js (freq / SCS / LTE_EARFCN) and
-src/lib/cellular_compat.py (LTE_EARFCN). This test keeps them from drifting."""
+"""The band metadata lives in two languages on purpose: the page sources under src/web
+(freq / SCS / LTE_EARFCN tables, NR raster) and src/lib/cellular_compat.py (LTE_EARFCN).
+This test keeps them from drifting."""
 import json, os, re, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -9,9 +9,19 @@ sys.path.insert(0, os.path.join(HERE, "..", "src", "lib"))
 import cellular_compat as cc  # noqa: E402
 
 
+def web_src():
+    root = os.path.join(HERE, "..", "src", "web")
+    parts = []
+    for d, _, files in sorted(os.walk(root)):
+        for f in sorted(files):
+            if f.endswith(".js"):
+                parts.append(open(os.path.join(d, f), encoding="utf-8").read())
+    return "\n".join(parts)
+
+
 def js_table(name):
-    src = open(os.path.join(HERE, "..", "src", "views", "mudimodem.js")).read()
-    m = re.search(name + r":\s*\{(.*?)\},?\n", src, re.S)
+    src = web_src()
+    m = re.search(r"\b" + name + r"\s*[:=]\s*\{(.*?)\},?;?\n", src, re.S)
     body = m.group(1)
     out = {}
     for k, v in re.findall(r"(\d+):\s*(\[[^\]]*\]|\d+)", body):
@@ -30,7 +40,7 @@ class Consistency(unittest.TestCase):
         self.assertEqual(missing, [], "LTE bands labelled in the UI but without an EARFCN row")
 
     def test_nr_raster_matches_between_js_and_python(self):
-        src = open(os.path.join(HERE, "..", "src", "views", "mudimodem.js")).read()
+        src = web_src()
         self.assertIn("n < 600000) return n * 0.005", src)
         self.assertIn("3000 + (n - 600000) * 0.015", src)
         self.assertIn("24250.08 + (n - 2016667) * 0.06", src)

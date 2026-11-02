@@ -1,0 +1,13 @@
+{
+  "name": "mudimodem-dev",
+  "private": true,
+  "description": "Dev-box tooling only (page build + tests). Nothing in node_modules ships to the router; the built chunks are committed under dist/.",
+  "scripts": {
+    "build:web": "node tools/build-web.mjs",
+    "check:web": "node tools/build-web.mjs --check",
+    "test": "bash tools/test-local.sh"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.5"
+  }
+}

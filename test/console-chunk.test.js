@@ -3,12 +3,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
-const SRC = path.join(__dirname, '..', 'src', 'views', 'mudimodem-console.js');
+const SRC = path.join(__dirname, '..', 'src', 'web', 'tabs', 'console.js');          // source (static checks)
+const CHUNK = path.join(__dirname, '..', 'dist', 'views', 'gl-sdk4-ui-mudimodem-console.common.js');  // what ships (eval)
 
 // Mirror the loader in the main chunk: eval with `module` in scope.
 function loadChunk() {
   const module = { exports: {} };
-  const source = fs.readFileSync(SRC, 'utf8');
+  const source = fs.readFileSync(CHUNK, 'utf8');
   return eval(source);
 }
 

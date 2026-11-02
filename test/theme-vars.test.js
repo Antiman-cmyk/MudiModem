@@ -14,7 +14,12 @@ const zlib = require("node:zlib");
 const ROOT = path.join(__dirname, "..");
 const LIST = path.join(ROOT, "reference/4.10/theme-vars.txt");
 const known = new Set(fs.readFileSync(LIST, "utf8").split("\n").filter((l) => l && !l.startsWith("#")));
-const chunks = fs.readdirSync(path.join(ROOT, "src/views")).filter((f) => f.endsWith(".js"));
+// Every page source under src/web (the chunks are built from them).
+function walkJs(d) {
+  return fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walkJs(path.join(d, e.name)) : (e.name.endsWith(".js") ? [path.join(d, e.name)] : []));
+}
+const chunks = walkJs(path.join(ROOT, "src/web")).map((f) => path.relative(path.join(ROOT, "src/web"), f));
 
 // Drop JS comments (a comment may mention var(--token) as prose).
 function code(src) {
@@ -41,7 +46,7 @@ test("theme-vars.txt matches the firmware image (when extracted)", (t) => {
 
 for (const f of chunks) {
   test(`${f}: every var(--x) is defined by GL's theme, the chunk, or a literal fallback`, () => {
-    const src = code(fs.readFileSync(path.join(ROOT, "src/views", f), "utf8"));
+    const src = code(fs.readFileSync(path.join(ROOT, "src/web", f), "utf8"));
     const own = new Set([...src.matchAll(/(--[A-Za-z0-9-]+)\s*:/g)].map((m) => m[1]));
     const ok = (name) => known.has(name) || own.has(name);
     const bad = [];

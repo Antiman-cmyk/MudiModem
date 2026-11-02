@@ -3,12 +3,19 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
-const SRC = path.join(__dirname, '..', 'src', 'views', 'mudimodem.js');
+// The BUILT chunk (what ships, dist/) is what these tests evaluate; static checks read the
+// sources under src/web/main + src/web/kit (tools/build-web.mjs builds one from the other).
+const CHUNK = path.join(__dirname, '..', 'dist', 'views', 'gl-sdk4-ui-mudimodem.common.js');
+const SRC_DIRS = ['main', 'kit'].map((d) => path.join(__dirname, '..', 'src', 'web', d));
+function srcText() {
+  return SRC_DIRS.flatMap((d) => fs.readdirSync(d).filter((f) => f.endsWith('.js')).sort()
+    .map((f) => fs.readFileSync(path.join(d, f), 'utf8'))).join('\n');
+}
 
 // Mirror GL's loader: `const component = eval(res.data)` with `module` in scope.
 function loadChunk() {
   const module = { exports: {} };
-  const source = fs.readFileSync(SRC, 'utf8');
+  const source = fs.readFileSync(CHUNK, 'utf8');
   return eval(source);
 }
 
@@ -714,9 +721,14 @@ test('revert countdown banner renders with Keep/Revert and locks chips', () => {
     'Apply hidden during pending');
 });
 
+test('lazy tab chunks are fetched from the URL GL serves them at', () => {
+  const kit = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'kit', 'chunks.js'), 'utf8');
+  assert.match(kit, /"\/views\/gl-sdk4-ui-mudimodem-" \+ name \+ "\.common\.js\?_t="/);
+});
+
 test('Tracking is an in-page tab (lazy-loaded graph), not a route change', () => {
-  const src = fs.readFileSync(SRC, 'utf8');
-  assert.match(src, /gl-sdk4-ui-mudimodem-tracking\.common\.js/, 'lazy-loads the tracking chunk');
+  const src = srcText();
+  assert.match(src, /loadChunk\("tracking"\)/, 'lazy-loads the tracking chunk');
   assert.doesNotMatch(src, /\$router\.push\(\s*["']\/mudimodem-tracking/,
     'no longer routes away to the tracking page');
   const c = loadChunk();
@@ -747,7 +759,7 @@ test('loaded tracking chunk renders as an embedded child component', () => {
 });
 
 test('the write calls target the watchdog-protected methods only', () => {
-  const src = fs.readFileSync(SRC, 'utf8');
+  const src = srcText();
   // Writes are allowed now, but ONLY through set_bands/confirm/revert_now.
   assert.match(src, /"set_bands"/, 'Apply calls set_bands');
   assert.match(src, /"confirm"/, 'Keep calls confirm');
@@ -1179,8 +1191,8 @@ test('lock tab: recovery card names the ssh panic path', () => {
 });
 
 test('AT console is an in-page tab: lazy-loads its own chunk', () => {
-  const src = fs.readFileSync(SRC, 'utf8');
-  assert.match(src, /gl-sdk4-ui-mudimodem-console\.common\.js/, 'lazy-loads the console chunk');
+  const src = srcText();
+  assert.match(src, /loadChunk\("console"\)/, 'lazy-loads the console chunk');
   const c = loadChunk();
   const vm = makeVm(c, LIVE);
   vm.tab = 'at';
@@ -1194,8 +1206,8 @@ test('AT console is an in-page tab: lazy-loads its own chunk', () => {
 });
 
 test('Speedtest is an in-page tab: lazy-loads its own chunk, embedded like Tracking', () => {
-  const src = fs.readFileSync(SRC, 'utf8');
-  assert.match(src, /gl-sdk4-ui-mudimodem-speedtest\.common\.js/, 'lazy-loads the speedtest chunk');
+  const src = srcText();
+  assert.match(src, /loadChunk\("speedtest"\)/, 'lazy-loads the speedtest chunk');
   const c = loadChunk();
   const vm = makeVm(c, LIVE);
   vm.tab = 'speedtest';
@@ -1642,18 +1654,18 @@ test('config tab: device_info retries on a later tab open after a first failure'
 });
 
 test('the Battery tab exists in the tab bar', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'views', 'mudimodem.js'), 'utf8');
+  const src = srcText();
   assert.ok(/\["battery", *"Battery"\]/.test(src), 'Battery tab not registered in TABS');
 });
 
 test('the battery chunk is lazy-loaded like the other tabs', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'views', 'mudimodem.js'), 'utf8');
-  assert.ok(src.includes('gl-sdk4-ui-mudimodem-battery.common.js'), 'no lazy load of the battery chunk');
+  const src = srcText();
+  assert.ok(src.includes('loadChunk("battery")'), 'no lazy load of the battery chunk');
   assert.ok(/loadBattery/.test(src), 'loadBattery() missing');
 });
 
 test('the charge-limit form no longer lives in the main chunk', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'views', 'mudimodem.js'), 'utf8');
+  const src = srcText();
   // It moved to the Battery tab's own chunk. Two owners of one setting is the bug
   // this check prevents.
   assert.ok(!src.includes('applyBattLimit'), 'applyBattLimit still in the main chunk');
