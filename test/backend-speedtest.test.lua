@@ -14,7 +14,8 @@ local M = dofile(os.getenv("MM_PLUGIN") or "/usr/lib/oui-httpd/rpc/mudimodem")
 assert(type(M) == "table", "plugin must return a table")
 for _, name in ipairs({ "get_speedtest_interfaces", "run_speedtest", "get_speedtest_status",
                          "get_speedtest_history", "clear_speedtest_history",
-                         "get_speedtest_schedule", "set_speedtest_schedule" }) do
+                         "get_speedtest_schedule", "set_speedtest_schedule",
+                         "get_speedtest_settings", "set_speedtest_settings" }) do
   assert(type(M[name]) == "function", name .. " missing")
 end
 

@@ -52,6 +52,12 @@ part of R2 and the first step of R3), plus the fixes it surfaced.
   question to the modem, the connection stays up (a scan takes it offline for up to ~10 minutes).
   On LTE and 5G NSA it lists the LTE cells the modem measures, strongest first, each lockable with
   the usual confirm-or-revert; on 5G SA the modem has no such list and the page says so.
+- **More accurate speed tests:** each direction runs several connections at once for a few
+  seconds, and the rate is read from the interface over the steady part after TCP's slow start —
+  a single 20 MiB download used to finish inside slow start on fast 5G and read low. Latency is
+  now one round trip (no connection setup in it). Choose **Quick** (at most ~29 MB) or
+  **Thorough** (at most ~290 MB), and Cloudflare or your own **LibreSpeed** server. Each result
+  says what it cost; the history chart has a scale and dates.
 - **Modem crashes are logged.** When GL saves a modem crash dump (the modem restarted on its own),
   Tracking records a "Modem crash" event at that time.
 - **Chinese:** the whole Modem page is available in Simplified Chinese and follows GL's language

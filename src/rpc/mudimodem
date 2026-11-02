@@ -1314,7 +1314,7 @@ end
 
 -- ============================ Speedtest ============================
 -- On-demand (+ optional scheduled) download/upload/latency test. The test and its schedule run in
--- mudimodemd (src/lib/mudimodemd/speedtest.lua): a fixed-size test takes 10-60 s, too long for a
+-- mudimodemd (src/lib/mudimodemd/speedtest.lua): a test takes 10-30 s, too long for a
 -- single $rpcRequest, so run_speedtest starts it and the page polls the status file. Results
 -- persist in /etc/mudimodem (NOT /tmp, unlike the RF-history telemetry) so they survive a reboot.
 local SPEEDTEST_HIST     = os.getenv("MUDIMODEM_SPEEDTEST_HIST")     or "/etc/mudimodem/speedtests.jsonl"
@@ -1498,6 +1498,48 @@ function M.set_speedtest_schedule(args)
   f:write(cjson.encode({ enabled = enabled, interval_seconds = interval, last_run = cur.last_run or 0 }))
   f:close()
   return { ok = true, enabled = enabled, interval_seconds = interval }
+end
+
+-- Test size and server (speedtest.lua reads the same file at each run; scheduled runs too).
+--   profile  quick (2 streams, ~30 MB at most) | full (4 streams, ~290 MB at most)
+--   server   cloudflare | librespeed, with librespeed_url = the backend folder
+--            (<url>garbage.php, <url>empty.php), http(s), charset-checked here and in the daemon
+local SPEEDTEST_SETTINGS = os.getenv("MUDIMODEM_ST_SETTINGS") or "/etc/mudimodem/speedtest.json"
+local ST_URL_OK = "^https?://[%w%.%-_:/]+/$"
+
+function M.get_speedtest_settings(args)
+  local c = read_json_file(SPEEDTEST_SETTINGS, {})
+  return { profile = c.profile == "full" and "full" or "quick",
+           server = c.server == "librespeed" and "librespeed" or "cloudflare",
+           librespeed_url = type(c.librespeed_url) == "string" and c.librespeed_url or "" }
+end
+
+function M.set_speedtest_settings(args)
+  args = args or {}
+  local profile, server = args.profile or "quick", args.server or "cloudflare"
+  if profile ~= "quick" and profile ~= "full" then return { error = "profile must be 'quick' or 'full'" } end
+  if server ~= "cloudflare" and server ~= "librespeed" then
+    return { error = "server must be 'cloudflare' or 'librespeed'" }
+  end
+  local url = args.librespeed_url
+  if url == "" then url = nil end
+  if url ~= nil then
+    if type(url) ~= "string" or #url > 200 then return { error = "bad LibreSpeed URL" } end
+    if url:sub(-1) ~= "/" then url = url .. "/" end
+    if not url:match(ST_URL_OK) then
+      return { error = "the LibreSpeed URL must look like https://host/backend/" }
+    end
+  end
+  if server == "librespeed" and not url then return { error = "a LibreSpeed server needs its URL" } end
+  local f = io.open(SPEEDTEST_SETTINGS, "w")         -- the installer owns /etc/mudimodem: no fork
+  if not f then
+    os.execute("mkdir -p '" .. (SPEEDTEST_SETTINGS:match("^(.*)/") or ".") .. "' 2>/dev/null")
+    f = io.open(SPEEDTEST_SETTINGS, "w")
+  end
+  if not f then return { error = "cannot write speed test settings" } end
+  f:write(cjson.encode({ profile = profile, server = server, librespeed_url = url }))
+  f:close()
+  return { ok = true, profile = profile, server = server, librespeed_url = url or "" }
 end
 
 -- ======================= Phase 5: MudiModem version check ====================

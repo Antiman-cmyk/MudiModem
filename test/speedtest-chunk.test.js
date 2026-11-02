@@ -619,3 +619,73 @@ test('the latest-result panel starts with the newest stored result', async () =>
     assert.strictEqual(vm.lastResult && vm.lastResult.t, 9);
   } finally { unstubRpc(); }
 });
+
+// ---- test size + server (get/set_speedtest_settings) ----
+test('test size: the select shows each profile with its data ceiling and saves the choice', async () => {
+  const calls = stubRpc([{ ok: true, profile: 'full', server: 'cloudflare', librespeed_url: '' }]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c);
+    vm.settings = { profile: 'quick', server: 'cloudflare', librespeed_url: '' };
+    const txt = textOf(vm.renderControls(h));
+    assert.match(txt, /Quick \(up to 29 MB\)/);
+    assert.match(txt, /Thorough \(up to 288 MB\)/);
+    await vm.saveSettings({ profile: 'full' });
+    assert.deepStrictEqual(calls[0].params[2], 'set_speedtest_settings');
+    assert.deepStrictEqual(calls[0].params[3], { profile: 'full', server: 'cloudflare', librespeed_url: '' });
+    assert.strictEqual(vm.settings.profile, 'full');
+    // the schedule's cost follows the profile
+    vm.schedule = { enabled: true, interval_seconds: 3600, last_run: 0 };
+    assert.match(textOf(vm.renderSchedule(h)), /up to 288 MB of data — up to 6\.9 GB a day/);
+    vm.settings.profile = 'quick';
+    assert.match(textOf(vm.renderSchedule(h)), /up to 29 MB of data — up to 696 MB a day/);
+  } finally { unstubRpc(); }
+});
+
+test('server: choosing LibreSpeed asks for its URL first; a refusal is shown, not saved', async () => {
+  const calls = stubRpc([{ error: 'the LibreSpeed URL must look like https://host/backend/' },
+                         { ok: true, profile: 'quick', server: 'librespeed', librespeed_url: 'https://s.example/backend/' }]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c);
+    vm.settings = { profile: 'quick', server: 'cloudflare', librespeed_url: '' };
+    assert.doesNotMatch(textOf(vm.renderServer(h)), /Save/, 'Cloudflare needs no URL');
+    vm.urlDraft = '';                                     // the select switched to LibreSpeed
+    let save = walk(vm.renderServer(h)).filter((n) => n.tag === 'button')[0];
+    assert.ok(save.data.attrs.disabled, 'no Save with an empty URL');
+    assert.strictEqual(calls.length, 0, 'switching alone saves nothing');
+    vm.urlDraft = 'ftp://x';
+    await vm.saveSettings({ server: 'librespeed', librespeed_url: vm.urlDraft });
+    assert.match(vm.settingsErr, /https:\/\/host\/backend\//);
+    assert.strictEqual(vm.settings.server, 'cloudflare', 'refused: the router still holds Cloudflare');
+    await vm.saveSettings({ server: 'librespeed', librespeed_url: 'https://s.example/backend' });
+    assert.strictEqual(vm.settings.librespeed_url, 'https://s.example/backend/', "the router's normalized URL");
+    assert.strictEqual(vm.urlDraft, null);
+    save = walk(vm.renderServer(h)).filter((n) => n.tag === 'button')[0];
+    assert.ok(save.data.attrs.disabled, 'nothing to save until the URL is edited');
+  } finally { unstubRpc(); }
+});
+
+test('a result says what it cost and how it ran', () => {
+  const c = loadChunk();
+  const vm = makeVm(c);
+  vm.lastResult = { t: 1, iface: 'cellular', down_mbps: 300, up_mbps: 40, latency_ms: 30, jitter_ms: 4,
+                    data_mb: 212.4, profile: 'full', streams: 4, server: 'librespeed' };
+  assert.match(textOf(vm.renderLatestResult(h)), /Test212\.4 MB · Thorough, 4 streams · LibreSpeed/);
+  vm.lastResult = { t: 1, iface: 'cellular', down_mbps: 30, up_mbps: 4, latency_ms: 30 };
+  assert.doesNotMatch(textOf(vm.renderLatestResult(h)), /Test/, 'an older result has no such row');
+});
+
+test('the history chart has a scale and dates', () => {
+  const c = loadChunk();
+  const vm = makeVm(c);
+  vm.resultsLoading = false; vm.width = 600;
+  vm.results = [{ t: Date.UTC(2026, 10, 1, 8), iface: 'cellular', down_mbps: 100, up_mbps: 20, latency_ms: 40, slot: 1 },
+                { t: Date.UTC(2026, 10, 2, 8), iface: 'cellular', down_mbps: 200, up_mbps: 30, latency_ms: 60, slot: 1 }];
+  const texts = walk(vm.renderGraph(h)).filter((n) => n.tag === 'text').map(textOf);
+  assert.ok(texts.includes('Mbps'), 'unit on the axis');
+  assert.ok(texts.includes('230'), 'the plot top (200 x 1.15)');
+  assert.ok(texts.includes('0'));
+  assert.ok(texts.includes('69'), 'the latency lane top (60 x 1.15)');
+  assert.ok(texts.includes(vm.clock(vm.results[0].t)) && texts.includes(vm.clock(vm.results[1].t)), 'first and last date');
+});

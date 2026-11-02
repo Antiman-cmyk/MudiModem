@@ -2,12 +2,25 @@
 -- tools/mudimodem-speedtest.py + src/sbin/mudimodem-speedtestd (python3, retired with R3 ⑤);
 -- test/speedtest-emu.test.py runs it against a fake speed server on the emulated GL bus.
 --
--- One test: curl download / upload / latency over the chosen interface (resolved live from
+-- One test: download / upload / latency over the chosen interface (resolved live from
 -- `network.interface dump`, never hard-coded — the cellular device has moved between
 -- rmnet_data0 and rmnet_data1 after a reconnect), with the signal snapshot taken from the
 -- collector's fresh latest.json (a test adds no AT traffic of its own), else one cell_info read.
--- Every transfer is bounded by curl's -m; the upload streams from /dev/urandom on curl's stdin
--- (a killed run used to leak its temp file in RAM).
+--
+-- Accuracy (audit 4.7): a single fixed-size transfer finishes inside TCP slow start on a fast 5G
+-- link and reads low. So each direction runs several curl streams at once, each bounded by time
+-- (-m) and by a byte cap (the data a test may cost), and the rate is the interface's own byte
+-- counter (/sys/class/net/<dev>/statistics) over the window from the end of a warm-up to the
+-- moment the first stream finishes — all streams running, slow start excluded. It counts every
+-- byte on that interface during the window (other clients' traffic too); when the window is too
+-- short (a cap reached during warm-up) or the counters are unreadable, the curl totals are used
+-- (`measure_down` / `measure_up` say which). Latency is the time from request sent to first byte
+-- (starttransfer - pretransfer): one round trip plus the server, without DNS/TCP/TLS setup.
+-- Uploads stream from /dev/urandom on curl's stdin (nothing in RAM).
+--
+-- Profiles (settings file, the Speedtest tab): quick (the default; ~30 MB at most) and full
+-- (~290 MB at most). Servers: Cloudflare (default) or a LibreSpeed backend URL
+-- (`<url>garbage.php?ckSize=<MiB>`, `<url>empty.php`), for regions where Cloudflare is poor.
 --
 -- The status file the plugin and page read (MUDIMODEM_ST_STATUS) keeps its contract: every write
 -- names the run (`pid` — now the daemon's — and `started`), and a run always ends on a terminal
@@ -19,10 +32,20 @@ local cjson = require "cjson"
 local cc = require "cellular_compat"
 local jsonl = require "mudimodemd.jsonl"
 local net = require "mudimodemd.net"
+local sync = require "eco.sync"
 
 local M = {}
 
 local function envnum(k, d) return tonumber(os.getenv(k) or "") or d end
+
+-- streams per direction, seconds per direction, warm-up seconds, byte cap per stream. Up is far
+-- smaller than down: cellular uplinks are asymmetric (and data costs). Keep the page's
+-- PROFILE_MB (tabs/speedtest.js) in step with the caps.
+M.PROFILES = {
+  quick = { streams = 2, down_s = 5, up_s = 4, warm_s = 1.5, down_cap = 12000000, up_cap = 2500000 },
+  full = { streams = 4, down_s = 10, up_s = 8, warm_s = 2.5, down_cap = 60000000, up_cap = 12000000 },
+}
+M.URL_OK = "^https?://[%w%.%-_:/]+/$"     -- a LibreSpeed backend folder (the plugin checks it too)
 
 function M.config()
   return {
@@ -30,12 +53,14 @@ function M.config()
     curl = os.getenv("MUDIMODEM_CURL") or "curl",
     down_url = os.getenv("MUDIMODEM_ST_DOWN_URL") or "https://speed.cloudflare.com/__down",
     up_url = os.getenv("MUDIMODEM_ST_UP_URL") or "https://speed.cloudflare.com/__up",
-    down_bytes = envnum("MUDIMODEM_ST_DOWN_BYTES", 20 * 1024 * 1024),
-    -- much smaller than down: cellular uplinks are asymmetric, and 8 MiB once exceeded the
-    -- 20 s transfer bound on a real, working, slow link (observed live 2026-07-21)
-    up_bytes = envnum("MUDIMODEM_ST_UP_BYTES", 2 * 1024 * 1024),
+    -- per-stream byte caps / durations override the profile's (the tests shrink them)
+    down_bytes = envnum("MUDIMODEM_ST_DOWN_BYTES", nil),
+    up_bytes = envnum("MUDIMODEM_ST_UP_BYTES", nil),
+    time_scale = envnum("MUDIMODEM_ST_TIME_SCALE", 1),     -- multiplies the profile's seconds
     latency_n = envnum("MUDIMODEM_ST_LATENCY_N", 5),
-    timeout = envnum("MUDIMODEM_ST_TIMEOUT", 20),          -- per curl transfer (-m)
+    timeout = envnum("MUDIMODEM_ST_TIMEOUT", 20),          -- a latency probe's -m
+    net_sysfs = os.getenv("MUDIMODEM_NET_SYSFS") or "/sys/class/net",
+    settings = os.getenv("MUDIMODEM_ST_SETTINGS") or "/etc/mudimodem/speedtest.json",
     hist = os.getenv("MUDIMODEM_ST_HIST") or "/etc/mudimodem/speedtests.jsonl",
     status = os.getenv("MUDIMODEM_ST_STATUS") or "/tmp/mudimodem/speedtest-status.json",
     schedule = os.getenv("MUDIMODEM_ST_SCHEDULE") or "/etc/mudimodem/speedtest-schedule.json",
@@ -126,21 +151,96 @@ function M.new(conn, cfg, log)
     return M.snapshot_from_sample(cc.build_sample(modem, cell, call("cellular.network", "info"), nil, cfg.bus))
   end
 
-  -- curl ... -w %{json}, body discarded -> the parsed trailer, or nil. `pipe` feeds stdin.
-  local function probe(args, pipe)
-    local cmd = shq(cfg.curl) .. " -s -m " .. tostring(cfg.timeout) .. " -o /dev/null -w '%{json}'"
+  -- curl ... -w %{json}, body discarded -> the parsed trailer, or nil. `pipe` feeds stdin. A
+  -- transfer cut by -m still prints its trailer (curl exit 28): that is a timed stream ending,
+  -- not a failure; a stream that never got a 2xx is.
+  local function curl_cmd(args, max_s, pipe)
+    local cmd = shq(cfg.curl) .. " -s -m " .. tostring(max_s) .. " -o /dev/null -w '%{json}'"
     for _, a in ipairs(args) do cmd = cmd .. " " .. shq(a) end
     if pipe then cmd = pipe .. " | " .. cmd end
-    local p = sys.exec("/bin/sh", "-c", cmd)
-    if not p then return nil end
-    local out = p:read_stdout("*a", cfg.timeout + 5)
-    if out == nil then sys.kill(p:pid(), sys.SIGKILL) end
-    p:close()
+    return cmd
+  end
+  local function trailer(out)
     local ok, r = pcall(cjson.decode, out or "")
     if not ok or type(r) ~= "table" then return nil end
     local code = tonumber(r.http_code) or 0
     if code < 200 or code >= 300 then return nil end
     return r
+  end
+  local function probe(args, pipe)
+    local p = sys.exec("/bin/sh", "-c", curl_cmd(args, cfg.timeout, pipe))
+    if not p then return nil end
+    local out = p:read_stdout("*a", cfg.timeout + 5)
+    if out == nil then sys.kill(p:pid(), sys.SIGKILL) end
+    p:close()
+    return trailer(out)
+  end
+
+  -- `n` streams of one direction at once. -> { mbps, bytes, measure } | nil (no stream got through)
+  --   cmds[i]   the shell command of stream i (curl_cmd)
+  --   counter() the interface's byte counter for this direction, or nil
+  --   key       "download" | "upload" (curl's size_/speed_ suffix)
+  local function streams(cmds, dur, warm, counter, key)
+    local wg = sync.waitgroup()
+    local res, first = {}, nil
+    for i, cmd in ipairs(cmds) do
+      local p = sys.exec("/bin/sh", "-c", cmd)
+      if p then
+        wg:add(1)
+        eco.run(function()
+          local out = p:read_stdout("*a", dur + 10)
+          if out == nil then sys.kill(p:pid(), sys.SIGKILL) end
+          p:close()
+          res[i] = trailer(out)
+          -- the window ends when the first GOOD stream ends (one that failed at once never ran)
+          if res[i] and not first then first = { t = time.now(), b = counter() } end
+          wg:done()
+        end)
+      end
+    end
+    local mark
+    if wg:wait(warm) ~= true and not first then mark = { t = time.now(), b = counter() } end
+    wg:wait(dur + 15)
+    local got, total, longest = 0, 0, 0
+    for i = 1, #cmds do
+      local r = res[i]
+      if r then
+        got = got + 1
+        total = total + (tonumber(r["size_" .. key]) or 0)
+        longest = math.max(longest, tonumber(r.time_total) or 0)
+      end
+    end
+    if got == 0 then return nil end
+    local used = total                                     -- our streams' payload, not the link's
+    if mark and mark.b and first and first.b and first.t - mark.t >= 1 and first.b >= mark.b then
+      return { mbps = M.mbps((first.b - mark.b) / (first.t - mark.t)), bytes = used, measure = "interface" }
+    end
+    if longest <= 0 then return nil end
+    return { mbps = M.mbps(total / longest), bytes = used, measure = "curl" }
+  end
+
+  -- {profile, server, librespeed_url} from the settings file (the Speedtest tab writes it)
+  function self.read_settings()
+    local c = readjson(cfg.settings)
+    local out = { profile = "quick", server = "cloudflare" }
+    if type(c) == "table" then
+      if M.PROFILES[c.profile] then out.profile = c.profile end
+      if c.server == "librespeed" and type(c.librespeed_url) == "string" and c.librespeed_url:match(M.URL_OK) then
+        out.server, out.librespeed_url = "librespeed", c.librespeed_url
+      end
+    end
+    return out
+  end
+
+  -- The endpoints for one test: down(bytes) -> URL, up URL, ping URL.
+  local function endpoints(st)
+    if st.server == "librespeed" then
+      local b = st.librespeed_url
+      return { down = function(n) return b .. "garbage.php?ckSize=" .. math.max(1, math.ceil(n / 1048576)) end,
+               up = b .. "empty.php", ping = b .. "empty.php" }
+    end
+    return { down = function(n) return cfg.down_url .. "?bytes=" .. math.floor(n) end,
+             up = cfg.up_url, ping = cfg.down_url .. "?bytes=0" }
   end
 
   local function trim_history()
@@ -192,28 +292,51 @@ function M.new(conn, cfg, log)
         end
       end
 
-      status({ running = true, phase = "download" })
-      local d = probe({ "--interface", device, "-G", "--data-urlencode", "bytes=" .. math.floor(cfg.down_bytes), cfg.down_url })
-      local down = d and M.mbps(tonumber(d.speed_download))
-      if not down then return fail("download failed") end
+      local set = self.read_settings()
+      local pf = M.PROFILES[set.profile]
+      local ep = endpoints(set)
+      local sc = cfg.time_scale
+      local down_cap, up_cap = cfg.down_bytes or pf.down_cap, cfg.up_bytes or pf.up_cap
+      local function counter(which)
+        return function()
+          local rx, tx = net.counters(cfg.net_sysfs, device)
+          if which == "rx" then return rx end
+          return tx
+        end
+      end
 
-      status({ running = true, phase = "upload" })
-      local u = probe({ "--interface", device, "--data-binary", "@-", cfg.up_url },
-                      "head -c " .. math.floor(cfg.up_bytes) .. " /dev/urandom")
-      local upm = u and M.mbps(tonumber(u.speed_upload))
-      if not upm then return fail("upload failed") end
-
-      status({ running = true, phase = "latency" })
+      status({ running = true, phase = "latency", profile = set.profile, server = set.server })
       local samples = {}
       for _ = 1, cfg.latency_n do
-        local r = probe({ "--interface", device, "-G", "--data-urlencode", "bytes=0", cfg.down_url })
-        if r then samples[#samples + 1] = tonumber(r.time_starttransfer) end
+        local r = probe({ "--interface", device, ep.ping })
+        local st, pre = r and tonumber(r.time_starttransfer), r and tonumber(r.time_pretransfer)
+        if st then samples[#samples + 1] = math.max(0, st - (pre or 0)) end
       end
       local lat, jit = M.latency_stats(samples)
       if not lat then return fail("latency probe failed") end
 
+      status({ running = true, phase = "download", profile = set.profile, server = set.server })
+      local cmds = {}
+      for i = 1, pf.streams do
+        cmds[i] = curl_cmd({ "--interface", device, ep.down(down_cap) }, pf.down_s * sc)
+      end
+      local d = streams(cmds, pf.down_s * sc, pf.warm_s * sc, counter("rx"), "download")
+      if not d then return fail("download failed") end
+
+      status({ running = true, phase = "upload", profile = set.profile, server = set.server })
+      cmds = {}
+      for i = 1, pf.streams do
+        cmds[i] = curl_cmd({ "--interface", device, "--data-binary", "@-", ep.up }, pf.up_s * sc,
+                           "head -c " .. math.floor(up_cap) .. " /dev/urandom")
+      end
+      local u = streams(cmds, pf.up_s * sc, pf.warm_s * sc, counter("tx"), "upload")
+      if not u then return fail("upload failed") end
+
       local result = { t = math.floor(time.now() * 1000), trigger = trigger, iface = iface,
-                       down_mbps = down, up_mbps = upm, latency_ms = lat, jitter_ms = jit }
+                       down_mbps = d.mbps, up_mbps = u.mbps, latency_ms = lat, jitter_ms = jit,
+                       profile = set.profile, streams = pf.streams, server = set.server,
+                       measure_down = d.measure, measure_up = u.measure,
+                       data_mb = math.floor((d.bytes + u.bytes) / 100000 + 0.5) / 10 }
       for k, v in pairs(snapshot) do result[k] = v end
       mkdir_for(cfg.hist)
       jsonl.append_line(cfg.hist, cjson.encode(result))

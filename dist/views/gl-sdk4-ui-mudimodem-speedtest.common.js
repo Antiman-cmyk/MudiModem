@@ -155,6 +155,7 @@ var __mm = (() => {
     "Couldn't read lock state: {err}": "无法读取锁定状态：{err}",
     "Couldn't read neighbours: {err}": "无法读取邻区：{err}",
     "Couldn't save the schedule: {err}": "无法保存计划：{err}",
+    "Couldn't save: {err}": "无法保存：{err}",
     "Couldn't start update: {err}": "无法开始更新：{err}",
     "Current": "电流",
     "Current 60 s avg": "电流 60 秒平均",
@@ -169,7 +170,7 @@ var __mm = (() => {
     "Download": "下载",
     "Draining on power": "接电源仍在放电",
     "Each edited band group needs at least one band": "每个修改过的频段组至少要保留一个频段",
-    "Each test uses about {mib} MiB of data — about {day} a day at this interval.": "每次测速约消耗 {mib} MiB 流量 — 按当前间隔每天约 {day}。",
+    "Each test uses up to {mb} MB of data — up to {day} a day at this interval.": "每次测速最多消耗 {mb} MB 流量 —— 按此间隔每天最多 {day}。",
     "Earlier battery history didn't load — showing samples since the tab opened; retrying every {s} s.": "更早的电池历史没能加载 — 只显示打开本页以来的采样；每 {s} 秒重试一次。",
     "Earlier history didn't load — showing live samples since the page opened; retrying every {s} s.": "更早的历史没能加载 — 只显示打开页面以来的实时采样；每 {s} 秒重试一次。",
     "Enable higher-risk commands": "启用高风险命令",
@@ -205,6 +206,7 @@ var __mm = (() => {
     "Latest result": "最近结果",
     "Library": "命令库",
     "Library not loaded.": "命令库未加载。",
+    "LibreSpeed (your server)": "LibreSpeed（自建服务器）",
     "Limit": "充电上限",
     "Limit charging": "限制充电",
     "Live charts still use RAM. When this is on, the collector appends new samples to eMMC about every {n} minutes (~6 MiB for a full day of signal + battery). Off by default.": "实时图表仍使用内存。开启后，采集器大约每 {n} 分钟把新采样追加写入 eMMC（一整天的信号 + 电池约 6 MiB）。默认关闭。",
@@ -255,6 +257,7 @@ var __mm = (() => {
     "PAUSED": "已暂停",
     "Pin the modem to the cell it is using now - the safest lock target.": "把 Modem 固定在当前使用的基站上 - 最安全的锁定目标。",
     "Ping": "Ping",
+    "Quick": "快速",
     "RPC helper unavailable": "RPC 不可用",
     "RPC unavailable": "RPC 不可用",
     "RSRP · dBm": "RSRP · dBm",
@@ -287,6 +290,7 @@ var __mm = (() => {
     "SIM {slot} (active) is not registered on a network right now.": "SIM {slot}（当前使用）目前未注册到网络。",
     "SINR · dB": "SINR · dB",
     "Sampled every 10s by the MudiModem collector (pushed live), last {n} minutes": "由 MudiModem 采集器每 10 秒采样并实时推送，显示最近 {n} 分钟",
+    "Save": "保存",
     "Scan failed: {err}": "扫描失败：{err}",
     "Scan for cells": "扫描基站",
     "Scan now": "立即扫描",
@@ -310,6 +314,9 @@ var __mm = (() => {
     "Target too low — the charge IC needs at least 50 % IC Reported Charge (about 50 % GL UI Reported Charge)": "目标太低 — 充电芯片至少需要 50 %（电量芯片读数，约合 GL 界面电量 50 %）",
     "Temp": "温度",
     "Temperature · °C": "温度 · °C",
+    "Test": "测试",
+    "Test server": "测速服务器",
+    "Test size": "测速规模",
     "Testing download…": "正在测试下载…",
     "Testing latency…": "正在测试延迟…",
     "Testing upload…": "正在测试上传…",
@@ -323,6 +330,7 @@ var __mm = (() => {
     "The modem reports no neighbours. On 5G SA it never does - only a scan finds other cells there.": "Modem 没有报告邻区。5G SA 下从来不会报告 - 只有扫描才能找到其他小区。",
     "The modem restarted after a crash; GL saved a dump in /data/vendor/modem_crash_log": "Modem 崩溃后已自动重启；GL 已把转储保存在 /data/vendor/modem_crash_log",
     "The watchdog reverted a lock, but {gl} still remembers it - GL may re-apply it later. Clear it to reconcile.": "看门狗已撤销一次锁定，但 {gl} 仍然记着它 - GL 之后可能会重新应用。请清除以保持一致。",
+    "Thorough": "完整",
     "Time": "时间",
     "Too late to keep: the auto-revert had already restored your previous bands. Apply it again if you want it.": "来不及保留了：自动恢复已经还原了之前的频段。如需要请重新应用。",
     "Too late to keep: the auto-revert had already restored your previous cell setting. Apply it again if you want it.": "来不及保留了：自动恢复已经还原了之前的基站设置。如需要请重新应用。",
@@ -374,6 +382,7 @@ var __mm = (() => {
     "could not load the battery view": "无法加载电池页",
     "could not load the graph": "无法加载信号图",
     "could not load the speed test": "无法加载测速",
+    "could not save": "无法保存",
     "could not save schedule": "无法保存计划",
     "could not start": "无法启动",
     "couldn't reach the router": "无法连接路由器",
@@ -446,8 +455,12 @@ var __mm = (() => {
     "{label} applying a lock briefly re-registers the modem, which can drop a remote (Tailscale / VPN) connection to this router for a few seconds. It reconnects on its own - if the request seems to hang or fail, wait a moment; the lock likely applied and this page will offer to keep or revert it once you're back.": "{label}应用锁定会让 Modem 短暂重新注册，可能导致到本路由器的远程连接（Tailscale / VPN）中断几秒钟。连接会自动恢复 - 如果请求像是卡住或失败了，请稍等片刻；锁定很可能已经生效，重新连上后本页面会让你选择保留或恢复。",
     "{locked} to {target}. The modem will not hand over.": "{locked}到 {target}。Modem 不会切换基站。",
     "{name} (not connected)": "{name}（未连接）",
+    "{name} (up to {mb} MB)": "{name}（最多 {mb} MB）",
     "{name} is not connected": "{name} 未连接",
+    "{name}, {n} streams": "{name}，{n} 条连接",
+    "{n} GB": "{n} GB",
     "{n} GiB": "{n} GiB",
+    "{n} MB": "{n} MB",
     "{n} MiB": "{n} MiB",
     "{n} commands": "{n} 条命令",
     "{n} h ago": "{n} 小时前",
@@ -580,7 +593,11 @@ var __mm = (() => {
   var speedtest_default = localize(function() {
     "use strict";
     var IFACES = [["cellular", "Cellular"], ["wired", "Wired WAN"]];
-    var TEST_MIB = 22;
+    var PROFILES = [["quick", "Quick", 29], ["full", "Thorough", 288]];
+    function profileMB(id) {
+      for (var i = 0; i < PROFILES.length; i++) if (PROFILES[i][0] === id) return PROFILES[i][2];
+      return PROFILES[0][2];
+    }
     var INTERVALS = [
       [1800, "30 min"],
       [3600, "1 hour"],
@@ -611,11 +628,21 @@ var __mm = (() => {
       if (r.ambr_ul && r.up_mbps != null && r.up_mbps >= 0.9 * r.ambr_ul) at.push(t("upload at the cap"));
       return ["Carrier cap", at.length ? v + " · " + at.join(", ") : v];
     }
+    function testRow(r) {
+      if (r.data_mb == null && r.profile == null) return null;
+      var name = null;
+      for (var i = 0; i < PROFILES.length; i++) if (PROFILES[i][0] === r.profile) name = t(PROFILES[i][1]);
+      var bits = [];
+      if (r.data_mb != null) bits.push(t("{n} MB", { n: r.data_mb }));
+      if (name) bits.push(r.streams ? t("{name}, {n} streams", { name, n: r.streams }) : name);
+      if (r.server === "librespeed") bits.push("LibreSpeed");
+      return ["Test", bits.join(" · ")];
+    }
     function resultDetailRows(r) {
-      var cap = capRow(r);
+      var cap = capRow(r), tr2 = testRow(r);
       return [
         ["Latency", r.latency_ms == null ? "—" : r.latency_ms + " ms (±" + (r.jitter_ms == null ? "—" : r.jitter_ms) + ")"]
-      ].concat(cap ? [cap] : []).concat([
+      ].concat(cap ? [cap] : []).concat(tr2 ? [tr2] : []).concat([
         ["Carrier", (r.carrier || "—") + " · SIM " + (r.slot == null ? "—" : r.slot)],
         // The prefix follows the carrier: an EN-DC anchor on B2 is "B2", not "n2".
         ["Band", r.band == null ? "—" : (/NR5G/.test(carrierRat(r)) ? "n" : "B") + r.band],
@@ -647,6 +674,11 @@ var __mm = (() => {
           schedule: null,
           scheduleErr: "",
           scheduleSaving: false,
+          // {profile, server, librespeed_url} (get_speedtest_settings); urlDraft = the URL being typed
+          settings: null,
+          settingsErr: "",
+          settingsSaving: false,
+          urlDraft: null,
           cursor: null,
           pinned: null,
           width: 900,
@@ -695,6 +727,7 @@ var __mm = (() => {
         this.fetchInterfaces();
         this.fetchHistory();
         this.fetchSchedule();
+        this.fetchSettings();
         this.fetchStatus(true);
       },
       // Torn down (a tab switch destroys us): every async continuation checks
@@ -830,6 +863,39 @@ var __mm = (() => {
         },
         // Resolves once the save AND the re-read have settled, so the caller can
         // put its control back to whatever this.schedule now says.
+        fetchSettings: function() {
+          var self = this;
+          return this.rpc("get_speedtest_settings", {}).then(function(r) {
+            if (!self._dead && r && !r.error) self.settings = r;
+          }).catch(function() {
+          });
+        },
+        // Save a change to the test size or server; the reply is what the router now holds.
+        saveSettings: function(patch) {
+          var self = this;
+          if (!this.settings) return Promise.resolve();
+          var next = Object.assign({}, this.settings, patch);
+          this.settingsSaving = true;
+          this.settingsErr = "";
+          return this.rpc("set_speedtest_settings", {
+            profile: next.profile,
+            server: next.server,
+            librespeed_url: next.librespeed_url || ""
+          }).then(function(r) {
+            if (self._dead) return;
+            self.settingsSaving = false;
+            if (!r || r.error) {
+              self.settingsErr = r && r.error || "could not save";
+              return;
+            }
+            self.settings = { profile: r.profile, server: r.server, librespeed_url: r.librespeed_url || "" };
+            self.urlDraft = null;
+          }).catch(function(e) {
+            if (self._dead) return;
+            self.settingsSaving = false;
+            self.settingsErr = e && (e.message || e.type) || "could not save";
+          });
+        },
         setSchedule: function(enabled, intervalSeconds) {
           var self = this;
           this.scheduleSaving = true;
@@ -904,9 +970,70 @@ var __mm = (() => {
               self.runTest();
             } }
           }, this.status.running ? PHASE_TEXT[this.status.phase] || "Testing…" : "Run speed test");
+          var sizeSel = this.settings ? h("select", {
+            domProps: { value: this.settings.profile },
+            attrs: { disabled: this.status.running || this.settingsSaving, title: t("Test size") },
+            on: { change: function(ev) {
+              var el = ev.target;
+              self.saveSettings({ profile: el.value }).then(function() {
+                if (self.settings) el.value = self.settings.profile;
+              });
+            } }
+          }, PROFILES.map(function(p) {
+            return h("option", { attrs: { value: p[0] }, key: p[0] }, t("{name} (up to {mb} MB)", { name: t(p[1]), mb: p[2] }));
+          })) : null;
           var err = !this.status.running && this.status.phase === "error" ? h("span", { staticClass: "mms-err" }, this.status.message) : null;
           var ifaceErr = this.ifacesErr ? h("span", { staticClass: "mms-err" }, t("Couldn't check interfaces: {err}", { err: this.ifacesErr })) : null;
-          return h("div", { staticClass: "mms-controls" }, [ifaceSel, runBtn, err, ifaceErr].filter(Boolean));
+          return h("div", { staticClass: "mms-controls" }, [ifaceSel, sizeSel, runBtn, err, ifaceErr].filter(Boolean));
+        },
+        // Where the test runs against: Cloudflare (default) or the user's own LibreSpeed server, for
+        // regions where Cloudflare's speed endpoints are slow or blocked.
+        renderServer: function(h) {
+          var self = this, st = this.settings;
+          if (!st) return null;
+          var lib = st.server === "librespeed" || this.urlDraft != null;
+          var sel = h("select", {
+            domProps: { value: lib ? "librespeed" : "cloudflare" },
+            attrs: { disabled: this.status.running || this.settingsSaving },
+            on: { change: function(ev) {
+              if (ev.target.value === "librespeed") {
+                self.urlDraft = st.librespeed_url || "";
+                return;
+              }
+              self.urlDraft = null;
+              if (st.server !== "cloudflare") self.saveSettings({ server: "cloudflare" });
+            } }
+          }, [
+            h("option", { attrs: { value: "cloudflare" } }, "Cloudflare"),
+            h("option", { attrs: { value: "librespeed" } }, "LibreSpeed (your server)")
+          ]);
+          var kids = [h("span", "Test server"), sel];
+          if (lib) {
+            var val = this.urlDraft != null ? this.urlDraft : st.librespeed_url;
+            kids.push(h("input", {
+              staticClass: "mms-url",
+              attrs: {
+                type: "text",
+                placeholder: "https://speed.example.com/backend/",
+                spellcheck: "false",
+                disabled: this.status.running || this.settingsSaving
+              },
+              domProps: { value: val },
+              on: { input: function(ev) {
+                self.urlDraft = ev.target.value;
+              } }
+            }));
+            kids.push(h("button", {
+              staticClass: "mms-btn",
+              attrs: { disabled: this.status.running || this.settingsSaving || !String(val || "").trim() || this.urlDraft == null && st.server === "librespeed" },
+              on: { click: function() {
+                self.saveSettings({ server: "librespeed", librespeed_url: String(val).trim() });
+              } }
+            }, "Save"));
+          }
+          if (this.settingsErr)
+            kids.push(h("span", { staticClass: "mms-err" }, t("Couldn't save: {err}", { err: t(this.settingsErr) })));
+          return h("div", { staticClass: "mms-server" }, kids);
         },
         renderSchedule: function(h) {
           var self = this;
@@ -937,10 +1064,11 @@ var __mm = (() => {
             return h("option", { attrs: { value: iv[0] }, key: iv[0] }, t("Every {n}", { n: t(iv[1]) }));
           }));
           var err = this.scheduleErr ? h("span", { staticClass: "mms-err" }, t("Couldn't save the schedule: {err}", { err: this.scheduleErr })) : null;
-          var perDay = 86400 / (this.schedule.interval_seconds || 21600) * TEST_MIB;
-          var cost = h("span", { staticClass: "mms-hint" }, t("Each test uses about {mib} MiB of data — about {day} a day at this interval.", {
-            mib: TEST_MIB,
-            day: perDay >= 1024 ? t("{n} GiB", { n: (perDay / 1024).toFixed(1) }) : t("{n} MiB", { n: Math.round(perDay) })
+          var mb = profileMB(this.settings && this.settings.profile);
+          var perDay = 86400 / (this.schedule.interval_seconds || 21600) * mb;
+          var cost = h("span", { staticClass: "mms-hint" }, t("Each test uses up to {mb} MB of data — up to {day} a day at this interval.", {
+            mb,
+            day: perDay >= 1e3 ? t("{n} GB", { n: (perDay / 1e3).toFixed(1) }) : t("{n} MB", { n: Math.round(perDay) })
           }));
           return h("div", { staticClass: "mms-sched" }, [toggle, sel, err, cost].filter(Boolean));
         },
@@ -983,7 +1111,7 @@ var __mm = (() => {
             "No results yet for this interface. Run a speed test above."
           );
           var W = this.width, PADL = 34, PADR = 12, PLOT_H = 160, LAT_H = 40, GAP = 14;
-          var plotTop = 10, plotBot = plotTop + PLOT_H;
+          var plotTop = 18, plotBot = plotTop + PLOT_H;
           var latTop = plotBot + GAP, latBot = latTop + LAT_H;
           var n = results.length;
           var xOf = function(i) {
@@ -1015,10 +1143,10 @@ var __mm = (() => {
             break;
           }
           var kids = [];
-          kids.push(h("rect", { attrs: { x: PADL, y: 0, width: 10, height: 3, fill: "var(--primary)" } }));
-          kids.push(h("text", { attrs: { x: PADL + 14, y: 6, "font-size": 9.5, fill: "var(--text-badge)" } }, "Download"));
-          kids.push(h("rect", { attrs: { x: PADL + 78, y: 0, width: 10, height: 3, fill: "var(--success)" } }));
-          kids.push(h("text", { attrs: { x: PADL + 92, y: 6, "font-size": 9.5, fill: "var(--text-badge)" } }, "Upload"));
+          kids.push(h("rect", { attrs: { x: PADL, y: 5, width: 10, height: 3, fill: "var(--primary)" } }));
+          kids.push(h("text", { attrs: { x: PADL + 14, y: 10, "font-size": 9.5, fill: "var(--text-badge)" } }, "Download"));
+          kids.push(h("rect", { attrs: { x: PADL + 78, y: 5, width: 10, height: 3, fill: "var(--success)" } }));
+          kids.push(h("text", { attrs: { x: PADL + 92, y: 10, "font-size": 9.5, fill: "var(--text-badge)" } }, "Upload"));
           [plotTop, plotBot].forEach(function(yy) {
             kids.push(h("line", { attrs: {
               x1: PADL,
@@ -1029,6 +1157,19 @@ var __mm = (() => {
               "stroke-width": 1
             } }));
           });
+          var axis = function(y, txt) {
+            kids.push(h("text", { attrs: {
+              x: PADL - 4,
+              y,
+              "text-anchor": "end",
+              "font-size": 9,
+              fill: "var(--text-badge)",
+              "font-family": "ui-monospace,monospace"
+            } }, txt));
+          };
+          axis(plotTop + 4, String(Math.round(yMax)));
+          axis(plotTop + 14, "Mbps");
+          axis(plotBot, "0");
           if (multiSim) {
             results.forEach(function(r2, i) {
               if (i > 0 && slotOf(r2) === slotOf(results[i - 1])) return;
@@ -1092,6 +1233,7 @@ var __mm = (() => {
             stroke: "var(--divider)",
             "stroke-width": 1
           } }));
+          axis(latTop + 4, String(Math.round(maxLatency * 1.15)));
           var latD = "", penL = false, prevSlotL = null;
           results.forEach(function(r2, i) {
             if (prevSlotL !== null && slotOf(r2) !== prevSlotL) penL = false;
@@ -1115,10 +1257,26 @@ var __mm = (() => {
               "stroke-width": 1
             } }));
           }
+          var dateY = latBot + 13;
+          kids.push(h("text", { attrs: {
+            x: PADL,
+            y: dateY,
+            "font-size": 9,
+            fill: "var(--text-badge)",
+            "font-family": "ui-monospace,monospace"
+          } }, this.clock(results[0].t)));
+          if (n > 1) kids.push(h("text", { attrs: {
+            x: W - PADR,
+            y: dateY,
+            "text-anchor": "end",
+            "font-size": 9,
+            fill: "var(--text-badge)",
+            "font-family": "ui-monospace,monospace"
+          } }, this.clock(results[n - 1].t)));
           var svg = h("svg", { ref: "svg", attrs: {
-            viewBox: "0 0 " + W + " " + (latBot + 4),
+            viewBox: "0 0 " + W + " " + (dateY + 4),
             width: W,
-            height: latBot + 4,
+            height: dateY + 4,
             preserveAspectRatio: "none"
           } }, kids);
           var nearestIdx = function(evX) {
@@ -1174,7 +1332,7 @@ var __mm = (() => {
         },
         injectStyle: function() {
           if (typeof document === "undefined" || document.getElementById(this.styleId)) return;
-          var css = ".mms{color:var(--text-regular)}.mms-card{background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);padding:12px 14px;margin-bottom:11px}.mms-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}.mms-crumb{background:none;border:0;font:inherit;font-size:12px;color:var(--primary);cursor:pointer;padding:0}.mms-title{font-size:14px;font-weight:600;color:var(--text-title)}.mms-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.mms-btn{font-size:12px;font-weight:600;border-radius:3px;padding:7px 14px;cursor:pointer;font-family:inherit;border:1px solid var(--border);background:var(--background-card);color:var(--text-regular)}.mms-btn.primary{background:var(--primary);color:#fff;border-color:var(--primary)}.mms-btn.danger{color:var(--error);border-color:var(--error)}.mms-hint{font-size:11.5px;color:var(--text-weak);flex-basis:100%}.mms-btn:disabled{opacity:.6;cursor:default}.mms-err{color:var(--error);font-size:12px}.mms-sched{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:10px;font-size:12px}.mms-sched-toggle{display:flex;align-items:center;gap:6px;cursor:pointer}.mms-empty{padding:24px 0;text-align:center;color:var(--text-hint);font-size:12.5px}.mms-graph{position:relative;cursor:crosshair}.mms-graph svg{display:block;width:100%}.mms-tip{position:absolute;top:8px;left:8px;pointer-events:none;z-index:5;background:var(--background-card);border:1px solid var(--border);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.12);padding:8px 10px;min-width:170px}.mms-tip .t{font-size:10.5px;color:var(--text-badge);margin-bottom:5px}.mms-tip-row{display:flex;justify-content:space-between;gap:14px;font-size:11.5px;padding:1px 0}.mms-tip-row b{font-weight:600;color:var(--text-title)}.mms-latest-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px}.mms-latest-when{font-size:11px;color:var(--text-badge)}.mms-latest-big{display:flex;gap:22px;margin-bottom:10px;flex-wrap:wrap}.mms-latest-metric{display:flex;flex-direction:column}.mms-latest-metric .v{font-size:22px;font-weight:700;color:var(--text-title);line-height:1.15}.mms-latest-metric .u{font-size:10.5px;color:var(--text-badge)}";
+          var css = ".mms{color:var(--text-regular)}.mms-card{background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);padding:12px 14px;margin-bottom:11px}.mms-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}.mms-crumb{background:none;border:0;font:inherit;font-size:12px;color:var(--primary);cursor:pointer;padding:0}.mms-title{font-size:14px;font-weight:600;color:var(--text-title)}.mms-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.mms-btn{font-size:12px;font-weight:600;border-radius:3px;padding:7px 14px;cursor:pointer;font-family:inherit;border:1px solid var(--border);background:var(--background-card);color:var(--text-regular)}.mms-btn.primary{background:var(--primary);color:#fff;border-color:var(--primary)}.mms-btn.danger{color:var(--error);border-color:var(--error)}.mms-hint{font-size:11.5px;color:var(--text-weak);flex-basis:100%}.mms-btn:disabled{opacity:.6;cursor:default}.mms-err{color:var(--error);font-size:12px}.mms-sched{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:10px;font-size:12px}.mms-sched-toggle{display:flex;align-items:center;gap:6px;cursor:pointer}.mms-server{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:10px;font-size:12px}.mms-url{flex:1 1 220px;min-width:0;font:inherit;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:3px;background:var(--background-card);color:var(--text-regular)}.mms-empty{padding:24px 0;text-align:center;color:var(--text-hint);font-size:12.5px}.mms-graph{position:relative;cursor:crosshair}.mms-graph svg{display:block;width:100%}.mms-tip{position:absolute;top:8px;left:8px;pointer-events:none;z-index:5;background:var(--background-card);border:1px solid var(--border);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.12);padding:8px 10px;min-width:170px}.mms-tip .t{font-size:10.5px;color:var(--text-badge);margin-bottom:5px}.mms-tip-row{display:flex;justify-content:space-between;gap:14px;font-size:11.5px;padding:1px 0}.mms-tip-row b{font-weight:600;color:var(--text-title)}.mms-latest-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px}.mms-latest-when{font-size:11px;color:var(--text-badge)}.mms-latest-big{display:flex;gap:22px;margin-bottom:10px;flex-wrap:wrap}.mms-latest-metric{display:flex;flex-direction:column}.mms-latest-metric .v{font-size:22px;font-weight:700;color:var(--text-title);line-height:1.15}.mms-latest-metric .u{font-size:10.5px;color:var(--text-badge)}";
           var el = document.createElement("style");
           el.id = this.styleId;
           el.textContent = css;
@@ -1221,7 +1379,7 @@ var __mm = (() => {
             ));
           }
           return h("div", { staticClass: "mms" }, [
-            h("div", { staticClass: "mms-card" }, [head, this.renderControls(h), this.renderSchedule(h)]),
+            h("div", { staticClass: "mms-card" }, [head, this.renderControls(h), this.renderServer(h), this.renderSchedule(h)].filter(Boolean)),
             this.renderLatestResult(h),
             h("div", { staticClass: "mms-card" }, [
               h("div", { staticClass: "mms-controls" }, [

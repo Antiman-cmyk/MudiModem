@@ -84,10 +84,16 @@ connected)* rather than letting you start a test doomed to fail. The history gra
 interface filter, because wired and cellular differ by enough that plotting them together would flatten
 the cellular trend into a line along the bottom.
 
+Each test runs several connections at once for a few seconds and measures the steady rate after
+TCP's slow start, so a fast 5G link is not under-read. **Quick** (2 connections, at most ~29 MB of
+data) or **Thorough** (4 connections, at most ~290 MB); the test server is Cloudflare, or your own
+**LibreSpeed** server where Cloudflare is slow or blocked. A cellular result also records the
+carrier's cap (AMBR) and says when a test ran at it.
+
 Optional **automatic background tests** on a 30 m – 24 h interval build the history while you're not
-looking; **off by default**, because each test spends about 22 MiB of your data plan. Results are
-capped at the last 500 and stored in `/etc/mudimodem`, so unlike the RF history they **survive a
-reboot**.
+looking; **off by default**, because each test spends real data (the tab shows how much a day).
+Results are capped at the last 500 and stored in `/etc/mudimodem`, so unlike the RF history they
+**survive a reboot**.
 
 ### 🔋 Battery
 

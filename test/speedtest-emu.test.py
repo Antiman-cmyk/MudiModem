@@ -33,25 +33,41 @@ def jsonl(path):
 
 
 class Speed(http.server.BaseHTTPRequestHandler):
+    """Cloudflare's API (/__down?bytes=N, /__up) and LibreSpeed's (<dir>/garbage.php?ckSize=<MiB>,
+    <dir>/empty.php). `down`: ok | fail (data requests only: a latency probe asks for 0 bytes) |
+    slow (64 KiB every 0.1 s: a stream the time limit has to cut); `stall` s before any data."""
     mode = {"down": "ok", "stall": 0}
     seen = []
 
     def do_GET(self):
-        q = parse_qs(urlparse(self.path).query)
-        n = int(q.get("bytes", ["0"])[0])
-        self.seen.append(("GET", n))
-        if self.mode["stall"]:
+        u = urlparse(self.path)
+        q = parse_qs(u.query)
+        if u.path.endswith("/garbage.php"):
+            n = int(q.get("ckSize", ["0"])[0]) * 1048576
+        elif u.path.endswith("/empty.php"):
+            n = 0
+        else:
+            n = int(q.get("bytes", ["0"])[0])
+        self.seen.append(("GET", n, u.path))
+        if n and self.mode["stall"]:
             time.sleep(self.mode["stall"])
-        if self.mode["down"] == "fail":
+        if n and self.mode["down"] == "fail":
             self.send_response(500); self.end_headers(); return
         self.send_response(200)
         self.send_header("Content-Length", str(n)); self.end_headers()
+        if n and self.mode["down"] == "slow":
+            try:
+                for _ in range(0, n, 65536):
+                    self.wfile.write(b"\0" * 65536); self.wfile.flush(); time.sleep(0.1)
+            except OSError:
+                pass                              # curl's -m hung up: the point of the test
+            return
         self.wfile.write(b"\0" * n)
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
         self.rfile.read(n)
-        self.seen.append(("POST", n))
+        self.seen.append(("POST", n, urlparse(self.path).path))
         self.send_response(200); self.send_header("Content-Length", "0"); self.end_headers()
 
     def log_message(self, *a):
@@ -68,7 +84,7 @@ class SpeedTest(unittest.TestCase):
         srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Speed)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         self.addCleanup(srv.shutdown)
-        base = "http://127.0.0.1:%d" % srv.server_address[1]
+        base = self.base = "http://127.0.0.1:%d" % srv.server_address[1]
         self.bus = os.path.join(d, "bus")
         os.makedirs(self.bus); os.makedirs(os.path.join(d, "glc"))
         self.st = {k: os.path.join(d, k) for k in ("status.json", "hist.jsonl", "schedule.json", "latest.json")}
@@ -76,7 +92,8 @@ class SpeedTest(unittest.TestCase):
                         MUDIMODEM_LIB=os.path.join(ROOT, "src", "lib"), MUDIMODEMD_COLLECTOR="0",
                         MUDIMODEM_ST_DOWN_URL=base + "/__down", MUDIMODEM_ST_UP_URL=base + "/__up",
                         MUDIMODEM_ST_DOWN_BYTES="200000", MUDIMODEM_ST_UP_BYTES="50000", MUDIMODEM_ST_LATENCY_N="3",
-                        MUDIMODEM_ST_TIMEOUT="4", MUDIMODEM_ST_STATUS=self.st["status.json"],
+                        MUDIMODEM_ST_TIMEOUT="4", MUDIMODEM_ST_TIME_SCALE="0.4",
+                        MUDIMODEM_ST_SETTINGS=os.path.join(d, "speedtest.json"), MUDIMODEM_ST_STATUS=self.st["status.json"],
                         MUDIMODEM_ST_HIST=self.st["hist.jsonl"], MUDIMODEM_ST_SCHEDULE=self.st["schedule.json"],
                         MUDIMODEM_LATEST=self.st["latest.json"], MUDIMODEM_HIST=os.path.join(d, "hist"),
                         # the plugin reads the same files under its own names
@@ -148,8 +165,13 @@ class SpeedTest(unittest.TestCase):
         self.assertEqual((st["running"], st["phase"]), (False, "done"))
         self.assertEqual(st["pid"], self.call("health", {})["pid"], "the run is named by the daemon's pid")
         self.assertEqual(self.gl_calls("cell_info"), [], "a fresh sample means no AT-backed read")
-        self.assertIn(("POST", 50000), Speed.seen, "the upload streamed its bytes over stdin")
-        self.assertEqual([n for m, n in Speed.seen if m == "GET"], [200000, 0, 0, 0])
+        self.assertEqual([x[1] for x in Speed.seen if x[0] == "POST"], [50000, 50000],
+                         "quick: two upload streams, their bytes streamed over stdin")
+        self.assertEqual([x[1] for x in Speed.seen if x[0] == "GET"], [0, 0, 0, 200000, 200000],
+                         "latency on the idle link first, then two download streams")
+        self.assertEqual((r["profile"], r["streams"], r["server"]), ("quick", 2, "cloudflare"))
+        self.assertEqual(r["measure_up"], "curl", "50 kB per stream: done inside the warm-up -> curl's totals")
+        self.assertEqual(r["data_mb"], 0.5, "what the test cost: 2 x 200000 down + 2 x 50000 up")
 
     def test_a_stale_sample_costs_one_cell_info_and_wired_carries_no_radio(self):
         self.start()
@@ -176,8 +198,39 @@ class SpeedTest(unittest.TestCase):
         Speed.mode = {"down": "ok", "stall": 10}
         t0 = time.monotonic()
         self.assertEqual(self.one_run().get("error"), "download failed")
-        self.assertLess(time.monotonic() - t0, 9.5, "curl's -m 4 bounds a stalled transfer")
+        self.assertLess(time.monotonic() - t0, 9.5, "the streams' time limit (-m) bounds a stalled server")
         self.assertEqual(self.status()["message"], "download failed")
+
+    def test_the_time_limit_cuts_a_slow_stream_and_the_window_measures_it(self):
+        """A stream still running at its time limit is a measured stream, not a failure; the rate
+        comes from the interface counter between the warm-up and the first stream's end."""
+        self.start(MUDIMODEM_ST_DOWN_BYTES="50000000", MUDIMODEM_ST_TIME_SCALE="0.6")
+        Speed.mode["down"] = "slow"                   # ~640 KiB/s per stream, 2 streams
+        t0 = time.monotonic()
+        r = self.one_run()
+        self.assertNotIn("error", r, r)
+        self.assertLess(time.monotonic() - t0, 15, "3 s of download, not 50 MB at 5 Mbit/s")
+        self.assertEqual(r["measure_down"], "interface", r)
+        self.assertTrue(4 < r["down_mbps"] < 60, "about 10.5 Mbit/s, got %s" % r["down_mbps"])
+        self.assertTrue(1 < r["data_mb"] < 10, r["data_mb"])
+
+    def test_full_profile_on_a_librespeed_server(self):
+        with open(os.path.join(self.d, "speedtest.json"), "w") as f:
+            json.dump({"profile": "full", "server": "librespeed", "librespeed_url": self.base + "/backend/"}, f)
+        self.start()
+        r = self.one_run()
+        self.assertEqual((r["profile"], r["streams"], r["server"]), ("full", 4, "librespeed"), r)
+        gets = [(x[1], x[2]) for x in Speed.seen if x[0] == "GET"]
+        self.assertEqual(gets[:3], [(0, "/backend/empty.php")] * 3, "latency against empty.php")
+        self.assertEqual(gets[3:], [(1048576, "/backend/garbage.php")] * 4, "4 streams, ckSize in MiB")
+        self.assertEqual([(x[1], x[2]) for x in Speed.seen if x[0] == "POST"], [(50000, "/backend/empty.php")] * 4)
+        # a malformed URL falls back to Cloudflare rather than fetching something odd
+        with open(os.path.join(self.d, "speedtest.json"), "w") as f:
+            json.dump({"profile": "turbo", "server": "librespeed", "librespeed_url": "file:///etc/shadow"}, f)
+        Speed.seen = []
+        r = self.one_run()
+        self.assertEqual((r["profile"], r["server"]), ("quick", "cloudflare"))
+        self.assertTrue(all(x[2] in ("/__down", "/__up") for x in Speed.seen), Speed.seen)
 
     def test_one_test_at_a_time_and_the_history_is_trimmed(self):
         self.start()
@@ -238,6 +291,32 @@ class SpeedTest(unittest.TestCase):
             time.sleep(0.5)
         self.assertEqual(st["phase"], "done", st)
         self.assertEqual(len(plugin("get_speedtest_history")["results"]), 1)
+
+    def test_the_plugin_keeps_the_settings_the_daemon_reads(self):
+        self.start()
+
+        def plugin(method, args=None):
+            out = subprocess.run(["lua5.1", DRIVER, self.ubus_bin(), os.path.join(self.d, "glc"), method]
+                                 + ([json.dumps(args)] if args is not None else []),
+                                 env=dict(self.env, MUDIMODEM_ST_SETTINGS=os.path.join(self.d, "speedtest.json")),
+                                 capture_output=True, text=True, timeout=60)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            return json.loads(out.stdout)
+        self.assertEqual(plugin("get_speedtest_settings"),
+                         {"profile": "quick", "server": "cloudflare", "librespeed_url": ""})
+        for bad, why in (({"profile": "turbo"}, "profile"), ({"server": "ookla"}, "server"),
+                         ({"server": "librespeed"}, "needs its URL"),
+                         ({"server": "librespeed", "librespeed_url": "ftp://x/"}, "https://host/backend/"),
+                         ({"server": "librespeed", "librespeed_url": "https://x/a?b=c"}, "https://host/backend/")):
+            self.assertIn(why, plugin("set_speedtest_settings", bad).get("error", ""), bad)
+        self.assertFalse(os.path.exists(os.path.join(self.d, "speedtest.json")), "a refused write writes nothing")
+        r = plugin("set_speedtest_settings", {"profile": "full", "server": "librespeed",
+                                              "librespeed_url": self.base + "/backend"})
+        self.assertEqual(r, {"ok": True, "profile": "full", "server": "librespeed",
+                             "librespeed_url": self.base + "/backend/"}, "the folder's trailing / is added")
+        self.assertEqual(plugin("get_speedtest_settings")["librespeed_url"], self.base + "/backend/")
+        res = self.one_run()
+        self.assertEqual((res["profile"], res["server"], res["streams"]), ("full", "librespeed", 4))
 
 
 if __name__ == "__main__":

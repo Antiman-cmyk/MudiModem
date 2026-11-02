@@ -47,7 +47,7 @@ function templateKeys(src) {
 }
 
 // Not UI text: identifiers, CSS, key names, units and other technical tokens that stay as-is.
-const IGNORE = /px\b|^(mm|mmb|mmc|mms|mmt)-| mm-|^cat-$|^use strict$|^[a-z]+[A-Z]\w*$|^\w+\.\w+$|^(Arrow\w+|Enter|NR5G|POWERED DOWN|dB|dBm|mA|MHz\)?|Mbps|KiB|MiB|% IC|\(IC|ms \(±|· SIM|CA ×|MudiModem v|MudiModem|Ch|current cell PCI|scanned cell PCI|neighbour cell PCI|neighbourcell \?\(\[a-z\]\*\)|ui-monospace,monospace|· SINR|no terminator after|modem|5G-N?SA|cell|bands|ssh root@<router> \/usr\/sbin\/mudimodem-revert panic)$/;
+const IGNORE = /px\b|^(mm|mmb|mmc|mms|mmt)-| mm-|^cat-$|^use strict$|^[a-z]+[A-Z]\w*$|^\w+\.\w+$|^(Arrow\w+|Enter|NR5G|POWERED DOWN|dB|dBm|mA|MHz\)?|Mbps|KiB|MiB|% IC|\(IC|ms \(±|· SIM|CA ×|MudiModem v|MudiModem|Ch|Cloudflare|LibreSpeed|current cell PCI|scanned cell PCI|neighbour cell PCI|neighbourcell \?\(\[a-z\]\*\)|ui-monospace,monospace|· SINR|no terminator after|modem|5G-N?SA|cell|bands|ssh root@<router> \/usr\/sbin\/mudimodem-revert panic)$/;
 
 function staticKeys(src) {
   const out = new Set();

@@ -100,7 +100,12 @@ const RPC = {
   app_version: { version: "2.2.0", latest: "2.2.0", update_available: false },
   device_info: {}, get_history_persist: { enabled: false, size_bytes: 0 },
   library_status: { ok: true }, get_speedtest_interfaces: { cellular: { up: true }, wired: { up: false } },
-  get_speedtest_history: { results: [] }, get_speedtest_schedule: { enabled: false, interval_seconds: 21600 },
+  get_speedtest_history: { results: [0, 1, 2, 3, 4, 5].map((i) => ({ t: NOW - (5 - i) * 21600000, iface: "cellular",
+    trigger: i % 2 ? "schedule" : "manual", down_mbps: [182.4, 240.1, 96.3, 310.7, 205.2, 268.9][i],
+    up_mbps: [22.1, 31.4, 12.9, 40.2, 27.5, 35.8][i], latency_ms: [38, 34, 61, 29, 41, 33][i], jitter_ms: 4,
+    slot: 1, carrier: "T-Mobile", band: 41, pcc_rat: "NR5G-SA", ambr_dl: 300, ambr_ul: 50,
+    profile: i === 3 ? "full" : "quick", streams: i === 3 ? 4 : 2, data_mb: i === 3 ? 251.3 : 27.4, server: "cloudflare" })) }, get_speedtest_schedule: { enabled: true, interval_seconds: 21600 },
+  get_speedtest_settings: { profile: "quick", server: "librespeed", librespeed_url: "https://speed.example.com/backend/" },
   get_speedtest_status: { running: false }, get_battlimit: { enabled: false, limit_gui: 80, state: "off" }
 };
 function chunk(name) { return fs.readFileSync(path.join(ROOT, "dist/views", name), "utf8"); }
@@ -200,13 +205,13 @@ async function shot(browser, o) {
     await browser.close();
     // A string "needs translation" when it has a word of 2+ Latin letters that is not a
     // technical token, and the page did not translate it (it reached h() as English).
-    const TECH = /^(RSRP|RSRQ|SINR|RSSI|PCI|ARFCN|EARFCN|SCS|SA|NSA|LTE|NR|NR5G|NR5G-SA|NR5G-NSA|5G|4G|AT|ATI|SIM|ms|MHz|kHz|dBm|dB|mA|mV|V|Mbps|ID|TAC|CA|PCC|SCC\d*|B\d+|n\d+|IMSI|ICCID|MCC|MNC|PLMN|AMBR|GL|eMMC|T-Mobile|AT&T|USB|API|JSON|OK|Wi-Fi|GitHub|Cloudflare|Modem|MudiModem|WAN|NV|nv|VPN|Tailscale|ChiliApple|CPU|RAT|RG650V-NA|RG650V-EU|ssh|root|router|usr|sbin|mudimodem-revert|mudimodem-collectd|panic|unknown|Ch|BW|KiB|MiB|GiB|ping|Ping|PING|MBPS)$/;
+    const TECH = /^(RSRP|RSRQ|SINR|RSSI|PCI|ARFCN|EARFCN|SCS|SA|NSA|LTE|NR|NR5G|NR5G-SA|NR5G-NSA|5G|4G|AT|ATI|SIM|ms|MHz|kHz|dBm|dB|mA|mV|V|Mbps|ID|TAC|CA|PCC|SCC\d*|B\d+|n\d+|IMSI|ICCID|MCC|MNC|PLMN|AMBR|GL|eMMC|T-Mobile|AT&T|USB|API|JSON|OK|Wi-Fi|GitHub|Cloudflare|LibreSpeed|Modem|MudiModem|WAN|NV|nv|VPN|Tailscale|ChiliApple|CPU|RAT|RG650V-NA|RG650V-EU|ssh|root|router|usr|sbin|mudimodem-revert|mudimodem-collectd|panic|unknown|Ch|BW|KiB|MiB|GiB|ping|Ping|PING|MBPS)$/;
     // AT-library entries are community data (English by design), never page copy.
     const lib = JSON.parse(fs.readFileSync(path.join(ROOT, "src/at-library.snapshot.json"), "utf8"));
     const libText = new Set();
     (lib.entries || []).forEach((e) => ["title", "cat", "summary"].forEach((k) => { if (typeof e[k] === "string") libText.add(e[k]); }));
     const words = (x) => (x.match(/[A-Za-z][A-Za-z0-9+&-]*/g) || []).filter((w) => /[a-z]{2}|^[A-Z][a-z]/.test(w));
-    const needs = [...all].filter((x) => !libText.has(x.trim()) && words(x).some((w) => w.length > 1 && !TECH.test(w)) && !/^[A-Z]{2,}\+|^AT\+/.test(x.trim()));
+    const needs = [...all].filter((x) => !libText.has(x.trim()) && words(x).some((w) => w.length > 1 && !TECH.test(w)) && !/^[A-Z]{2,}\+|^AT\+/.test(x.trim()) && !/^https?:\/\/\S+$/.test(x.trim()));
     fs.mkdirSync(path.join(ROOT, "build"), { recursive: true });
     fs.writeFileSync(path.join(ROOT, "build/i18n-audit.json"), JSON.stringify({ locale: loc, untranslated: needs.sort() }, null, 1));
     console.log(`${needs.length} untranslated string(s) at ${loc} -> build/i18n-audit.json`);
