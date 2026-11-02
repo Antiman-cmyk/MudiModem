@@ -191,17 +191,15 @@ if [ -f src/sbin/mudimodem-collectd ]; then
   echo "7. history collector running + get_history"
   ssh -o BatchMode=yes "root@$HOST" 'test -x /usr/sbin/mudimodem-collectd && test -x /usr/sbin/mudimodemd' \
     || fail "collector not installed (run ./tools/deploy.sh)"
-  ssh -o BatchMode=yes "root@$HOST" 'pgrep -f "mudimodemd|mudimodem-collectd" >/dev/null' \
+  ssh -o BatchMode=yes "root@$HOST" 'pgrep -f "mudimodemd" >/dev/null' \
     || fail "collector process not running (/etc/init.d/mudimodem-collectd start)"
   # Engine: mudimodemd on eco unless /etc/mudimodem/collector pins python (or there is no eco).
   ENGINE=$(ssh -o BatchMode=yes "root@$HOST" '[ "$(cat /etc/mudimodem/collector 2>/dev/null)" != python ] && [ -x /usr/bin/eco ] && echo eco || echo python')
-  if [ "$ENGINE" = eco ]; then
-    ssh -o BatchMode=yes "root@$HOST" 'for i in 1 2 3 4 5 6; do ubus call mudimodem health 2>/dev/null | grep -q "\"engine\": \"eco\"" && exit 0; sleep 2; done; exit 1' \
-      || fail "mudimodemd is not answering ubus call mudimodem health (logread -e mudimodemd)"
-    echo "   engine: mudimodemd (eco)"
-  else
-    echo "   engine: python collector"
-  fi
+  # mudimodemd always runs (it also queues the console's AT); `collector` says who samples.
+  WANT=true; [ "$ENGINE" = eco ] || WANT=false
+  ssh -o BatchMode=yes "root@$HOST" 'for i in 1 2 3 4 5 6; do ubus call mudimodem health 2>/dev/null | grep -q "\"collector\": '"$WANT"'" && exit 0; sleep 2; done; exit 1' \
+    || fail "mudimodemd is not answering ubus call mudimodem health with collector=$WANT (logread -e mudimodemd)"
+  echo "   collector engine: $ENGINE (mudimodemd answering)"
   # It should be writing samples within a couple of poll intervals.
   ssh -o BatchMode=yes "root@$HOST" 'for i in 1 2 3 4 5 6; do [ -s /tmp/mudimodem/samples.jsonl ] && exit 0; sleep 5; done; exit 1' \
     || fail "no samples.jsonl written after ~30s"
@@ -299,20 +297,23 @@ printf '%s' "$CONBODY" | node -e '
     console.log("   console chunk eval OK ->", c.name);
   })' || fail "console chunk eval failed"
 
-echo "8c. at_console backend (GL AT service + direct-port fallback, against FAKES only)"
-# Both transports are faked: the real `ubus` would send the test's commands to
-# the live modem through GL's AT service (the test refuses to run without the fake).
-ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /tmp/mmtest/tmp'
-ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mmtest/fake-at.py' < test/fake-at-tool.py
-ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mmtest/fake-ubus-at.py' < test/fake-ubus-at.py
-ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mmtest/t.lua' < test/backend-console.test.lua
-ssh -o BatchMode=yes "root@$HOST" 'chmod +x /tmp/mmtest/fake-ubus-at.py; MM_TMP=/tmp/mmtest/tmp MUDIMODEM_UBUS=/tmp/mmtest/fake-ubus-at.py MUDIMODEM_AT_TOOL=/tmp/mmtest/fake-at.py lua /tmp/mmtest/t.lua >/dev/null; rc=$?; rm -rf /tmp/mmtest; exit $rc' \
-  || fail "at_console backend test failed on-device"
+echo "8c. at_console forwards to mudimodemd (fake oui.ubus only) + the daemon answers"
+# The plugin test uses a fake oui.ubus: nothing it sends can reach the modem.
+ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-console.test.lua' < test/backend-console.test.lua
+ssh -o BatchMode=yes "root@$HOST" 'MM_PLUGIN=/usr/lib/oui-httpd/rpc/mudimodem lua /tmp/mm-console.test.lua >/dev/null; rc=$?; rm -f /tmp/mm-console.test.lua; exit $rc' \
+  || fail "at_console forwarder test failed on-device"
+# A request the daemon must REJECT (empty) proves it is registered and validating, sending nothing.
+ssh -o BatchMode=yes "root@$HOST" 'ubus call mudimodem at_start "{\"cmd\":\"\"}" | grep -q "cmd required"' \
+  || fail "mudimodemd is not answering at_start (logread -e mudimodemd)"
 
 echo "8d. LIVE: one read-only AT through GL's AT service (the console's primary transport)"
 ssh -o BatchMode=yes "root@$HOST" \
   'ubus -t 10 call modem.CPU.AT get_result_AT "{\"cmd\":\"AT\",\"timeout\":5,\"source_flag\":1}" | grep -q "OK"' \
   || fail "live AT through modem.CPU.AT did not answer OK"
+echo "8d1. LIVE: the same read-only AT through mudimodemd's queue (what the console uses)"
+ssh -o BatchMode=yes "root@$HOST" \
+  'id=$(ubus call mudimodem at_start "{\"cmd\":\"AT\",\"timeout\":5}" | jsonfilter -e "@.id") && [ -n "$id" ] && ubus -t 30 call mudimodem at_wait "{\"id\":$id,\"wait\":15}" | jsonfilter -e "@.steps[0].status" | grep -qx ok' \
+  || fail "live AT through mudimodemd did not come back ok (logread -e mudimodemd)"
 echo "8d2. LIVE: one read-only AT through the direct-port fallback tool (per-step envelope)"
 ssh -o BatchMode=yes "root@$HOST" \
   'python3 /usr/lib/mudimodem/mudimodem-at.py --envelope --timeout 6 "AT" | head -1 | grep -qE "^MM-AT:ok:[0-9]+:1/1$"' \

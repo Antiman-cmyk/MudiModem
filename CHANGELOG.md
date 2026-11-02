@@ -25,6 +25,10 @@ part of R2 and the first step of R3), plus the fixes it surfaced.
   for python3 to be reinstalled, and nothing is forked per sample. The Python collector is still
   installed as the fallback; writing `python` to `/etc/mudimodem/collector` selects it.
   `ubus call mudimodem health` shows the collector's counters and last error.
+- **The AT console no longer freezes GL's admin.** Commands used to run inside GL's web server,
+  which on 4.10 has one worker: every other page waited until the modem answered. They now run in
+  `mudimodemd`'s AT queue, one sequence at a time; a long sequence shows its finished steps
+  while the rest is still running.
 - **Chinese:** the whole Modem page is available in Simplified Chinese and follows GL's language
   setting (switching GL's language switches the page). Technical terms (RSRP, n71, AT commands)
   stay as they are; the community AT library stays English.

@@ -523,7 +523,7 @@ test('multi-line prompt renders a textarea, single-line an input', () => {
     'multi-line uses <textarea>');
 });
 
-test('send(): RPC timeout scales with the number of steps', async () => {
+test('send(): each RPC waits one daemon slice (35 s), however many steps', async () => {
   const c = loadChunk();
   const vm = makeVm(c, {});
   const saved = global.window;
@@ -537,7 +537,48 @@ test('send(): RPC timeout scales with the number of steps', async () => {
     vm.prompt = 'A\nB\nC'; vm.selId = null;
     await vm.send();
   } finally { global.window = saved; }
-  assert.strictEqual(seenOpts.timeout, (8 * 3 + 10) * 1000, '3 steps -> 8*3+10 s');
+  assert.strictEqual(seenOpts.timeout, 35000, 'a slice is bounded by GL\'s 30 s ubus proxy, not by the steps');
+});
+
+test('send(): a {pending} reply continues with at_result and shows each step once', async () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  const saved = global.window;
+  const sent = [];
+  const s1 = { cmd: 'AT+ONE', status: 'ok', response: '+ONE: 1\r\nOK\r\n' };
+  const s2 = { cmd: 'AT+TWO', status: 'ok', response: '+TWO: 2\r\nOK\r\n' };
+  const replies = [
+    { done: false, pending: true, id: 77, ran: 1, requested: 3, steps: [s1], transport: 'gl' },
+    { done: false, pending: true, id: 77, ran: 1, requested: 3, steps: [s1], transport: 'gl' },
+    { done: true, ok: true, id: 77, ran: 3, requested: 3, aborted: false, transport: 'gl',
+      steps: [s1, s2, { cmd: 'AT+THREE', status: 'ok', response: 'OK\r\n' }] },
+  ];
+  try {
+    global.window = { $rpcRequest: (_m, p) => { sent.push([p[2], p[3]]); return Promise.resolve(replies.shift()); } };
+    vm.prompt = 'AT+ONE\nAT+TWO\nAT+THREE'; vm.selId = null;
+    await vm.send();
+  } finally { global.window = saved; }
+  assert.deepStrictEqual(sent.map((x) => x[0]), ['at_console', 'at_result', 'at_result']);
+  assert.deepStrictEqual(sent[1][1], { id: 77 }, 'continues with the job id');
+  assert.strictEqual(vm.lines.filter((l) => l.text === '+ONE: 1').length, 1, 'a step seen twice is shown once');
+  assert.ok(vm.lines.some((l) => l.text === '+TWO: 2'), 'later steps shown');
+  assert.strictEqual(vm.sending, false, 'done');
+  assert.ok(!vm.lines.some((l) => /skipped/.test(l.text)), 'nothing skipped');
+});
+
+test('send(): an error while waiting ends the send with that error', async () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  const saved = global.window;
+  const replies = [{ done: false, pending: true, id: 5, steps: {} },   // a non-array (empty list over ubus)
+                   { error: 'unknown AT job (finished long ago, or the daemon restarted)' }];
+  try {
+    global.window = { $rpcRequest: () => Promise.resolve(replies.shift()) };
+    vm.prompt = 'AT'; vm.selId = null;
+    await vm.send();
+  } finally { global.window = saved; }
+  assert.ok(vm.lines.some((l) => l.kind === 'err' && /daemon restarted/.test(l.text)));
+  assert.strictEqual(vm.sending, false);
 });
 
 test('checkLibraryStatus stores the status; render shows "Update available" + button', () => {

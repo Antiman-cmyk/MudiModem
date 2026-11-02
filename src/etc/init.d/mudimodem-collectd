@@ -1,12 +1,14 @@
 #!/bin/sh /etc/rc.common
-# procd service for MudiModem's collector: RF + battery history in /tmp/mudimodem, the eMMC
-# backup, and the live pushes. Respawned on crash.
+# procd service for MudiModem's daemon + collector: RF + battery history in /tmp/mudimodem, the
+# eMMC backup, the live pushes, and the AT console's queue. Respawned on crash.
 #
-# Engine: mudimodemd on GL's own lua-eco (/usr/bin/eco, in the 4.10 image) — no Python, so live
-# data works straight after a firmware upgrade, before the deps healer has reinstalled python3.
-# The Python collector stays as the fallback (no eco) and the escape hatch: put the word
-# `python` in /etc/mudimodem/collector to pin it. Both write the same files and pushes
-# (test/collectd-emu.test.py runs them side by side on an emulated GL bus).
+# mudimodemd (GL's own lua-eco, /usr/bin/eco, in the 4.10 image) always runs: it is the
+# collector AND the AT console's queue (`ubus call mudimodem …`, which the RPC plugin forwards
+# to). Its collector needs no Python, so live data works straight after a firmware upgrade,
+# before the deps healer has reinstalled python3. The Python collector stays as the escape
+# hatch: put the word `python` in /etc/mudimodem/collector and it samples instead, while
+# mudimodemd runs with its collector off (both write the same files and pushes:
+# test/collectd-emu.test.py runs them side by side on an emulated GL bus).
 
 START=95
 STOP=10
@@ -25,21 +27,24 @@ engine() {
 }
 
 start_service() {
-	if [ "$(engine)" = eco ]; then
-		procd_open_instance
+	local e
+	e=$(engine)
+	if [ -x /usr/bin/eco ] && [ -f "$DAEMON" ]; then
+		procd_open_instance mudimodemd
 		procd_set_param command /usr/bin/eco "$DAEMON"
+		[ "$e" = eco ] || procd_set_param env MUDIMODEMD_COLLECTOR=0
 		procd_set_param respawn
 		procd_set_param stderr 1
 		procd_close_instance
-		return 0
 	fi
+	[ "$e" = python ] || return 0
 	# No python3 (a firmware upgrade wipes opkg packages): let the healer
 	# install it and start us, instead of respawning into "not found".
 	if ! "$DEPS" check; then
 		/usr/lib/mudimodem/mudimodem-detach "$DEPS" heal &
 		return 0
 	fi
-	procd_open_instance
+	procd_open_instance collector
 	procd_set_param command /usr/bin/python3 "$PROG"
 	procd_set_param respawn
 	procd_set_param stderr 1

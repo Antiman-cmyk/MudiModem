@@ -11,7 +11,10 @@
 --                                    {"hang": s} answers only after s seconds (a wedged modem)
 --   collect_signals: {...}           cellular.collect get_signals reply
 --   has_ws: true|false               gl-session has_websocket
---   at: {"AT+CSQ": "\r\n+CSQ: 20,99\r\n\r\nOK\r\n", ...}   modem.CPU.AT get_result_AT by cmd
+--   at: {"AT+CSQ": "\r\n+CSQ: 20,99\r\n\r\nOK\r\n", ...}   modem.CPU.AT get_result_AT by cmd;
+--                                    {"hang": s, "reply": "..."} answers after s seconds;
+--                                    anything else answers "\r\nERROR\r\n"
+--   no_at: true                      modem.CPU.AT not registered (GL's cellular stack down)
 -- Every call is appended to <log dir>/calls.jsonl ({object, method, args}); every gl-session
 -- notify to <log dir>/notify.jsonl ({name, data}).
 local ubus = require "eco.ubus"
@@ -59,11 +62,17 @@ conn:add("cellular.collect", { get_signals = { function(req, msg)
   if S.collect_signals == nil then return ubus.STATUS_NOT_FOUND end
   conn:reply(req, S.collect_signals)
 end, { time = ubus.INT32, slot = ubus.INT32 } } })
-conn:add("modem.CPU.AT", { get_result_AT = { function(req, msg)
-  append("calls.jsonl", { object = "modem.CPU.AT", method = "get_result_AT", args = msg or {} })
-  local data = (S.at or {})[msg and msg.cmd or ""] or "\r\nERROR\r\n"
-  conn:reply(req, { data = data })
-end, { cmd = ubus.STRING, timeout = ubus.INT32, sub_id = ubus.INT32, source_flag = ubus.INT32 } } })
+if not S.no_at then
+  conn:add("modem.CPU.AT", { get_result_AT = { function(req, msg)
+    append("calls.jsonl", { object = "modem.CPU.AT", method = "get_result_AT", args = msg or {} })
+    local v = (S.at or {})[msg and msg.cmd or ""]
+    if type(v) == "table" then
+      if v.hang then time.sleep(v.hang) end
+      v = v.reply
+    end
+    conn:reply(req, { data = v or "\r\nERROR\r\n" })
+  end, { cmd = ubus.STRING, timeout = ubus.INT32, sub_id = ubus.INT32, source_flag = ubus.INT32 } } })
+end
 conn:add("gl-session", {
   notify = { function(req, msg)
     append("notify.jsonl", msg or {})

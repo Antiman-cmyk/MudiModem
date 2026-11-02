@@ -315,6 +315,118 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         self.assertLess(took, 5.5, "the hang cost the 1 s timeout, not the modem's 6 s")
         self.assertIn("no reply (ubus failed or timed out)", err)
 
+    # ---- the AT queue (stage 3): the console's commands, in the daemon -------------------------
+    def ubus(self, bus, method, args):
+        out = subprocess.run([os.path.join(bus, "bin", "ubus"), "call", "mudimodem", method, json.dumps(args)],
+                             capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
+
+    def wait_health(self, bus):
+        for _ in range(100):
+            out = subprocess.run([os.path.join(bus, "bin", "ubus"), "call", "mudimodem", "health"],
+                                 capture_output=True, text=True)
+            if out.returncode == 0:
+                return json.loads(out.stdout)
+            time.sleep(0.2)
+        self.fail("mudimodemd never registered")
+
+    AT = {"ATI": "\r\nQuectel\r\nRG650V\r\n\r\nOK\r\n",
+          "AT+SLOW": {"hang": 2, "reply": "\r\n+SLOW: 1\r\n\r\nOK\r\n"}}
+
+    def test_eco_at_sequence_via_gl_service(self):
+        """One sequence through GL's AT service, exactly as GL's console sends it (sub_id = the
+        active slot), stopping at the first step that is not OK; the collector keeps sampling
+        while a slow command holds the channel."""
+        scen = {"modem_status": ct.MODEM_STATUS_410_TWO, "network_info": ct.NETWORK_INFO_410,
+                "cell_info": [ct.CELL_INFO_410_SA], "has_ws": True, "at": self.AT}
+        d, bus, env = self.start_bus(scen)
+        p = self.spawn_eco(env)
+        self.wait_health(bus)
+        j = self.ubus(bus, "at_start", {"cmd": "ATI\nAT+CSQ\nAT+NEVER", "timeout": 5})
+        self.assertIn("id", j)
+        r = self.ubus(bus, "at_wait", {"id": j["id"], "wait": 10})
+        self.assertTrue(r["done"] and r["ok"], r)
+        self.assertEqual((r["transport"], r["slot"], r["sub_id"]), ("gl", 1, 1))
+        self.assertEqual([s["status"] for s in r["steps"]], ["ok", "error"])
+        self.assertTrue(r["aborted"])
+        self.assertIn("RG650V", r["steps"][0]["response"])
+        ats = [c["args"] for c in jsonl(os.path.join(bus, "calls.jsonl")) if c["method"] == "get_result_AT"]
+        self.assertEqual(ats, [{"cmd": "ATI", "timeout": 5, "source_flag": 1, "sub_id": 1},
+                               {"cmd": "AT+CSQ", "timeout": 5, "source_flag": 1, "sub_id": 1}])
+        # a slow command: pending first (wait 0), the collector is not held up, then done
+        before = len(jsonl(os.path.join(env["MUDIMODEM_HIST"], "samples.jsonl")))
+        j = self.ubus(bus, "at_start", {"cmd": "AT+SLOW", "timeout": 5})
+        r = self.ubus(bus, "at_wait", {"id": j["id"], "wait": 0})
+        self.assertTrue(r["pending"] and not r["done"], r)
+        r = self.ubus(bus, "at_wait", {"id": j["id"], "wait": 10})
+        self.assertTrue(r["done"] and r["steps"][0]["status"] == "ok", r)
+        during = len(jsonl(os.path.join(env["MUDIMODEM_HIST"], "samples.jsonl"))) - before
+        self.assertGreaterEqual(during, 3, "sampling went on while the AT command waited")
+        # validation happens in the daemon; nothing is sent for a bad request
+        self.assertIn("error", self.ubus(bus, "at_start", {"cmd": ""}))
+        self.assertIn("error", self.ubus(bus, "at_start", {"cmd": "A" * 300}))
+        self.assertIn("error", self.ubus(bus, "at_wait", {"id": 1}))
+        # FIFO with a bounded queue: four slow jobs are accepted, the fifth is refused
+        ids = [self.ubus(bus, "at_start", {"cmd": "AT+SLOW", "timeout": 5}) for _ in range(5)]
+        self.assertTrue(all("id" in x for x in ids[:4]), ids)
+        self.assertIn("queue full", ids[4].get("error", ""))
+        h = self.ubus(bus, "health", {})
+        self.assertTrue(h["at_running"] and h["at_queue"] == 3, h)
+        p.send_signal(signal.SIGTERM)
+        self.assertEqual(p.wait(timeout=20), 0)
+
+    def test_eco_at_no_slot_means_no_sub_id(self):
+        """current_sim_slot 0 (no SIM / modem resetting) must never become sub_id=0."""
+        scen = {"modem_status": {"modems": [{"bus": "cpu", "current_sim_slot": 0}]},
+                "cell_info": [ct.CELL_INFO_410_NO_SERVICE], "at": self.AT}
+        d, bus, env = self.start_bus(scen)
+        p = self.spawn_eco(env)
+        self.wait_health(bus)
+        r = self.ubus(bus, "at_wait", {"id": self.ubus(bus, "at_start", {"cmd": "ATI"})["id"], "wait": 10})
+        self.assertTrue(r["done"] and r["ok"], r)
+        self.assertNotIn("sub_id", r)
+        ats = [c["args"] for c in jsonl(os.path.join(bus, "calls.jsonl")) if c["method"] == "get_result_AT"]
+        self.assertEqual(ats, [{"cmd": "ATI", "timeout": 8, "source_flag": 1}])
+        p.send_signal(signal.SIGTERM)
+        p.wait(timeout=20)
+
+    def test_eco_at_falls_back_to_the_direct_port_tool(self):
+        """GL's AT service not registered: the whole sequence goes to the direct-port tool
+        (faked here), decided before anything was sent."""
+        scen = {"modem_status": ct.MODEM_STATUS_410, "cell_info": [ct.CELL_INFO_410_SA], "no_at": True}
+        d, bus, env = self.start_bus(scen)
+        env.update(MUDIMODEM_AT_TOOL=os.path.join(HERE, "fake-at-tool.py"), MUDIMODEM_PYTHON=shutil.which("python3"))
+        p = self.spawn_eco(env)
+        self.wait_health(bus)
+        r = self.ubus(bus, "at_wait", {"id": self.ubus(bus, "at_start", {"cmd": "AT+ONE\nAT+TWO", "timeout": 3})["id"],
+                                       "wait": 10})
+        self.assertTrue(r["done"] and r["ok"], r)
+        self.assertEqual(r["transport"], "direct")
+        self.assertEqual([s["cmd"] for s in r["steps"]], ["AT+ONE", "AT+TWO"])
+        self.assertIn("--timeout 3", r["steps"][0]["response"])
+        b = self.ubus(bus, "at_wait", {"id": self.ubus(bus, "at_start", {"cmd": "AT__BUSY__"})["id"], "wait": 10})
+        self.assertIn("busy", b.get("error", ""))
+        p.send_signal(signal.SIGTERM)
+        p.wait(timeout=20)
+
+    def test_eco_without_its_collector_still_queues_at(self):
+        """Python collector pinned: mudimodemd runs with MUDIMODEMD_COLLECTOR=0 — it samples
+        nothing (no AT-backed cell_info twice per tick) but still serves the console."""
+        scen = {"modem_status": ct.MODEM_STATUS_410, "cell_info": [ct.CELL_INFO_410_SA], "at": self.AT}
+        d, bus, env = self.start_bus(scen)
+        env["MUDIMODEMD_COLLECTOR"] = "0"
+        p = self.spawn_eco(env)
+        self.assertFalse(self.wait_health(bus)["collector"])
+        r = self.ubus(bus, "at_wait", {"id": self.ubus(bus, "at_start", {"cmd": "ATI"})["id"], "wait": 10})
+        self.assertTrue(r["done"] and r["ok"], r)
+        time.sleep(1.0)
+        methods = [c["method"] for c in jsonl(os.path.join(bus, "calls.jsonl"))]
+        self.assertNotIn("cell_info", methods)
+        self.assertEqual(jsonl(os.path.join(env["MUDIMODEM_HIST"], "samples.jsonl")), [])
+        p.send_signal(signal.SIGTERM)
+        self.assertEqual(p.wait(timeout=20), 0)
+
     def test_eco_health_and_single_instance(self):
         scen = {"modem_status": ct.MODEM_STATUS_410, "network_info": ct.NETWORK_INFO_410,
                 "cell_info": [ct.CELL_INFO_410_SA], "has_ws": True}

@@ -56,7 +56,8 @@ LTE**, each with a one-click Lock. Same confirm-or-revert safety as Bands.
 
 A raw AT terminal to the modem. Commands go through GL's own AT service — the same call GL's web
 console makes, addressed to the **active SIM** and queued with GL's own polling so replies never
-cross — with the modem's direct AT port only as a fallback while GL's cellular stack is down. Alongside
+cross — with the modem's direct AT port only as a fallback while GL's cellular stack is down. Commands run in
+MudiModem's background service, so GL's admin pages stay responsive while the modem answers. Alongside
 it, a searchable **community command library** where every entry carries a **risk badge** — `read` (query
 only), `set` (runtime, gone on reboot), or `nv` (**writes permanent memory; survives factory reset**).
 Nothing ever runs by itself: clicking a library entry just fills the prompt, and `set`/`nv` commands stay

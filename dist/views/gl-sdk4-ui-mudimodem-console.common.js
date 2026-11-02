@@ -925,23 +925,15 @@ var __mm = (() => {
             return;
           }
           var TOOL_T = 8;
+          var SLICE_MS = 35e3;
           this.sending = true;
-          return rpc(
-            "at_console",
-            { cmd: wire, timeout: TOOL_T },
-            { timeout: (TOOL_T * steps.length + 10) * 1e3 }
-          ).then(function(r) {
-            self.sending = false;
-            if (r && r.error) {
-              self.push("err", r.error);
-              return;
-            }
+          var shown = 0, combined = "";
+          var show = function(r) {
             if (r && (r.transport === "gl" || r.transport === "direct")) {
               STORE.transport = self.transport = r.transport;
             }
-            var got = r && r.steps || [];
-            var combined = "";
-            got.forEach(function(st) {
+            var got = r && Array.isArray(r.steps) ? r.steps : [];
+            got.slice(shown).forEach(function(st) {
               var resp = st.response || "";
               combined += resp + "\n";
               resp.replace(/\r/g, "\n").split("\n").forEach(function(l) {
@@ -952,12 +944,26 @@ var __mm = (() => {
                 self.push("err", "no terminator after " + TOOL_T + "s — " + (self.transport === "direct" ? "the response may still arrive; until it does (or is given up on), the next send waits for it or reports the channel busy" : "GL's AT service stopped waiting; it drops a late answer before the next command, so nothing gets mixed up"));
               }
             });
+            if (got.length > shown) shown = got.length;
+          };
+          var step = function(r) {
+            if (r && r.error) {
+              self.sending = false;
+              self.push("err", r.error);
+              return;
+            }
+            show(r);
+            if (r && r.pending && r.id != null) {
+              return rpc("at_result", { id: r.id }, { timeout: SLICE_MS }).then(step);
+            }
+            self.sending = false;
             if (r && r.aborted) {
-              var skipped = (r.requested || steps.length) - (r.ran || got.length);
+              var skipped = (r.requested || steps.length) - (r.ran || shown);
               for (var i = 0; i < skipped; i++) self.note("skipped — previous step failed");
             }
             self.applyDecode(entry, wire, combined);
-          }).catch(function(e) {
+          };
+          return rpc("at_console", { cmd: wire, timeout: TOOL_T }, { timeout: SLICE_MS }).then(step).catch(function(e) {
             self.sending = false;
             self.push("err", e && (e.message || e.type) || "request failed");
           });

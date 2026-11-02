@@ -177,7 +177,8 @@ awareness. Written to `/tmp/mudimodem/samples.jsonl` + `latest.json` and pushed 
   CFUN, COPS, QSCAN, QUIMSLOT, CLCK/CPIN/CPWD, EGMR, …) triggers `ubus call cellular.status
   get_event` so GL's state manager refreshes. GL's own web AT console
   (`libcm_network.so send_at_command` @0x14230) goes through it with `source_flag 1`,
-  `sub_id = slot` and a 4095-byte reply buffer — MudiModem's `at_console` now sends the same.
+  `sub_id = slot` and a 4095-byte reply buffer — MudiModem's console sends the same (from
+  mudimodemd's AT queue, `src/lib/mudimodemd/atq.lua`; the plugin's `at_console` forwards to it).
 - `cell_info` failure reply: `{"ret": <code>, "resp": "<text>"}` and no `network_type`
   (handler @0x85dc–0x8624) — what `cellular_compat.cell_info_failed` keys on.
 - GL's opkg feed (`/etc/opkg/distfeeds.conf`) carries `python3-light 3.11.7-1`; every module

@@ -20,7 +20,6 @@ export MM_WS_MODULE=$PWD/src/ws/mudimodem.lua
 export MUDIMODEM_PENDING=$T/pending MUDIMODEM_ARMED=$T/armed MUDIMODEM_LATEST=$T/latest.json
 export MUDIMODEM_BIN=$PWD/src/sbin/mudimodem-revert MUDIMODEM_DETACH=$T/detach MUDIMODEM_HIST=$T/hist
 export MUDIMODEM_AT_TOOL=$PWD/test/fake-at-tool.py MUDIMODEM_LIB_TOOL=$PWD/test/fake-lib-tool.py
-export MUDIMODEM_UBUS=$PWD/test/fake-ubus-at.py   # at_console's GL AT service, faked (never the real modem)
 export MUDIMODEM_VERSION_FILE=$T/mmtmp/local.json MUDIMODEM_CURL=$T/mmtmp/curl.sh
 export MUDIMODEM_HISTORY_CFG=$T/history.json MUDIMODEM_HISTORY_PERSIST=$T/persist
 export MUDIMODEM_BATTLIMIT_FILE=$T/mmtmp/battlimit.json MUDIMODEM_BATTLIMIT_BIN=$T/mmtmp/glbattlimit
@@ -47,7 +46,7 @@ else
   echo "== page preview SKIPPED: needs firmware/rootfs + playwright =="
 fi
 echo "== lua (host lua5.1) =="
-for f in test/backend-*.test.lua test/ws-seed.test.lua; do
+for f in test/backend-*.test.lua test/ws-seed.test.lua test/daemon-*.test.lua; do
   case "$f" in *backend-speedtest*) echo "SKIP  $f (live ubusd only)"; continue;;
     *backend-history.test.lua|*backend-battery-history*) echo "XFAIL $f on host cjson (no empty_array) — see router pass"; continue;; esac
   run "$f" lua5.1 "$f"
@@ -57,9 +56,13 @@ done
 if [ -n "${MM_ROOTFS:-}" ] && command -v qemu-aarch64-static >/dev/null && [ -x "$MM_ROOTFS/usr/bin/lua" ]; then
   echo "== lua (ROUTER lua via qemu, rootfs $MM_ROOTFS) =="
   unset LUA_PATH
-  for f in test/backend-*.test.lua test/ws-seed.test.lua; do
+  for f in test/backend-*.test.lua test/ws-seed.test.lua test/daemon-*.test.lua; do
     case "$f" in *backend-speedtest*) continue;; esac
     run "router:$f" qemu-aarch64-static -L "$MM_ROOTFS" "$MM_ROOTFS/usr/bin/lua" "$f"
+  done
+  # the daemon's own runtime: the image's eco (Lua 5.4)
+  for f in test/daemon-*.test.lua; do
+    run "router eco:$f" qemu-aarch64-static -L "$MM_ROOTFS" "$MM_ROOTFS/usr/bin/eco" "$f"
   done
 else
   echo "== lua (ROUTER lua) SKIPPED: set MM_ROOTFS=<extracted 4.10 rootfs> and install qemu-user-static =="

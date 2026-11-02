@@ -5,11 +5,13 @@
 // so this file MUST be a single expression (module.exports = {...}).
 // Vue is runtime-only: render(h) only, never `template:`.
 //
-// Transport: mudimodem.at_console. The backend sends through GL's own AT
-// service — the call GL's web console makes, with the ACTIVE SIM's slot as the
-// subscription — and falls back to the direct port /dev/at_mdm0 only while
-// GL's cellular stack is down; each reply names the transport it used
-// (`transport: "gl" | "direct"`) and the truth line repeats it. The library is
+// Transport: mudimodem.at_console, which hands the sequence to mudimodemd's AT
+// queue (so GL's admin keeps working while the modem answers). The daemon sends
+// through GL's own AT service — the call GL's web console makes, with the ACTIVE
+// SIM's slot as the subscription — and falls back to the direct port
+// /dev/at_mdm0 only while GL's cellular stack is down; each reply names the
+// transport it used (`transport: "gl" | "direct"`) and the truth line repeats
+// it. A reply still {pending} continues with at_result {id}. The library is
 // static JSON at /mudimodem/at-library.json
 // (gzip_static), fetched with $axios. Entries only ever FILL the prompt —
 // nothing auto-runs. set/nv entries need the banner checkbox to Send;
@@ -360,38 +362,48 @@ export default localize((function () {
       if (!hasRpc()) {
         this.push("err", "RPC unavailable"); return;
       }
-      var TOOL_T = 8;   // per-step deadline; rpc timeout = TOOL_T*steps + 10 s
+      var TOOL_T = 8;   // per-step deadline (s)
+      // mudimodemd runs the sequence; each reply waits at most ~20 s for it (one call through
+      // GL's ubus proxy must answer within 30 s). A sequence still running comes back as
+      // {pending, id, steps so far} and continues with at_result — so the timeout is per slice.
+      var SLICE_MS = 35000;
       this.sending = true;
-      return rpc("at_console",
-                                         { cmd: wire, timeout: TOOL_T },
-                         { timeout: (TOOL_T * steps.length + 10) * 1000 })
-        .then(function (r) {
-          self.sending = false;
-          if (r && r.error) { self.push("err", r.error); return; }
-          if (r && (r.transport === "gl" || r.transport === "direct")) {
-            STORE.transport = self.transport = r.transport;
-          }
-          var got = (r && r.steps) || [];
-          var combined = "";
-          got.forEach(function (st) {
-            var resp = (st.response || "");
-            combined += resp + "\n";
-            resp.replace(/\r/g, "\n").split("\n").forEach(function (l) {
-              l = l.trim();
-              if (l) self.push(self.classifyLine(l), l);
-            });
-            if (st.status === "timeout") {
-              self.push("err", "no terminator after " + TOOL_T + "s — " + (self.transport === "direct"
-                ? "the response may still arrive; until it does (or is given up on), the next send waits for it or reports the channel busy"
-                : "GL's AT service stopped waiting; it drops a late answer before the next command, so nothing gets mixed up"));
-            }
+      var shown = 0, combined = "";
+      var show = function (r) {
+        if (r && (r.transport === "gl" || r.transport === "direct")) {
+          STORE.transport = self.transport = r.transport;
+        }
+        var got = (r && Array.isArray(r.steps)) ? r.steps : [];
+        got.slice(shown).forEach(function (st) {
+          var resp = (st.response || "");
+          combined += resp + "\n";
+          resp.replace(/\r/g, "\n").split("\n").forEach(function (l) {
+            l = l.trim();
+            if (l) self.push(self.classifyLine(l), l);
           });
-          if (r && r.aborted) {
-            var skipped = (r.requested || steps.length) - (r.ran || got.length);
-            for (var i = 0; i < skipped; i++) self.note("skipped — previous step failed");
+          if (st.status === "timeout") {
+            self.push("err", "no terminator after " + TOOL_T + "s — " + (self.transport === "direct"
+              ? "the response may still arrive; until it does (or is given up on), the next send waits for it or reports the channel busy"
+              : "GL's AT service stopped waiting; it drops a late answer before the next command, so nothing gets mixed up"));
           }
-          self.applyDecode(entry, wire, combined);
-        })
+        });
+        if (got.length > shown) shown = got.length;
+      };
+      var step = function (r) {
+        if (r && r.error) { self.sending = false; self.push("err", r.error); return; }
+        show(r);
+        if (r && r.pending && r.id != null) {
+          return rpc("at_result", { id: r.id }, { timeout: SLICE_MS }).then(step);
+        }
+        self.sending = false;
+        if (r && r.aborted) {
+          var skipped = (r.requested || steps.length) - (r.ran || shown);
+          for (var i = 0; i < skipped; i++) self.note("skipped — previous step failed");
+        }
+        self.applyDecode(entry, wire, combined);
+      };
+      return rpc("at_console", { cmd: wire, timeout: TOOL_T }, { timeout: SLICE_MS })
+        .then(step)
         .catch(function (e) {
           self.sending = false;
           self.push("err", (e && (e.message || e.type)) || "request failed");
