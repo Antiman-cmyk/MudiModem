@@ -937,7 +937,7 @@ module.exports = (function () {
 
       injectStyle: function () {
         if (typeof document === "undefined" || document.getElementById(this.styleId)) return;
-        // GL theme tokens only — never hand-picked colours (CLAUDE.md §8).
+        // GL theme tokens only — never hand-picked colours (docs/knowledge.md §2; test/theme-vars.test.js).
         var css = [
           ".mmb{display:flex;flex-direction:column;gap:12px}",
           ".mmb-card{background:var(--background-card);border-radius:8px;padding:12px 14px}",

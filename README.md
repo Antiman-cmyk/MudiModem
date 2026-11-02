@@ -11,8 +11,9 @@ MudiModem uses GL's built in modem commands to accomplish what it does so should
 
 MudiModem is a tabbed page. Every screen anchors to a persistent **live signal strip** across the top
 (RSRP, updating in real time) so you can always see what a change did to the connection. The tabs
-documented below are Tracking, Bands, Cell lock, AT console, SIM, Speedtest and Battery; there is
-also a Config tab (version / self-update). Everything live on the page is pushed by the router
+documented below are Tracking, Bands, Cell lock, AT console, Speedtest and Battery; there is
+also a Config tab (version / self-update, history-on-flash). SIM and APN settings are not here on
+purpose: GL 4.10's own Internet page covers them completely. Everything live on the page is pushed by the router
 (GL's websocket bus) — the page never polls.
 
 ### 📈 Tracking
@@ -53,7 +54,9 @@ LTE**, each with a one-click Lock. Same confirm-or-revert safety as Bands.
 
 ![AT console tab](docs/screenshots/04-at-console.jpg)
 
-A raw AT terminal to the modem, on its **own** channel so it doesn't collide with GL's polling. Alongside
+A raw AT terminal to the modem. Commands go through GL's own AT service — the same call GL's web
+console makes, addressed to the **active SIM** and queued with GL's own polling so replies never
+cross — with the modem's direct AT port only as a fallback while GL's cellular stack is down. Alongside
 it, a searchable **community command library** where every entry carries a **risk badge** — `read` (query
 only), `set` (runtime, gone on reboot), or `nv` (**writes permanent memory; survives factory reset**).
 Nothing ever runs by itself: clicking a library entry just fills the prompt, and `set`/`nv` commands stay
@@ -123,9 +126,10 @@ From a **root shell on the router**
 curl -fsSL https://raw.githubusercontent.com/Antiman-cmyk/MudiModem/main/install.sh | sh
 ```
 
-The installer downloads every file from GitHub, gzips the page chunks with the box's own `gzip`, and drops
-them into place — no toolchain, nothing to build. Then **reload the GL admin in your browser** and a
-**MODEM** item appears in the top navigation. There's no reboot. It refuses firmware older than 4.10.
+The installer first downloads everything it needs from GitHub (so a dropped connection leaves the
+router untouched), then puts the files in place, gzipping the page chunks with the box's own `gzip` —
+no toolchain, nothing to build. Then **reload the GL admin in your browser** and a **MODEM** item
+appears in the top navigation. There's no reboot. It refuses firmware older than 4.10.
 
 **Installing from a fork or branch** (e.g. before a change is merged upstream): point the installer at
 that tree's raw URL. The source is recorded on the box, so the Config tab's update check and
@@ -168,3 +172,16 @@ Both scripts **refuse to run against anything that isn't a GL-E5800** on firmwar
 
 The firmware contract 2.x relies on is documented in `docs/cellular-api-4.10.md`. The band model
 and AT commands are Quectel- and firmware-specific; treat other hardware as untested.
+
+## Development
+
+No router is needed to work on MudiModem. `tools/firmware.sh fetch && tools/firmware.sh extract`
+unpacks GL's official 4.10.0 image, and `tools/test-local.sh` runs every test suite on the dev box —
+including passes under the **router's own** Lua, busybox shell and tools via qemu
+(`tools/emu.sh`). What ships where is listed once, in `manifest.txt`; `tools/deploy.sh` pushes a
+working tree to a real box over ssh when one is genuinely needed.
+
+Start with `CLAUDE.md` (rules of the road), then `docs/architecture.md` (structure and the
+refactor plan), `docs/cellular-api-4.10.md` (every GL interface used, with evidence) and
+`docs/knowledge.md` (platform and modem knowledge). `docs/audit-2026-11-02.md` is the open
+improvement list; `docs/design/` and `docs/history/` are background.

@@ -1,4 +1,13 @@
-# MudiModem 3.0 重构方案（架构层）— 2026-11-02
+# MudiModem 架构与 3.0 重构计划 — 2026-11-02
+
+## 进度
+| 阶段 | 状态 | 已落地的内容 |
+|---|---|---|
+| **R0 打基础** | ✅ 完成（2026-11-02） | `manifest.txt` + 唯一的安装器 `src/installer/mudimodem-install`（install / uninstall / deploy / 自更新都走它，keep.d 在安装时生成）；在假根目录里端到端跑安装/升级/卸载的模拟测试（dash、busybox、路由器自己的 ash）；清单 lint；`tools/firmware.sh`（固件拉取+解包，sha256 固定）；`tools/emu.sh`（qemu 运行镜像的 lua / eco / busybox / 任意程序）；主题变量 lint，并修掉了 16 个未定义变量；文档重组，去掉 superpowers 流程痕迹，CLAUDE.md 精简 |
+| R1 前端结构 | 待做 | esbuild 构建步骤从 R0 挪到这里，和 kit 拆分一起做 |
+| R2 插件模块化 + 事务 | 待做 | |
+| R3 守护进程 | 待做 | 模拟环境已验证可行（§6.1） |
+| R4 新功能 | 待做 | |
 
 姊妹篇：`docs/audit-2026-11-02.md` 逐条列出了具体问题。这一篇回答的是另一个问题：**这些问题为什么会
 反复出现，结构上应该怎么改。** 所有关于固件的结论都来自官方 `e5800-4.10.0_release5` 镜像（解包在
@@ -31,7 +40,7 @@ nginx 插件只保留三件事：方法白名单、参数校验、直接读历�
 | S3 | **三种语言、两个 Lua 版本，再加一个要事后安装的运行时** | 固件升级后 Python 没了，要靠 `mudimodem-deps heal` 联网重装，期间没有实时数据；同一份 GL 数据结构的知识写了两遍 | `cellular_compat.py` 和插件各有一份 `pick_modem` / `active_slot`；采集器每 10 秒要 fork 3 次以上的 `ubus` 子进程（`mudimodem-collectd:108, 247, 281`） |
 | S4 | **前端 5 个 chunk 没有任何共享代码** | 引用了不存在的主题变量，风格不统一，一处改动要改四个地方 | `rpcSilent` 有 4 份，`injectStyle` 有 5 份；"预加载 + 推送 + 补洞 + 停滞检测"在状态条、Tracking、Battery 里各实现了一遍（`*_HOLE_MS` 定义了 3 次）；4 套按钮类名 |
 | S5 | **主 chunk 什么都管**（2163 行：外壳、状态条、Bands、Cell lock、Config） | 倒计时横幅只能画在两个标签页里；改一个标签页就要重新测试整个主 chunk | `src/views/mudimodem.js` |
-| S6 | **"装哪些文件、装到哪"写了 5 份** | 漂移只能靠 `test_install_wiring.sh` 事后核对；安装要逐个下载约 30 个文件，中途失败会留下新旧混杂的状态 | `install.sh`、`tools/deploy.sh`、`uninstall.sh`、`tools/verify.sh`、`src/upgrade/keep.d/mudimodem` 各自维护一份路径列表 |
+| S6 | **"装哪些文件、装到哪"写了 5 份**（✅ R0 已解决） | 漂移只能靠当时的 `test_install_wiring.sh` 事后核对；安装要逐个下载约 30 个文件，中途失败会留下新旧混杂的状态 | `install.sh`、`tools/deploy.sh`、`uninstall.sh`、`tools/verify.sh`、`src/upgrade/keep.d/mudimodem`（R0 已删除，改为安装时生成）各自维护一份路径列表 |
 | S7 | **文档就是变更日志** | 新人或 AI 无法分辨哪些是现状、哪些是历史 | CLAUDE.md 1030 行，4.8 的历史、"更正的更正"、§12 的状态日志混在一起；specs 和 plans 合计 45 份 |
 
 **结论：** S1 + S2 是安全网和长任务问题的根源，S4 + S5 是 UI 问题的根源，S3 + S6 是升级和安装问题的根源。
@@ -127,10 +136,11 @@ heal 流程，以及依赖 opkg 和网络的那条路径。
 - Node 本来就在开发机上用于测试，不增加新的依赖类别。
 
 **D8 发布包加一份清单，作为唯一的数据源。**
-- `manifest.json` 是唯一的权威列表。每一项包含：源文件、目标路径、权限、是否 gzip、是否进 keep.d、所属服务及启停顺序。
-- `install`、`uninstall`、`deploy`、`verify`、`keep.d` **全部由它生成或驱动**。`test_install_wiring.sh`
-  改为校验清单本身。
-- CI 为每个版本生成 `mudimodem-<ver>.tar.gz` 和对应的 `sha256`。
+- `manifest.txt` 是唯一的权威列表（已实现）。每条记录包含：类型（file / gz / cache / default / own / keepd / service）、
+  源文件、目标路径、权限；服务按出现顺序启动，卸载时反序停止。
+- `install`、`uninstall`、`deploy`、`verify`、`keep.d` **全部由它驱动**（已实现）。原来的 `test_install_wiring.sh`
+  拆成 `test/manifest.test.sh`（清单本身）、`test/installer.test.sh`（实际跑安装）和 `test/static.test.sh`（剩下的代码约束）。
+- `tools/build.sh` 已经能生成 `build/mudimodem-<ver>.tar.gz` 和 `sha256`，`deploy.sh` 用的就是它；还没做的是让 CI 把它作为 release 发布。
 - 安装流程：一次下载 → 校验 → 解到暂存目录 → 停服务 → 原子替换 → 写入版本号 → 启服务。自更新走同一条路径。
   这样可以替代现在逐个下载约 30 个 raw 文件的方式。
 - 为什么不做 ipk：升级会清掉 opkg 的安装记录，而 keep.d 只恢复文件，两者很难协调。tarball 加清单更适合这台机器的升级模型。
@@ -208,20 +218,33 @@ idle ──apply/lock──▶ prepared ──写入成功──▶ applied(dead
 
 | 阶段 | 内容 | 用户可见的变化 | 验收标准 | 需要上机？ | 预估 |
 |---|---|---|---|---|---|
-| **R0 打基础** | `manifest.json`，由它生成 install、uninstall、deploy、keep.d，并改写 wiring 测试；esbuild 流水线输出与现有 chunk **等价**的产物；CI 生成发布包和 sha256；CSS 变量 lint；文档重组（见下） | 无 | 45 项测试照旧通过；清单 lint 通过；用发布包在 qemu rootfs 上安装后，文件和权限与 2.2.0 一致 | 否 | 2–3 天 |
-| **R1 前端结构** | kit、store、外壳拆分，Bands / Lock / Config 拆成独立 chunk；全局横幅；i18n 框架加 zh-cn；顺带完成审计第一批 UI 修复 | 中文界面、手机布局、暗色主题、横幅在所有标签页显示 | 现有 chunk 测试迁移后通过；新增的 lint 通过；375 px 宽时没有横向滚动 | 建议 | 4–6 天 |
+| **R0 打基础** ✅ | `manifest.txt` 加唯一的安装器；模拟安装测试；清单 lint；CSS 变量 lint；固件和模拟工具；文档重组 | 无（`install.sh` 先暂存全部文件再安装；`deploy.sh` 只需一次 ssh 传输） | 全部测试通过，包括在路由器自己的 ash 下跑的安装/卸载测试 | 否 | 完成 |
+| **R1 前端结构** | esbuild 构建步骤（从 R0 挪过来）；kit、store、外壳拆分，Bands / Lock / Config 拆成独立 chunk；全局横幅；i18n 框架加 zh-cn；顺带完成审计第一批 UI 修复 | 中文界面、手机布局、暗色主题、横幅在所有标签页显示 | 现有 chunk 测试迁移后通过；新增的 lint 通过；375 px 宽时没有横向滚动 | 建议 | 4–6 天 |
 | **R2 插件模块化 + 事务** | 插件拆成 `/usr/lib/lua/mudimodem/*.lua`（`lua_package_path` 已包含 `/usr/lib/lua/?.lua` 🟢）；`change.json` 加 deadline，`confirm` 返回 `was_pending`；仍然沿用 sh 看门狗 | Keep / Revert 的结果如实显示；刷新页面后横幅恢复 | Lua 隔离测试（宿主机和路由器 Lua 两轮）覆盖：晚到的 confirm、回滚失败、刷新后恢复 | 建议 | 2–3 天 |
-| **R3 守护进程** | 依次接管：①采样器，先**影子运行**，与 Python 采集器同时跑、逐条比对样本 → ②任务（扫描、测速）→ ③AT 队列 → ④变更事务（保留 sh 兜底守卫）→ ⑤删除 Python 和 `mudimodem-deps`；插件里的阻塞调用清零 | 升级后实时数据立即可用；扫描不再超时；控制台和库刷新不再卡住整个后台 | 在 qemu 上用镜像的 eco 跑单元测试；上机做 24 小时影子比对；人为制造的崩溃、重启、断网场景下事务都能按时回滚 | **必须** | 7–10 天 + 上机 |
+| **R3 守护进程** | 依次接管：①采样器，先**影子运行**，与 Python 采集器同时跑、逐条比对样本 → ②任务（扫描、测速）→ ③AT 队列 → ④变更事务（保留 sh 兜底守卫）→ ⑤删除 Python 和 `mudimodem-deps`；插件里的阻塞调用清零 | 升级后实时数据立即可用；扫描不再超时；控制台和库刷新不再卡住整个后台 | 在模拟的 GL ubus 环境里做集成测试（§6.1）：样本和 Python 版逐条一致；人为制造的崩溃、重启、超时、ubus 断开场景下，事务都能按时回滚 | 只用来最后确认 🔴 项 | 7–10 天 |
 | **R4 新功能** | 邻区、AMBR、SA / NSA 子模式、吞吐和连通性两条车道、长期汇总（审计 §4） | 新功能 | 每项各自的验收标准 | 视功能而定 | 每项 0.5–2 天 |
 
-**R0 的文档重组：**
-- CLAUDE.md 压缩到 150 行以内，只保留：协作约定、不可违反的规则（sub_id、点号限制、不在 pcall 里调用
-  cosocket、keep.d 等）、"权威信息在哪里"的索引。
-- 4.8 的历史和"更正的更正"移到 `docs/history/`。
-- §12 的状态日志移到 `CHANGELOG.md`。
-- 新增 `docs/architecture.md`，内容就是本文的 §3–§5。
-- 已完成的 specs 和 plans 归档到 `docs/archive/`。
-- 同时修正审计 §7 列出的漂移，包括本文新发现的 1 个 worker。
+**R0 的文档重组（已完成）：**
+- CLAUDE.md 压缩到约 100 行：目标、验证原则（固件优先、模拟优先、真机最后）、不可违反的规则、目录、命令、文档索引。
+  原文原样存档在 `docs/history/CLAUDE-2.2.0.md`。
+- 当前有效的平台和领域知识整理到 `docs/knowledge.md`，只保留 4.10 上成立的事实，去掉 4.8 历史和"更正的更正"。
+- 版本记录放在 `CHANGELOG.md`。
+- 删除 superpowers 留下的 plans（已完成的执行清单，开头都有强制使用某个 skill 的指令）；specs 移到 `docs/design/`，并注明只是背景资料。
+- 修正了审计 §7 列出的漂移，契约文档补上了这次从镜像里读到的事实（1 个 nginx worker、300 秒 glc 超时、i18n、GL 自己的 10 秒采样、AMBR、cellular.dial_status）。
+
+### 6.1 模拟优先的验证策略（2026-11-02 已验证可行）
+维护者的要求：能用固件确认的就用固件确认，尽量不做实机测试。下面这几层都已经在开发机上跑通：
+
+| 层 | 做法 | 状态 |
+|---|---|---|
+| GL 的行为 | 直接读镜像：明文 Lua / JSON / JS 用 Python 分析，二进制用 `reference/4.10/re-tools/` | ✅ 一直在用 |
+| 路由器 Lua（插件） | `tools/emu.sh lua`：镜像的 Lua 5.1（LNUM）+ GL 的 cjson | ✅ test-local 的 router 轮 |
+| 路由器 shell 脚本 | `tools/emu.sh sh`：镜像的 busybox ash，PATH 里只放镜像自己的 applet | ✅ 所有 sh 测试都在这里跑 |
+| 安装器 | 在假根目录（`MUDIMODEM_ROOT`）里跑完整的 install / update / uninstall | ✅ `test/installer.test.sh` |
+| **GL 的 ubus 服务** | 在 qemu 里跑镜像的 `ubusd -s <sock>`，用 eco 写假的 `cellular.*` / `modem.CPU.AT` / `gl-session` 对象（按契约文档的结构返回），被测代码通过真正的 ubus 协议去调用它们 | ✅ 可行性已验证：eco 注册的 `cellular.modem status` 被镜像的 `ubus` 命令行正确调用并返回。R3 的集成测试就建在这上面 |
+| nginx + oui 插件 | 镜像的 nginx 在 qemu 下用临时配置运行（2026-10-28 已用来检查 alias） | 可用；如果需要端到端测 `/rpc`，再在它上面搭 |
+
+真机只用来确认 🔴 项：射频状态、模组的真实回复、实际耗时。这些项集中列在 `docs/cellular-api-4.10.md` §6，攒在一起统一确认。
 
 ---
 
@@ -251,8 +274,8 @@ idle ──apply/lock──▶ prepared ──写入成功──▶ applied(dead
 
 ## 8. 建议
 - **R0–R2 建议直接做。** 纯收益、风险低、不需要上机就能完成大部分工作，而且能顺带完成审计第一批和第二批的修复。
-- **R3 是真正能根治问题的一步**：去掉 Python、去掉长请求、后台不再被卡住。但必须有真机做影子比对和故障演练。
-  建议做完 R2 之后，根据上机条件再决定何时开始。
+- **R3 是真正能根治问题的一步**：去掉 Python、去掉长请求、后台不再被卡住。影子比对和故障演练都在模拟的
+  GL ubus 环境里做（§6.1），真机只用来最后确认 🔴 项。
 - 需要你先拍板的两件事：
   - (a) 是否接受前端构建步骤（D7）。
   - (b) R3 的守护进程是否用 eco（推荐，镜像自带），还是退而求其次，把守护进程写成 OpenWrt 的 Lua 5.1 + `uloop` / `libubus-lua`

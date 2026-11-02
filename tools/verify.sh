@@ -43,7 +43,7 @@ PY'
 }
 
 # Run one of test/onbox/*.lua ON the box with the given args. Scripts are shipped
-# as files — never inlined into ssh '...' (CLAUDE.md §8: nested quoting).
+# as files — never inlined into ssh '...' (docs/knowledge.md §7: nested quoting).
 onbox_lua() {  # $1 = test/onbox/<name>.lua, $2.. = args
   _f="$1"; shift
   _n="/tmp/mm-onbox-$(basename "$_f")"
@@ -60,7 +60,7 @@ ssh -o BatchMode=yes "root@$HOST" 'ubus list gl-session >/dev/null && test -f /u
 echo "0b. 4.10 helper files present"
 ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/lib/mudimodem/cellular_compat.py && test -x /usr/lib/mudimodem/mudimodem-detach && test -s /usr/share/gl-ngx/websocket/mudimodem.lua' \
   || fail "cellular_compat.py / mudimodem-detach / websocket/mudimodem.lua missing (run ./tools/deploy.sh)"
-# Script shipped as a file, never inlined into ssh '...' (CLAUDE.md §8).
+# Script shipped as a file, never inlined into ssh '...' (docs/knowledge.md §7).
 ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-ws-seed.test.lua' < test/ws-seed.test.lua
 ssh -o BatchMode=yes "root@$HOST" 'lua /tmp/mm-ws-seed.test.lua; rc=$?; rm -f /tmp/mm-ws-seed.test.lua; exit $rc' \
   || fail "websocket/mudimodem.lua seed module failed its self-test (collect/battery/event + stale flag)"

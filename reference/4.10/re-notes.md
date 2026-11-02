@@ -1,5 +1,11 @@
 # 4.10 image reverse-engineering notes (2026-09-02)
 
+> **Tooling now automates most of this:** `tools/firmware.sh fetch|extract` downloads the pinned
+> image and unpacks `firmware/rootfs/` (sdat2img + debugfs, and the empty `/proc` mount point is
+> removed); `tools/emu.sh lua|eco|sh|run` runs the image's userland under qemu (it registers the
+> binfmt entry when it can and builds the busybox-applet PATH). The notes below explain *how* and
+> keep the binary-analysis tricks the tools do not cover.
+
 How the facts in `docs/cellular-api-4.10.md` §6 were settled WITHOUT a box, so the next
 question can be answered the same way. Scripts in `re-tools/` (dev-box only; need
 `binutils`, `binutils-aarch64-linux-gnu`, `device-tree-compiler`, python3).

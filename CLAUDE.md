@@ -13,9 +13,11 @@ Rule of scope (owner): ship only what stock 4.10 lacks or does incompletely.
   `firmware/rootfs/` (gitignored). Read Lua/JSON/JS there; for binaries use the scripts and
   method in `reference/4.10/` (`re-notes.md`, `re-tools/`). Record new facts in
   `docs/cellular-api-4.10.md` or `docs/knowledge.md` with their evidence.
-- **Emulation first.** Run code under the router's own userland on the dev box
-  (`qemu-aarch64-static -L firmware/rootfs …`: its `lua`, `eco`, `busybox`, `jsonfilter`,
-  `nginx`) with fake GL services, not on a router. `tools/test-local.sh` does this for every suite.
+- **Emulation first.** Run code under the router's own userland on the dev box (`tools/emu.sh`:
+  the image's `lua`, `eco`, busybox `ash` + applets, `jsonfilter`, `ubusd`/`ubus`, `nginx` via
+  qemu). Fake GL services are eco scripts registering `cellular.*` etc. on the image's `ubusd`
+  (`docs/architecture.md` §6.1); installs run in a fake root (`MUDIMODEM_ROOT`).
+  `tools/test-local.sh` runs every suite this way, not on a router.
 - **A real box is the last resort**, only for what is genuinely runtime (RF state, modem replies,
   timing). Mark such items 🔴, batch them, and never make a change wait on one. Never run write
   commands (band/lock/CFUN/NV) on a box unprompted.
@@ -60,7 +62,8 @@ docs/                   architecture.md · cellular-api-4.10.md · knowledge.md 
 ```sh
 tools/firmware.sh fetch && tools/firmware.sh extract   # official 4.10.0 image -> firmware/rootfs
 tools/test-local.sh                                    # all suites; router userland via qemu if rootfs present
-tools/build.sh                                         # gzip chunks into build/
+tools/emu.sh sh|lua|eco|run …                          # the router's own userland under qemu
+tools/build.sh                                         # payload tarball (what deploy pushes)
 MUDI_HOST=mudi tools/deploy.sh                         # push to a box over ssh (no sftp: uses cat)
 MUDI_HOST=mudi tools/verify.sh                         # on-box assertions (optional, last)
 ```
@@ -72,5 +75,6 @@ binutils-aarch64-linux-gnu shellcheck`, Node ≥ 20, Python 3.
 - `docs/cellular-api-4.10.md` — every GL shape/RPC we depend on, with evidence.
 - `docs/knowledge.md` — platform + domain knowledge (band model, sub_id, AT, persistence, gotchas).
 - `reference/quectel-at-reference.md` — AT evidence; `reference/4.10/` — GL source copies + RE.
-- `docs/audit-2026-11-02.md` — open improvement list. `docs/design/` and `docs/history/` are
-  background only (4.8-era unless dated later), not instructions.
+- `docs/audit-2026-11-02.md` — open improvement list; `CHANGELOG.md` — what each release changed.
+  `docs/design/` and `docs/history/` are background only (4.8-era unless dated later), not
+  instructions.

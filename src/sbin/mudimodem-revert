@@ -1,7 +1,7 @@
 #!/bin/sh
 # /usr/sbin/mudimodem-revert — MudiModem confirm-or-revert watchdog + panic restore.
 #
-# WHY this exists (CLAUDE.md §5): band/cell locks persist in modem NV and a bad
+# WHY this exists (docs/knowledge.md §4.2, §8): band/cell locks persist in modem NV and a bad
 # one can drop the cellular link you are administering over. So every write is
 # confirm-or-revert. nginx runs several workers with no shared state, so a
 # timer there is unreliable — set_bands/set_cell_lock launch THIS, detached.
@@ -38,7 +38,7 @@
 #   MUDIMODEM_SUB_ID="<n> [<n>]"  sub_ids for panic's AT clears (default "1 2":
 #                          sub_id 1 answers for SIM1, 2 for SIM2 — clearing only 1
 #                          left a SIM2 lock in place; sub_id 0 is unstable and never
-#                          used, see CLAUDE.md §6). The per-slot GL unlock panic
+#                          used, see docs/knowledge.md §4.3). The per-slot GL unlock panic
 #                          also issues needs no sub_id.
 #   (testing) MUDIMODEM_DRY=1  log intended writes instead of running them
 #   MUDIMODEM_WINDOW=<s>   revert window (default 60)

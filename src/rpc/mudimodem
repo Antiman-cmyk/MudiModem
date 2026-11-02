@@ -211,7 +211,7 @@ end
 -- sub_ids to try for a slot, in order. On this box sub_id 1 answers for slot 1
 -- and sub_id 2 for slot 2, while sub_id 0 floats between subscriptions
 -- (reference §1) — so the slot's own number leads, the other explicit sub_id
--- follows, and 0 is never sent (CLAUDE.md §6). Leading with 1 for every slot
+-- follows, and 0 is never sent (docs/knowledge.md §4.3). Leading with 1 for every slot
 -- was the SIM1/SIM2 mix-up: with two SIMs of the same carrier sub_id 1 PLMN-
 -- matched for slot 2 too, and every AT read/write then hit SIM1.
 local function subid_candidates(slot)
@@ -702,7 +702,7 @@ function M.set_cell_lock(args)
   local changed = slot_changed(args, slot)
   if changed then return changed end
   -- The PREV snapshot and the watchdog's revert both address `sub_id`: an
-  -- unconfirmed one (PLMN unknown — SIM still searching, the §12 status-0
+  -- unconfirmed one (PLMN unknown — SIM still searching, the status-0 (cellular-api-4.10.md §1)
   -- wedge) would snapshot and later "revert" the OTHER subscription while the
   -- real lock stayed in place. Refuse rather than guess.
   if not matched then
@@ -1334,7 +1334,7 @@ end
 -- library_status / refresh_library spawn mudimodem-lib (a separate tool; see
 -- reference) with a fixed literal mode arg ("check"/"refresh") — no user input
 -- reaches the shell, so no injection concern. Neither touches ubus, so no
--- cosocket concern with the pcall(cjson.decode, ...) below (§8: never pcall a
+-- cosocket concern with the pcall(cjson.decode, ...) below (docs/knowledge.md §7: never pcall a
 -- ubus call; cjson.decode is a plain C function, can't yield, pcall is safe).
 local LIB_TOOL = os.getenv("MUDIMODEM_LIB_TOOL") or "/usr/lib/mudimodem/mudimodem-lib"
 
@@ -1344,7 +1344,7 @@ local function run_lib(mode)
   if not f then return { error = "failed to spawn the library tool" } end
   local out = f:read("*a") or ""
   f:close()
-  local ok, obj = pcall(cjson.decode, out)   -- cjson.decode can't yield; pcall is safe (§8)
+  local ok, obj = pcall(cjson.decode, out)   -- cjson.decode can't yield; pcall is safe (knowledge.md §7)
   if not ok or type(obj) ~= "table" then
     return { error = "library tool returned no JSON" }
   end
@@ -1549,7 +1549,7 @@ end
 -- ======================= Phase 5: MudiModem version check ====================
 -- app_version reads the installed version from a local file and the latest from
 -- version.json on GitHub main. No ubus here (a plain file read + a curl
--- subprocess), so pcall(cjson.decode, ...) is safe (§8: pcall is only unsafe
+-- subprocess), so pcall(cjson.decode, ...) is safe (knowledge.md §7: pcall is only unsafe
 -- around a ubus cosocket call). The URL is a fixed constant — no RPC arg reaches
 -- the shell. Fail-silent: any network/parse failure sets error + checked=false.
 local VERSION_FILE = os.getenv("MUDIMODEM_VERSION_FILE") or "/etc/mudimodem/version.json"
@@ -1564,7 +1564,7 @@ local function read_version_file()
   if not f then return "unknown", DEFAULT_BASE end
   local s = f:read("*a") or ""
   f:close()
-  local ok, obj = pcall(cjson.decode, s)   -- cjson.decode can't yield; pcall safe (§8)
+  local ok, obj = pcall(cjson.decode, s)   -- cjson.decode can't yield; pcall safe (knowledge.md §7)
   if ok and type(obj) == "table" then
     -- Same allowlist mudimodem-selfupdate applies (keep the two in sync): a
     -- plain URL charset incl. ':' for a port — a dev box serving its own tree
@@ -1621,7 +1621,7 @@ end
 
 -- device_info: model + CPU for the Config tab. The browser-facing `system` rpc
 -- object has no `board` method, so we read it server-side via ubus (through
--- ucall — never pcall, per §8).
+-- ucall — never pcall, per knowledge.md §7).
 function M.device_info(args)
   local r = ucall("system", "board", {})
   if type(r) ~= "table" then return { model = "", cpu = "" } end

@@ -1,7 +1,11 @@
 # Quectel AT reference — as it actually behaves on *this* box
 
 **Purpose:** the AT knowledge MudiModem depends on, in one place, with device-verified evidence.
-Written 2026-07-17.
+Written 2026-07-17 on GL firmware **4.8.5**. The modem side carries over to 4.10 unchanged (the 4.10
+OTA ships the same `RG650VNA01ACR02A04G8G` baseband); statements about GL's *software* around the
+modem (`gl_modem`, `modem.set_sim_config`, raw-AT band writes, the crossed-reply bug) are 4.8
+history — GL 4.10's behaviour is in `docs/cellular-api-4.10.md`, the condensed rules in
+`docs/knowledge.md` §4.
 
 ## Provenance — read this before trusting anything below
 
@@ -73,7 +77,7 @@ at 'AT+QNWPREFCFG=\"policy_band\"' 1      # ← WRONG: double-escaped → ERROR
 > (sub_id 0 ↔ AT&T) recorded what the *floating default* answered at the time; sub_id 2 is
 > slot 2's own subscription.
 
-CLAUDE.md §6 previously said *"`sub_id` MUST equal the active slot"*. That is **coincidentally true
+The 2.x CLAUDE.md (§6, now `docs/history/CLAUDE-2.2.0.md`) previously said *"`sub_id` MUST equal the active slot"*. That is **coincidentally true
 here** (slot 1 ↔ sub_id 1) and **wrong in general** — slot 2 maps to sub_id **0**.
 
 Ground truth for the slot lives in ubus, not AT:
@@ -497,7 +501,7 @@ Commands present in the manual and relevant later: `QCFG` (§3.3, extended confi
 
 ---
 
-## 8. Ready-to-use `decode` templates for the AT library (§7a of CLAUDE.md)
+## 8. Ready-to-use `decode` templates for the AT library (`docs/knowledge.md` §4.6)
 
 Field names below are **verified against real responses**. Note `servingcell_sa` includes `tac` —
 omitting it shifts every subsequent field (a bug that shipped in the first mockup).
@@ -549,13 +553,13 @@ omitting it shifts every subsequent field (a bug that shipped in the first mocku
 
 | Claim | Status |
 |---|---|
-| "`sub_id` MUST equal the active slot" (CLAUDE.md §6) | ⚠️ **misleading** — sub_id is a subscription index; slot 2 ↔ sub_id 0. See §1. |
+| "`sub_id` MUST equal the active slot" (old CLAUDE.md §6) | ⚠️ **misleading** — sub_id is a subscription index; slot 2 ↔ sub_id 0. See §1. |
 | Three-layer band numbers gathered at `sub_id=0` | ❌ **wrong subscription**, redone in §2. |
 | `servingcell` decode `[…,"pci","arfcn",…]` (console mockup) | ❌ **missing `tac`** — every later field shifted. Fixed in §8. |
 | "bandwidth = 20 MHz" (design mockup) | ❌ raw `2` is an **enum** ⇒ **15 MHz**. §4.1. |
 | `+QENG: …,123,128110,71,20,-98,-11,8` labelled *"real response from your box"* | ❌ **fabricated** — `QENG` had never been run. Real response in §4.1. |
 | `nsa_nr5g_band,0` — does 0 mean none or all? | ✅ **resolved: empty.** §2. |
-| "Known-good lists are the full module-supported sets" | ✅ still true (§5 of CLAUDE.md) — but **module support ≠ usable**; policy narrows it further. |
+| "Known-good lists are the full module-supported sets" | ✅ still true (old CLAUDE.md §5) — but **module support ≠ usable**; policy narrows it further. |
 | "`AT+QNWLOCK` unverified — test before designing" | ✅ **syntax captured off the box (§6a).** NR order is `pci,freq,scs,band` — the mockup's guess was wrong. Set-side semantics still open. |
 | lock-5g mockup entry `"common/5g",{{arfcn}},{{pci}},…` | ❌ **wrong order** — PCI is first. Fix to `"common/5g",{{pci}},{{arfcn}},{{scs}},{{band}}`. |
 
@@ -634,20 +638,23 @@ exactly one slot; a single `rmnet_data0` interface up, the per-slot `modem_*_s1_
 This is **Dual-SIM Dual-Standby** — both reachable for registration/SMS/monitoring, one internet
 connection. True simultaneous dual-data (DSDA) would need two radios; this module doesn't have them.
 - Seen live: SIM1 (T-Mobile) selected + registered, but SIM2 (AT&T) held `dial_status=1` and carried
-  failover data — so *selected slot ≠ data-carrying slot* (see CLAUDE.md, active-vs-serving SIM).
+  failover data — so *selected slot ≠ data-carrying slot* (`docs/knowledge.md` §4.3).
 - SIM sim-status codes (from GL's frontend): `0` no-SIM · `5` **not registered** · `6` **registered**.
 
 ### ⚠️⚠️ GL re-applies its stored band config on restart — raw-AT writes are NOT durable
+> ✅ **Closed in 2.0.0:** band writes go through GL's own per-slot store (`modem.set_band_config`),
+> so the value GL re-applies on restart *is* ours. Kept as the reason that design was chosen.
+
 When `cellular_manager` (re)starts, it **pushes GL's stored config to the modem**, overwriting raw-AT
 changes. Seen live: `nr5g_band` had been experiment-set (via raw AT) to `25:41:48:66:77`; a
 `cellular_manager` restart reset it to **`71`** — GL's stored `NR-SA:[71]` won.
-- This reconciles "band lock persists across reboots" (CLAUDE.md §5/§9): it persists *because GL's
+- This reconciles "band lock persists across reboots" (`docs/knowledge.md` §6): it persists *because GL's
   stored config agreed*. The instant raw AT diverges from GL's config, **GL wins on the next restart
   or reboot.**
 - ⇒ **`set_bands` (raw AT only) is not durable.** A change survives until the next `cellular_manager`
   restart/reboot, then reverts to GL's stored config. For a durable change, `set_bands` must **also**
   update GL's config via `modem.set_sim_config` (`{band_enable, band_filter_mode, band_list}`, bare
-  integers — CLAUDE.md §6). Open design task before Phase 2b is "done".
+  integers — old CLAUDE.md §6). Open design task before Phase 2b is "done".
 - ✅ **Silver lining:** this is a *second*, free revert path — a reboot/manager-restart restores GL's
   stored bands regardless of what raw AT holds.
 

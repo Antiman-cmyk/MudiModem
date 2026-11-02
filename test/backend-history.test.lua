@@ -1,5 +1,5 @@
 -- On-box test for mudimodem.get_history. The backend pulls oui.ubus -> resty.http
--- which indexes ngx at load, so we stub ngx (CLAUDE.md §8). get_history itself
+-- which indexes ngx at load, so we stub ngx (docs/knowledge.md §7). get_history itself
 -- touches no ubus — it only reads the jsonl telemetry files under MUDIMODEM_HIST.
 -- Run: MUDIMODEM_HIST=/tmp/mmhist-test lua test/backend-history.test.lua
 

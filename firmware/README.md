@@ -1,17 +1,23 @@
 # firmware/
 
-Local drop folder for GL.iNet firmware images used for analysis — **not committed** (the
-`.gitignore` keeps everything here except this file out of git).
+Local drop folder for the GL.iNet firmware image the code is built against — **never committed**
+(`.gitignore` keeps everything here except this file out of git).
 
-Currently analysed: `e5800-4.10.0_release5-1092-0825-1787643675.zip` (GL-E5800, firmware 4.10.0,
-OpenWrt 23.05.4, target sdx75). Everything MudiModem 2.x relies on from it is written down in
-`docs/cellular-api-4.10.md`; GL's own files are copied under `reference/4.10/`, and the
-unpacking / reverse-engineering method (sdat2img → debugfs, DTB from boot.img, section-less
-ELF tricks) is in `reference/4.10/re-notes.md` with the scripts in `reference/4.10/re-tools/`.
+```sh
+tools/firmware.sh fetch      # e5800-4.10.0_release5-1092-0825-1787643675.zip, sha256-pinned (~370 MB)
+tools/firmware.sh extract    # -> firmware/rootfs/ (~530 MB): the router's root filesystem
+tools/firmware.sh info
+```
 
-## Extracted rootfs (dev box only)
-`firmware/rootfs/` holds the ext4 contents of `e5800-4.10.0_release5` (`re-tools/sdat2img.py` +
-`debugfs rdump`, see `reference/4.10/re-notes.md`), ~263 MB, gitignored like the OTA zip.
-`tools/test-local.sh` uses it by default to run the Lua tests under the router's own `lua` +
-`cjson.so` via `qemu-aarch64-static -L firmware/rootfs`, and it is what the static (readelf /
-objdump / strings) analysis reads.
+The zip is GL's official OTA for the GL-E5800 (firmware 4.10.0, OpenWrt 23.05.4, target sdx75).
+`extract` turns `system.new.dat` into an ext4 image (`reference/4.10/re-tools/sdat2img.py`) and
+copies it out with `debugfs rdump` (no loop mount needed); the method and the tricks for GL's
+section-less ELF libraries are in `reference/4.10/re-notes.md`.
+
+What `firmware/rootfs/` is used for:
+- **Answering questions about GL from the source of truth** — its Lua, JSON, minified JS chunks
+  and binaries. Facts MudiModem relies on are written down in `docs/cellular-api-4.10.md`.
+- **Emulation:** `tools/emu.sh` runs the image's own `lua`, `eco`, busybox `ash` + applets,
+  `jsonfilter` and `nginx` on the dev box through `qemu-aarch64-static -L firmware/rootfs`;
+  `tools/test-local.sh` uses it for the router-userland test passes.
+- `reference/4.10/theme-vars.txt` (the CSS variables GL's theme defines) is generated from it.

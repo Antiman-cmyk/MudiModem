@@ -193,6 +193,20 @@ comma-separated reply. Nothing auto-runs; `{{params}}` must be filled; set/nv ne
 - `jsonfilter -e '@.x'` prints nothing and exits 1 when the path is missing.
 - Never inline Lua/AT/JSON into `ssh '…'` — write a file, `cat >` it over, run it.
 - Analyse GL's minified chunks with Python (they are one-liners; `grep -c` counts lines).
+- Testing an oui plugin outside nginx: `dofile` it under a stubbed `ngx` global. `resty.http`
+  indexes `ngx` at load, and needs `ngx.config` too:
+  ```lua
+  ngx = { socket={tcp=function() return {settimeout=function() end, connect=function() end} end},
+          re={match=function() end, gmatch=function() end, find=function() end},
+          log=function() end, ERR=0, WARN=1, NOTICE=2, INFO=3, var={}, req={}, ctx={},
+          say=function() end, print=function() end, exit=function() end, HTTP_OK=200,
+          timer={at=function() end}, config={ngx_lua_version=10025, subsystem="http", debug=false},
+          worker={id=function() return 0 end, count=function() return 1 end},
+          now=function() return os.time() end, time=function() return os.time() end }
+  ```
+  Run it under the router's Lua (`tools/emu.sh lua`) — the host's stock Lua accepts things the
+  router's LNUM build rejects. Such tests bypass oui's arg validation; a free-form param also needs
+  a validator test.
 - Never call `clear_cell_lock` / any write in a test against a real box.
 
 ## 8. Ruled out (don't re-derive)
