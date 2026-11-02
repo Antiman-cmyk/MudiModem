@@ -21,7 +21,7 @@ assert(type(M.update_status) == "function", "update_status missing")
 
 -- Every function in the returned table becomes a callable RPC method; only the
 -- known surface may be exposed (writes are limited to the watchdog-protected pair).
-local ALLOWED = { get_bands = true, set_bands = true, confirm = true, revert_now = true, get_history = true, at_console = true, at_result = true,
+local ALLOWED = { get_bands = true, set_bands = true, confirm = true, revert_now = true, get_history = true, at_console = true, at_result = true, job_result = true,
                   get_lock = true, set_cell_lock = true, clear_cell_lock = true, scan_cells = true,
                   library_status = true, refresh_library = true,
                   get_speedtest_interfaces = true, run_speedtest = true, get_speedtest_status = true,

@@ -1089,6 +1089,31 @@ test('lock tab: scan target uses the row scs verbatim', () => {
   assert.deepEqual(t.extra, row);
 });
 
+test('scanCells(): a scan is a router job — {pending} is followed through job_result to the towers', async () => {
+  const towers = [{ pci: 101, freq: 627264, network_type: '5G SA', band: 78 }];
+  const calls = stubRpc([
+    { done: false, pending: true, id: 31, kind: 'scan' },              // scan_cells: first slice
+    { done: false, pending: true, id: 31, kind: 'scan' },              // job_result: still scanning
+    { done: true, id: 31, towers, ts: 1700000000000, slot: 2 },        // job_result: finished
+    {}                                                                 // fetchLock afterwards
+  ]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.pending = null; vm.lockBusy = false;
+    vm.scanCells();
+    assert.strictEqual(vm.scan.running, true, 'running while the job runs');
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    assert.deepStrictEqual(calls.slice(0, 3).map((x) => x.params[2]), ['scan_cells', 'job_result', 'job_result']);
+    assert.deepStrictEqual(calls[1].params[3], { id: 31 }, 'continues with the job id');
+    assert.ok(calls[0].opts.timeout <= 35000, 'each call is one slice, not the whole scan');
+    assert.deepStrictEqual(vm.scan.towers, towers);
+    assert.strictEqual(vm.scan.slot, 2);
+    assert.strictEqual(vm.scan.running, false);
+    assert.strictEqual(vm.scan.error, '');
+  } finally { unstubRpc(); }
+});
+
 test('scanCells() no-ops while an experiment is pending (method-level guard)', () => {
   const component = loadChunk();
   const vm = makeVm(component, LIVE);
@@ -1534,7 +1559,7 @@ test('config tab: a successful update re-reads the installed version', async (t)
     vm.appVer = { installed: '1.0.0', latest: '1.0.2', update_available: true, checked: true };
     await vm.confirmUpdate();
     t.mock.timers.tick(3000);
-    for (let i = 0; i < 6; i++) await Promise.resolve();
+    for (let i = 0; i < 10; i++) await Promise.resolve();   // app_version follows {pending}: one hop more
     assert.strictEqual(calls[2].params[2], 'app_version', 'version is re-read after the update');
     assert.strictEqual(vm.appVer.installed, '1.0.2', 'card now holds the new version');
     const txt = textOf(c.render.call(vm, h));

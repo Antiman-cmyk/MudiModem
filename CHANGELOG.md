@@ -29,6 +29,9 @@ part of R2 and the first step of R3), plus the fixes it surfaced.
   which on 4.10 has one worker: every other page waited until the modem answered. They now run in
   `mudimodemd`'s AT queue, one sequence at a time; a long sequence shows its finished steps
   while the rest is still running.
+- **The update check, the AT-library check/refresh and the cell scan no longer freeze GL's admin**
+  either: they run as background jobs in `mudimodemd` (the update check used to hold every page
+  for up to 8 s). A cell scan keeps running if the page is reloaded; starting it again rejoins it.
 - **Chinese:** the whole Modem page is available in Simplified Chinese and follows GL's language
   setting (switching GL's language switches the page). Technical terms (RSRP, n71, AT commands)
   stay as they are; the community AT library stays English.

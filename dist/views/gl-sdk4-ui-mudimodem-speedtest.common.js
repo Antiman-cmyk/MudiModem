@@ -409,6 +409,7 @@ var __mm = (() => {
     "ring = serving now (every carrier: PCC + SCCs)": "圆环 = 当前服务（所有载波：PCC + SCC）",
     "safe — reads only": "安全 — 只读",
     "scan failed": "扫描失败",
+    "gave up waiting for the router": "等待路由器超时，已放弃",
     "scanned {n} min ago": "{n} 分钟前扫描",
     "serving now": "当前服务",
     "serving now ({role})": "当前服务（{role}）",

@@ -46,6 +46,29 @@ var __mm = (() => {
       return null;
     });
   }
+  var MAX_SLICES = 40;
+  function follow(call, sliceMs) {
+    var n = 0;
+    var step = function(r) {
+      if (r && r.pending && r.id != null) {
+        if (++n > MAX_SLICES) return { error: "gave up waiting for the router" };
+        return call("job_result", { id: r.id }, sliceMs).then(step);
+      }
+      return r;
+    };
+    return step;
+  }
+  function rpcJob(method, params, sliceMs) {
+    sliceMs = sliceMs || 35e3;
+    var call = function(m, p, ms) {
+      return rpc(m, p, { timeout: ms });
+    };
+    return call(method, params, sliceMs).then(follow(call, sliceMs));
+  }
+  function rpcSilentJob(method, params, sliceMs) {
+    sliceMs = sliceMs || 35e3;
+    return rpcSilent(method, params, sliceMs).then(follow(rpcSilent, sliceMs));
+  }
 
   // src/web/locales/zh-cn.js
   var zh_cn_default = {
@@ -396,6 +419,7 @@ var __mm = (() => {
     "ring = serving now (every carrier: PCC + SCCs)": "圆环 = 当前服务（所有载波：PCC + SCC）",
     "safe — reads only": "安全 — 只读",
     "scan failed": "扫描失败",
+    "gave up waiting for the router": "等待路由器超时，已放弃",
     "scanned {n} min ago": "{n} 分钟前扫描",
     "serving now": "当前服务",
     "serving now ({role})": "当前服务（{role}）",
@@ -718,7 +742,7 @@ var __mm = (() => {
         // shows no revision line). Shared through STORE for the page's lifetime.
         checkLibraryStatus() {
           var self = this;
-          var p = this.rpcSilent("library_status", {}, 15e3).then(function(r) {
+          var p = rpcSilentJob("library_status", {}).then(function(r) {
             STORE.libStatus = r || null;
             self.libStatus = STORE.libStatus;
             return STORE.libStatus;
@@ -731,7 +755,7 @@ var __mm = (() => {
           if (this.refreshing || !hasRpc()) return Promise.resolve();
           this.refreshing = true;
           this.refreshMsg = "";
-          return rpc("refresh_library", {}, { timeout: 3e4 }).then(function(r) {
+          return rpcJob("refresh_library", {}).then(function(r) {
             self.refreshing = false;
             if (r && r.ok) {
               self.refreshMsg = t("updated — rev {rev}", { rev: r.revision || "" });

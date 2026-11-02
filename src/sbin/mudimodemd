@@ -5,12 +5,15 @@
 -- the eMMC backup and the live pushes — with the contract of the Python collector it replaces
 -- (src/lib/mudimodemd/collector.lua); ③ the AT console's queue, so a console command no longer
 -- holds GL's one nginx worker (the plugin forwards over oui.ubus, a non-blocking cosocket).
--- Jobs and the change transaction come next, on the same ubus object `mudimodem` (server-side
--- only: oui's /rpc dispatches to Lua plugins and glc, never to ubus).
+-- ② jobs — the version check, the AT-library check/refresh and the cell scan (tasks.lua). The
+-- change transaction comes next, on the same ubus object `mudimodem` (server-side only: oui's
+-- /rpc dispatches to Lua plugins and glc, never to ubus).
 --
 --   ubus call mudimodem health      counters, last error, whether a browser is attached
 --   ubus call mudimodem at_start {cmd, timeout}   queue an AT sequence (mudimodemd/atq.lua)
 --   ubus call mudimodem at_wait {id, wait}        its result, waiting up to `wait` s (<= 25)
+--   ubus call mudimodem job_start {kind, args}    version_fetch | lib_check | lib_refresh | scan
+--   ubus call mudimodem job_wait {id, wait}       its result, the same way (mudimodemd/jobs.lua)
 --
 -- Managed by procd (/etc/init.d/mudimodem-collectd), respawned on exit. Env overrides for tests:
 -- MUDIMODEM_LIB (module dir), MUDIMODEM_UBUS_SOCK, MUDIMODEM_UBUS_TIMEOUT (s, default 8), and the
@@ -25,6 +28,8 @@ local cc = require "cellular_compat"
 cc.init(cjson.null)
 local collector = require "mudimodemd.collector"
 local atq = require "mudimodemd.atq"
+local jobs = require "mudimodemd.jobs"
+local tasks = require "mudimodemd.tasks"
 
 local function log(msg) io.stderr:write("mudimodemd: ", msg, "\n"); io.stderr:flush() end
 
@@ -54,6 +59,21 @@ atconn:auto_reconnect()
 local q = atq.new(conn, atconn, { bus = os.getenv("MUDIMODEM_BUS") or "cpu", log = log,
                                   tool = os.getenv("MUDIMODEM_AT_TOOL"), python = os.getenv("MUDIMODEM_PYTHON") })
 
+-- Jobs: the slow I/O the plugin used to do inline (tasks.lua). A scan and a library refresh
+-- never run twice at once; a second start joins the running one.
+local J = jobs.new({ log = log })
+local tcfg = {
+  bus = os.getenv("MUDIMODEM_BUS") or "cpu",
+  curl = os.getenv("MUDIMODEM_CURL") or "curl",
+  python = os.getenv("MUDIMODEM_PYTHON") or "/usr/bin/python3",
+  lib_tool = os.getenv("MUDIMODEM_LIB_TOOL") or "/usr/lib/mudimodem/mudimodem-lib",
+}
+local event = tasks.event_writer(conn, (os.getenv("MUDIMODEM_HIST") or "/tmp/mudimodem") .. "/events.jsonl")
+J.register("version_fetch", function(a) return tasks.version_fetch(a, tcfg) end)
+J.register("lib_check", function() return tasks.library("check", tcfg) end, { single = true })
+J.register("lib_refresh", function() return tasks.library("refresh", tcfg) end, { single = true })
+J.register("scan", function(a) return tasks.scan(a, tcfg, event) end, { single = true })
+
 -- eco.ubus does not enforce these policies (handlers get the request as sent): they document
 -- the signature for `ubus -v list mudimodem`; at.lua / atq.lua validate every field.
 local ok, aerr = conn:add("mudimodem", {
@@ -61,6 +81,7 @@ local ok, aerr = conn:add("mudimodem", {
     local h = { engine = "eco", version = version(), pid = sys.getpid(), now = os.time(), collector = c ~= nil }
     for k, v in pairs(c and c.state or {}) do h[k] = v end
     for k, v in pairs(q.stats) do h[k] = v end
+    for k, v in pairs(J.stats) do h[k] = v end
     conn:reply(req, h)
   end, {} },
   at_start = { function(req, msg)
@@ -70,6 +91,14 @@ local ok, aerr = conn:add("mudimodem", {
   at_wait = { function(req, msg)
     msg = type(msg) == "table" and msg or {}
     conn:reply(req, q.wait(msg.id, msg.wait))
+  end, { id = ubus.INT32, wait = ubus.INT32 } },
+  job_start = { function(req, msg)
+    msg = type(msg) == "table" and msg or {}
+    conn:reply(req, J.start(msg.kind, msg.args))
+  end, { kind = ubus.STRING, args = ubus.TABLE } },
+  job_wait = { function(req, msg)
+    msg = type(msg) == "table" and msg or {}
+    conn:reply(req, J.wait(msg.id, msg.wait))
   end, { id = ubus.INT32, wait = ubus.INT32 } },
 })
 if not ok then

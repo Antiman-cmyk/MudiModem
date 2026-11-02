@@ -1,5 +1,5 @@
 // Config tab: version / self-update, device info, history-on-flash.
-import { rpc, hasRpc } from "../kit/rpc.js";
+import { rpc, hasRpc, rpcSilentJob } from "../kit/rpc.js";
 import { t, tp } from "../kit/i18n.js";
 export default {
   data() {
@@ -48,7 +48,7 @@ export default {
     // restarting. A failed read keeps whatever we already had.
     checkAppVersion() {
       var self = this;
-      return this.rpcSilent("app_version", {}, 12000)
+      return rpcSilentJob("app_version", {})
         .then(function (r) { if (r) self.appVer = r; });
     },
 

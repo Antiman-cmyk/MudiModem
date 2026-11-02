@@ -23,7 +23,7 @@
 // component — so anything that must outlive a tab switch (the transcript,
 // the command history, the once-per-page library status) lives in STORE,
 // bounded, not in the instance.
-import { hasRpc, rpc, rpcSilent } from "../kit/rpc.js";
+import { hasRpc, rpc, rpcSilent, rpcJob, rpcSilentJob } from "../kit/rpc.js";
 import { localize } from "../kit/i18n.js";
 import { t as T } from "../kit/i18n.js";
 export default localize((function () {
@@ -156,7 +156,7 @@ export default localize((function () {
     // blocked (privacy settings): touching it then THROWS, so it is guarded.
     try { this.riskOK = window.sessionStorage.getItem("mudimodem.riskEnabled") === "1"; } catch (e) { /* default off */ }
     this.fetchLib();
-    // library_status curls GitHub on the router (up to ~8 s). Once per PAGE,
+    // library_status fetches from GitHub on the router (a mudimodemd job). Once per PAGE,
     // not once per tab open; a re-created tab reuses the answer (or waits on
     // the request still in flight).
     if (STORE.libStatusP) STORE.libStatusP.then(function (st) { self.libStatus = st; });
@@ -188,7 +188,7 @@ export default localize((function () {
     // shows no revision line). Shared through STORE for the page's lifetime.
     checkLibraryStatus() {
       var self = this;
-      var p = this.rpcSilent("library_status", {}, 15000).then(function (r) {
+      var p = rpcSilentJob("library_status", {}).then(function (r) {
         STORE.libStatus = r || null;
         self.libStatus = STORE.libStatus;
         return STORE.libStatus;
@@ -200,7 +200,7 @@ export default localize((function () {
       var self = this;
       if (this.refreshing || !hasRpc()) return Promise.resolve();
       this.refreshing = true; this.refreshMsg = "";
-      return rpc("refresh_library", {}, { timeout: 30000 })
+      return rpcJob("refresh_library", {})
         .then(function (r) {
           self.refreshing = false;
           if (r && r.ok) {

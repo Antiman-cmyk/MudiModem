@@ -33,7 +33,9 @@ Rule of scope (owner): ship only what stock 4.10 lacks or does incompletely.
 - The browser cannot call dotted objects (`/rpc` dot rule); only our undotted `mudimodem` plugin
   calls them, server-side. Any free-form string arg needs a validator entry.
 - Nothing slow inside the nginx plugin: 4.10 runs **one** nginx worker, so `os.execute`/`io.popen`
-  stall the whole admin. Long work runs detached (via `mudimodem-detach`) or in a daemon.
+  stall the whole admin. Slow work is a `mudimodemd` job (`job_start`/`job_wait`, AT via
+  `at_start`/`at_wait`) reached over `oui.ubus` (a cosocket), waited on in <30 s slices with
+  `{pending, id}` → `job_result`; fire-and-forget work runs detached (`mudimodem-detach`).
 - **Never `pcall` an `oui.ubus.call`** (cosocket yield). OpenWrt Lua 5.1 ints are 32-bit.
 - Page code lives in `src/web` (ES modules) and is built by `npm run build:web` into `dist/views`
   (committed — install.sh fetches raw files); never edit `dist/`. Each chunk is one eval-able

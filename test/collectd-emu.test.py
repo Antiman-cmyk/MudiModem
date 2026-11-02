@@ -14,7 +14,7 @@ AT-backed cell_info on a box). The contract:
   * no browser attached (has_ws false) -> no push at all;
   * battery from sysfs (+ glbattlimit state), eMMC backup flush and boot restore.
 Skips when the firmware rootfs or qemu is absent (tools/emu.sh check)."""
-import importlib.util, json, os, shutil, signal, subprocess, sys, tempfile, time, unittest
+import http.server, importlib.util, json, os, shutil, signal, subprocess, sys, tempfile, threading, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
@@ -426,6 +426,129 @@ class CollectorOnEmulatedBus(unittest.TestCase):
         self.assertEqual(jsonl(os.path.join(env["MUDIMODEM_HIST"], "samples.jsonl")), [])
         p.send_signal(signal.SIGTERM)
         self.assertEqual(p.wait(timeout=20), 0)
+
+    # ---- jobs (stage 2): the slow I/O the plugin used to do inline ------------------------------
+    def fake_rpc(self, reply, delay=0.0):
+        """GL's /rpc on 127.0.0.1 for the scan loop-back: records each request, answers `reply`."""
+        seen = []
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                seen.append({"path": self.path, "glinet": self.headers.get("glinet"), "body": json.loads(body)})
+                time.sleep(delay)
+                out = json.dumps(reply).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        return "http://127.0.0.1:%d/rpc" % srv.server_address[1], seen
+
+    def job(self, bus, kind, args=None, wait=15):
+        j = self.ubus(bus, "job_start", {"kind": kind, "args": args or {}})
+        self.assertIn("id", j, j)
+        return self.ubus(bus, "job_wait", {"id": j["id"], "wait": wait})
+
+    def test_eco_jobs_version_library(self):
+        """The version fetch (curl) and the AT-library tool run in the daemon, bounded, with the
+        plugin's semantics: the URL charset is re-checked, the tool's JSON comes back verbatim."""
+        d, bus, env = self.start_bus({"modem_status": ct.MODEM_STATUS_410})
+        curl = os.path.join(d, "curl.sh")
+        with open(curl, "w") as f:
+            f.write('#!/bin/sh\necho "$@" >> %s/curl.args\necho \'{"version":"9.9.9"}\'\n' % d)
+        os.chmod(curl, 0o755)
+        env.update(MUDIMODEMD_COLLECTOR="0", MUDIMODEM_CURL=curl, MUDIMODEM_PYTHON=shutil.which("python3"),
+                   MUDIMODEM_LIB_TOOL=os.path.join(HERE, "fake-lib-tool.py"))
+        p = self.spawn_eco(env)
+        self.wait_health(bus)
+        r = self.job(bus, "version_fetch", {"url": "https://raw.githubusercontent.com/x/MudiModem/main/version.json"})
+        self.assertEqual((r["done"], r.get("version")), (True, "9.9.9"), r)
+        with open(os.path.join(d, "curl.args")) as f:
+            self.assertEqual(f.read().strip(), "-fsS --max-time 8 https://raw.githubusercontent.com/x/MudiModem/main/version.json")
+        bad = self.job(bus, "version_fetch", {"url": "https://x/y;rm -rf /"})
+        self.assertIn("bad version URL", bad.get("error", ""))
+        with open(os.path.join(d, "curl.args")) as f:
+            self.assertEqual(len(f.read().strip().splitlines()), 1, "a bad URL never reaches curl")
+        c = self.job(bus, "lib_check")
+        self.assertEqual((c["checked"], c["update_available"], c["remote_revision"]), (True, True, "new222"), c)
+        r = self.job(bus, "lib_refresh")
+        self.assertEqual((r["ok"], r["count"]), (True, 7), r)
+        self.assertIn("unknown job kind", self.ubus(bus, "job_start", {"kind": "rm"}).get("error", ""))
+        self.assertIn("unknown job", self.ubus(bus, "job_wait", {"id": 5}).get("error", ""))
+        # no python3 yet (just after a firmware upgrade): a plain error, not a hang
+        p.send_signal(signal.SIGTERM); p.wait(timeout=20)
+        env["MUDIMODEM_PYTHON"] = os.path.join(d, "no-python3")
+        p = self.spawn_eco(env)
+        self.wait_health(bus)
+        self.assertIn("python3", self.job(bus, "lib_check").get("error", ""))
+        p.send_signal(signal.SIGTERM); p.wait(timeout=20)
+
+    def test_eco_a_hung_fetch_is_bounded_and_blocks_nothing(self):
+        """curl that never answers ends at its 12 s bound (killed); meanwhile other jobs and the
+        health call are served — the daemon is one process, but none of this blocks it."""
+        d, bus, env = self.start_bus({"modem_status": ct.MODEM_STATUS_410})
+        curl = os.path.join(d, "curl.sh")
+        with open(curl, "w") as f:
+            f.write("#!/bin/sh\nexec sleep 60\n")   # exec: the killed child IS the sleeper
+        os.chmod(curl, 0o755)
+        env.update(MUDIMODEMD_COLLECTOR="0", MUDIMODEM_CURL=curl, MUDIMODEM_PYTHON=shutil.which("python3"),
+                   MUDIMODEM_LIB_TOOL=os.path.join(HERE, "fake-lib-tool.py"))
+        p = self.spawn_eco(env)
+        self.wait_health(bus)
+        t0 = time.monotonic()
+        v = self.ubus(bus, "job_start", {"kind": "version_fetch", "args": {"url": "https://x/version.json"}})
+        c = self.job(bus, "lib_check", wait=10)
+        self.assertTrue(c["done"] and c["checked"], c)
+        self.assertLess(time.monotonic() - t0, 8, "another job finished while curl hung")
+        r = self.ubus(bus, "job_wait", {"id": v["id"], "wait": 20})
+        took = time.monotonic() - t0
+        self.assertTrue(r["done"] and "unreachable" in r.get("error", ""), r)
+        self.assertTrue(11 <= took < 18, "bounded at ~12 s, took %.1f" % took)
+        p.send_signal(signal.SIGTERM); p.wait(timeout=20)
+
+    def test_eco_scan_job_through_gl_rpc(self):
+        """The cell scan: GL's modem.scan_cell_tower through the local /rpc with the glinet
+        header (the loop-back gl-session uses), one at a time, logged as an event."""
+        towers = [{"pci": 101, "freq": 627264, "network_type": "5G SA", "band": 78, "scs": 30}]
+        url, seen = self.fake_rpc({"jsonrpc": "2.0", "id": 1, "result": {"towers": towers}}, delay=1.5)
+        d, bus, env = self.start_bus({"modem_status": ct.MODEM_STATUS_410, "has_ws": True})
+        env.update(MUDIMODEMD_COLLECTOR="0", MUDIMODEM_RPC_URL=url)
+        p = self.spawn_eco(env)
+        self.wait_health(bus)
+        j = self.ubus(bus, "job_start", {"kind": "scan", "args": {"slot": 2}})
+        r = self.ubus(bus, "job_wait", {"id": j["id"], "wait": 0})
+        self.assertTrue(r["pending"] and r["kind"] == "scan", r)
+        again = self.ubus(bus, "job_start", {"kind": "scan", "args": {"slot": 2}})
+        self.assertEqual((again["id"], again.get("joined")), (j["id"], True), "a second scan joins the first")
+        r = self.ubus(bus, "job_wait", {"id": j["id"], "wait": 15})
+        self.assertTrue(r["done"], r)
+        self.assertEqual((r["towers"], r["slot"]), (towers, 2))
+        self.assertEqual(len(seen), 1, "one AT+QSCAN, not two")
+        self.assertEqual(seen[0]["glinet"], "1")
+        self.assertEqual(seen[0]["body"]["params"], ["", "modem", "scan_cell_tower", {"bus": "cpu", "slot": 2}])
+        ev = jsonl(os.path.join(env["MUDIMODEM_HIST"], "events.jsonl"))
+        self.assertEqual([(e["kind"], e["label"]) for e in ev], [("user", "Cell scan")])
+        self.assertEqual([n["data"]["label"] for n in jsonl(os.path.join(bus, "notify.jsonl"))
+                          if n["name"] == "mudimodem.event"], ["Cell scan"])
+        # slot 0 is refused before anything is sent
+        self.assertIn("no active SIM", self.job(bus, "scan", {"slot": 0}).get("error", ""))
+        self.assertEqual(len(seen), 1)
+        p.send_signal(signal.SIGTERM); p.wait(timeout=20)
+        # GL refusing the scan: its error code, as the plugin always reported, and no event
+        url2, seen2 = self.fake_rpc({"jsonrpc": "2.0", "id": 1, "error": {"code": 20002044, "message": "x"}})
+        env["MUDIMODEM_RPC_URL"] = url2
+        p = self.spawn_eco(env)
+        self.wait_health(bus)
+        self.assertEqual(self.job(bus, "scan", {"slot": 1}).get("error"), "scan failed: 20002044")
+        self.assertEqual(len(jsonl(os.path.join(env["MUDIMODEM_HIST"], "events.jsonl"))), 1)
+        p.send_signal(signal.SIGTERM); p.wait(timeout=20)
 
     def test_eco_health_and_single_instance(self):
         scen = {"modem_status": ct.MODEM_STATUS_410, "network_info": ct.NETWORK_INFO_410,

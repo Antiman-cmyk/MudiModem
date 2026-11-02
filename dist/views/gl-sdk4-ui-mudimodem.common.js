@@ -410,6 +410,7 @@ var __mm = (() => {
     "ring = serving now (every carrier: PCC + SCCs)": "圆环 = 当前服务（所有载波：PCC + SCC）",
     "safe — reads only": "安全 — 只读",
     "scan failed": "扫描失败",
+    "gave up waiting for the router": "等待路由器超时，已放弃",
     "scanned {n} min ago": "{n} 分钟前扫描",
     "serving now": "当前服务",
     "serving now ({role})": "当前服务（{role}）",
@@ -576,6 +577,29 @@ var __mm = (() => {
     }).catch(function() {
       return null;
     });
+  }
+  var MAX_SLICES = 40;
+  function follow(call, sliceMs) {
+    var n = 0;
+    var step = function(r) {
+      if (r && r.pending && r.id != null) {
+        if (++n > MAX_SLICES) return { error: "gave up waiting for the router" };
+        return call("job_result", { id: r.id }, sliceMs).then(step);
+      }
+      return r;
+    };
+    return step;
+  }
+  function rpcJob(method, params, sliceMs) {
+    sliceMs = sliceMs || 35e3;
+    var call = function(m, p, ms) {
+      return rpc(m, p, { timeout: ms });
+    };
+    return call(method, params, sliceMs).then(follow(call, sliceMs));
+  }
+  function rpcSilentJob(method, params, sliceMs) {
+    sliceMs = sliceMs || 35e3;
+    return rpcSilent(method, params, sliceMs).then(follow(rpcSilent, sliceMs));
   }
 
   // src/web/main/strip.js
@@ -1826,7 +1850,7 @@ var __mm = (() => {
         this.scanConfirm = false;
         this.scan.running = true;
         this.scan.error = "";
-        rpc("scan_cells", {}, { timeout: 6e5 }).then(function(res) {
+        rpcJob("scan_cells", {}).then(function(res) {
           if (!res || res.error) {
             self.scan.error = res && res.error || "scan failed";
             return;
@@ -2180,7 +2204,7 @@ var __mm = (() => {
       // restarting. A failed read keeps whatever we already had.
       checkAppVersion() {
         var self = this;
-        return this.rpcSilent("app_version", {}, 12e3).then(function(r) {
+        return rpcSilentJob("app_version", {}).then(function(r) {
           if (r) self.appVer = r;
         });
       },

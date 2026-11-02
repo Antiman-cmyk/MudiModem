@@ -195,6 +195,15 @@ comma-separated reply. Nothing auto-runs; `{{params}}` must be filled; set/nv ne
   `eco.sys.kill(pid, 0)` → `true` / `false, "No such process"`. `require "eco.ubus"` also opens a
   connection to the default socket at load time (harmless when absent). cjson in eco is
   2.1.0.10 (OpenResty: has `empty_array`; escapes `/` as `\/`).
+  `eco.sys.exec(prog, ...)` searches PATH; a missing binary still "starts" (the exec fails in the
+  child: empty stdout); `p:read_stdout("*a", t)` → `nil, "timeout"` on overrun. Children share the
+  daemon's process group (and busybox has no `setsid`), so only the direct child can be killed.
+- **Local `/rpc` loop-back** (🟢 `oui/rpc.lua` `M.access`; `oui-access.lua`, the `/rpc` access phase,
+  returns early for 127.0.0.1/::1): a request from 127.0.0.1 carrying a `glinet` header passes oui's ACL — how gl-session's `call {module, func, params}` reaches GL's
+  plugins from a shell (eco HTTP client, default 30 s read timeout). mudimodemd uses the same
+  loop-back with its own timeout for the cell scan. Through `/rpc`, oui's argument validator
+  applies (GL's `gl-validator.d/modem.lua` has no `scan_cell_tower` entry: the default string
+  pattern, which `bus:"cpu"` passes); the plugin's own `ngx.location.capture` of glc skips it.
 - Our web payload lives in `/usr/share/mudimodem/www`, served by the `gl-conf.d` alias
   (`/views/gl-sdk4-ui-mudimodem*`, `/mudimodem/`).
 - Factory reset wipes our files; it does NOT clear a modem NV band/cell lock — the panic restore

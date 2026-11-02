@@ -25,3 +25,31 @@ export function rpcSilent(method, params, timeoutMs) {
     .then(function (r) { return (r && r.data && r.data.result) || null; })
     .catch(function () { return null; });
 }
+
+// Methods backed by a mudimodemd job (scan_cells, library_status, refresh_library, app_version):
+// the plugin waits ~20 s per reply (one call through GL's ubus proxy must answer within 30 s), so
+// a job still running replies {pending, id} and continues with job_result. `sliceMs` bounds each
+// call; MAX_SLICES bounds the whole wait (a scan is cut by GL at 300 s = 15 slices).
+var MAX_SLICES = 40;
+function follow(call, sliceMs) {
+  var n = 0;
+  var step = function (r) {
+    if (r && r.pending && r.id != null) {
+      if (++n > MAX_SLICES) return { error: "gave up waiting for the router" };
+      return call("job_result", { id: r.id }, sliceMs).then(step);
+    }
+    return r;
+  };
+  return step;
+}
+
+export function rpcJob(method, params, sliceMs) {
+  sliceMs = sliceMs || 35000;
+  var call = function (m, p, ms) { return rpc(m, p, { timeout: ms }); };
+  return call(method, params, sliceMs).then(follow(call, sliceMs));
+}
+
+export function rpcSilentJob(method, params, sliceMs) {
+  sliceMs = sliceMs || 35000;
+  return rpcSilent(method, params, sliceMs).then(follow(rpcSilent, sliceMs));
+}

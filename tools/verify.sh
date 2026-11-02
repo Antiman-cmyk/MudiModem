@@ -305,6 +305,8 @@ ssh -o BatchMode=yes "root@$HOST" 'MM_PLUGIN=/usr/lib/oui-httpd/rpc/mudimodem lu
 # A request the daemon must REJECT (empty) proves it is registered and validating, sending nothing.
 ssh -o BatchMode=yes "root@$HOST" 'ubus call mudimodem at_start "{\"cmd\":\"\"}" | grep -q "cmd required"' \
   || fail "mudimodemd is not answering at_start (logread -e mudimodemd)"
+ssh -o BatchMode=yes "root@$HOST" 'ubus call mudimodem job_start "{\"kind\":\"none\"}" | grep -q "unknown job kind"' \
+  || fail "mudimodemd is not answering job_start (logread -e mudimodemd)"
 
 echo "8d. LIVE: one read-only AT through GL's AT service (the console's primary transport)"
 ssh -o BatchMode=yes "root@$HOST" \
@@ -377,7 +379,7 @@ ssh -o BatchMode=yes "root@$HOST" 'grep -q "function M.app_version" /usr/lib/oui
 
 echo "10a. app_version isolation test (offline, fake curl)"
 ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-ver.test.lua' < test/backend-version.test.lua
-ssh -o BatchMode=yes "root@$HOST" 'MM_TMP=/tmp/mm-ver-test MUDIMODEM_VERSION_FILE=/tmp/mm-ver-test/local.json MUDIMODEM_CURL=/tmp/mm-ver-test/curl.sh lua /tmp/mm-ver.test.lua; rc=$?; rm -rf /tmp/mm-ver.test.lua /tmp/mm-ver-test; exit $rc' \
+ssh -o BatchMode=yes "root@$HOST" 'MM_TMP=/tmp/mm-ver-test MUDIMODEM_VERSION_FILE=/tmp/mm-ver-test/local.json lua /tmp/mm-ver.test.lua; rc=$?; rm -rf /tmp/mm-ver.test.lua /tmp/mm-ver-test; exit $rc' \
   || fail "app_version isolation test failed"
 
 echo "10b. self-update script isolation test (no real install)"

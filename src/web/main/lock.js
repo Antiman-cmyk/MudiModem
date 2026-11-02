@@ -1,5 +1,5 @@
 // Cell lock tab: serving cell, pin / scan / lock / unlock, recovery notes.
-import { rpc, hasRpc } from "../kit/rpc.js";
+import { rpc, hasRpc, rpcJob } from "../kit/rpc.js";
 import { t as T, tp as TP } from "../kit/i18n.js";
 export default {
   data() {
@@ -202,7 +202,7 @@ export default {
       if (this.scan.running || this.pending || this.lockBusy) return;
       this.scanConfirm = false;
       this.scan.running = true; this.scan.error = "";
-      rpc("scan_cells", {}, { timeout: 600000 })
+      rpcJob("scan_cells", {})   // a mudimodemd job: followed through job_result until done
         .then(function (res) {
           if (!res || res.error) { self.scan.error = (res && res.error) || "scan failed"; return; }
           self.scan.towers = res.towers || [];   // renderScanCard sorts at paint time

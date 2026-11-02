@@ -69,7 +69,7 @@ gone with the LCD renderer it fed.
 | `cellular.network cell_info {"bus":"cpu","slot":N}` | `{network_type, tac, cell_id, signal[]{ca, network_type, band, earfcn, pci, bandwidth, rsrp, rsrq, sinr, rssi, rscp, ecio, snr, rsrp_level…snr_level (7), strength}}` — EVERY row carries `network_type` and `pci` (🟢 handler `libcm_network.so` @0x8284, both row emitters @0x88d4/@0x8ab0, ≤5 rows). EN-DC: QCAINFO `PCC` = LTE anchor → row 4, `SCC` lines whose band token starts with `N` → row 51 (`libcm_modem.so` parse_qcainfo_line @0x27bd4), cell 51; plain LTE CA → 41. ⚠️ When QCAINFO yields no carriers the handler emits ONE fallback row from the QENG servingcell struct (LTE-anchor band/pci/earfcn) stamped with the CELL's code — `cellular_compat._row_network_type` re-tags an NR-coded row on an E-UTRA channel as LTE. Top-level code: `modem_network_mode_to_public_code` (`libcmutils.so` table @0x10db7: 6→4, 7→41, 8→51, 9→5). **Executes `AT+QENG`/`AT+QCAINFO` on every call** (🟢 `libcm_modem.so` quectel_get_qcainfo_signal @0x2710c: templates @0x271dc/@0x274ec; no `AT+QNWINFO` anywhere). Within MudiModem collectd is the only caller (10 s); everything else (speed test, cell lock) reuses its `latest.json` while it is < 30 s old. ⚠️ It is NOT the only caller on the box: GL's own collector runs the same QENG+QCAINFO every 10 s (next row), and GL's cellular-detail page polls `modem.get_cell_info` every 20 s while it is open (🟢 `getCellInfoTimeout(2e4)`) |
 | `cellular.collect get_signals {time, slot}` / `get_traffic {bus}` / `clean_traffic {bus, slot, type}` | GL's own sampler (`libcmcollect.so`, inside `cellular_manager`): on because `e5800` is in `support_historical_signal` (🟢 `/lib/modem_data/product_baseline.json`); defaults `signal_info {interval:10, max_count:180}` (= 30 min, RAM only) written to `/etc/config/collection.json` only when that file is missing (🟡 `init_collection_config`). Each tick calls `quectel_get_qcainfo_signal` (🟡 import) — the same AT pair as `cell_info` — plus `AT+QCSQ` and `AT+QGDCNT?` for traffic. `get_signals` returns `{signals:[{slot, timestamp, signal:[{ca, network_type, band, bandwidth, pci, earfcn, rsrp, rsrq, rssi, sinr, rscp, ecio, snr}]}]}`, newest first, no cell_id/TAC (🟡). A cheaper RF source than our own `cell_info` call — see `docs/architecture.md` §5 (🔴 shape/freshness before switching) |
 | `modem.CPU.AT get_result_AT {cmd, timeout, sub_id}` | provider `/usr/bin/modem_AT` (spawned per bus by `cellular_manager`); the only path with an explicit `sub_id` — used for `policy_band` / `ue_capability_band` / `QNWLOCK` reads. **`sub_id` = slot (1 or 2) for the built-in modem** 🟢 — see §2.1 |
-| `gl-session notify {name, data}` / `has_websocket` / `call {module, func, params}` | push bus; browser-attached probe; root loop-back into `/rpc` (`is_local` + `glinet` header) — how the watchdog restores bands from a shell |
+| `gl-session notify {name, data}` / `has_websocket` / `call {module, func, params}` | push bus; browser-attached probe; root loop-back into `/rpc` (`is_local` + `glinet` header; its HTTP client gives up after 30 s) — how the watchdog restores bands from a shell. mudimodemd's cell scan makes the same loop-back request itself, with a 330 s timeout |
 
 ### 2.1 `sub_id` ↔ slot, settled from GL's own code (2026-10-28) 🟢
 - `libcm_network.so` `cell_info` handler @0x8384–0x86e4: slot (parsed, else
@@ -238,9 +238,11 @@ Settled from the image (second pass, 2026-09-02):
    in `libcm_modem.so`; the code ignores extras either way.
 5. How long `scan_cell_tower` really takes — it must finish inside the 300 s glc timeout (§5).
 6. The nginx worker count on a running box (`ps | grep "nginx: worker"`) — the image says 1.
-7. `mudimodemd` on a real box: `ubus call mudimodem health` answers `engine: eco` and `rf_samples`
-   grows by ~6/min (`tools/verify.sh` step 7, read-only). Everything it calls and writes is
-   covered in emulation on the image's own eco/ubusd; only the live process is runtime.
+7. `mudimodemd` on a real box: `ubus call mudimodem health` answers and `rf_samples` grows by
+   ~6/min (`tools/verify.sh` steps 7, 8c, 8d1, read-only). Everything it calls and writes is
+   covered in emulation on the image's own eco/ubusd; only the live process is runtime — plus
+   the scan's loop-back into GL's real `/rpc` (emulated by a fake HTTP endpoint), which the
+   next scan someone runs on a box confirms.
 
 Closed by binary analysis (was "needs `ubus -v list`"): **band config has no dotted ubus
 object to call directly** — `get/set_band_config` are in-process C functions reached through

@@ -79,6 +79,45 @@ local function ucall(object, method, args)
   return ubus.call(object, method, args or {})
 end
 
+-- ---- mudimodemd: work too slow for this worker -----------------------------------------------
+-- GL 4.10 runs ONE nginx worker, so anything slow here stalls the whole admin. The AT console
+-- and the slow jobs (version fetch, AT-library check/refresh, cell scan) run in mudimodemd
+-- instead; we reach it over oui.ubus — a cosocket through gl-session's ubus proxy, so nginx
+-- keeps serving while we wait. One call through that proxy must answer within 30 s (eco's
+-- default call timeout), so we wait in slices: a job still running after one slice comes back
+-- as {pending, id} and the page continues with job_result / at_result.
+local AT_WAIT_S = 20          -- per slice, for AT sequences and jobs alike
+
+local function daemon_error(err)
+  if err == "not found" then
+    return "the MudiModem daemon is not running (/etc/init.d/mudimodem-collectd restart)"
+  end
+  return "the MudiModem daemon did not answer (" .. tostring(err) .. ")"
+end
+
+-- Over ubus an empty list arrives as {}: the page must still get a JSON array.
+local LIST_FIELDS = { "steps", "towers" }
+local function job_lists(r)
+  for _, k in ipairs(LIST_FIELDS) do
+    if type(r[k]) == "table" then r[k] = arr(r[k]) end
+  end
+end
+
+local function job_wait(id)
+  local r, err = ucall("mudimodem", "job_wait", { id = id, wait = AT_WAIT_S })
+  if type(r) ~= "table" then return { error = daemon_error(err) } end
+  job_lists(r)
+  return r
+end
+
+-- Start a daemon job and wait one slice for it: the result (done = true) or {pending, id}.
+local function job(kind, args)
+  local r, err = ucall("mudimodem", "job_start", { kind = kind, args = args or {} })
+  if type(r) ~= "table" then return { error = daemon_error(err) } end
+  if r.error then return { error = r.error } end
+  return job_wait(r.id)
+end
+
 -- Run a raw AT command at a given sub_id, return the payload string (or nil).
 local function at(cmd, sub_id)
   local res = ucall("modem.CPU.AT", "get_result_AT",
@@ -693,13 +732,22 @@ end
 -- SCAN: GL's full network scan (AT+QSCAN under the hood). DISRUPTIVE — the
 -- modem leaves the serving cell for up to ~10 minutes. The UI gates this
 -- behind an explicit warning; never call it as part of a read.
+--
+-- A scan takes minutes, so it is a mudimodemd job (it calls GL's same modem.scan_cell_tower
+-- through the local /rpc, and logs the "Cell scan" event when it succeeds): the reply is the
+-- result, or {pending, id} to continue with job_result. A second scan while one runs joins it.
 function M.scan_cells(args)
   local _, _, _, slot = resolve_active()
   if not slot then return { error = "no active SIM slot (modem not ready)" } end
-  local res, err = glc("modem", "scan_cell_tower", { bus = BUS, slot = slot })
-  if not res then return { error = "scan failed: " .. tostring(err) } end
-  append_event("user", "Cell scan", "")
-  return { towers = arr(res.towers or {}), ts = os.time() * 1000, slot = slot }
+  return job("scan", { slot = slot })
+end
+
+-- args = { id } from a {pending} job reply (scan_cells, refresh_library, …): the same reply
+-- shape, waiting one more slice.
+function M.job_result(args)
+  local id = tonumber(args and args.id)
+  if not id then return { error = "id required" } end
+  return job_wait(math.floor(id))
 end
 
 -- WRITE: lock to one cell via GL's stack, protected by confirm-or-revert.
@@ -1206,26 +1254,13 @@ end
 -- and the direct-port tool only when that service is not registered.
 --
 -- This used to run here, and every step held GL's ONE nginx worker (io.popen) for up to
--- timeout + 5 s: the whole admin froze while the console waited. Now the plugin only forwards
--- over oui.ubus — a cosocket through gl-ngx-session's ubus proxy, so nginx keeps serving — and
--- waits in slices: one call through that proxy must answer within 30 s (eco's default call
--- timeout), a sequence can take 8 x 65 s. at_console queues the job and waits up to AT_WAIT_S;
--- if it is still running the reply says {pending, id} and the page continues with at_result.
-local AT_WAIT_S = 20
-
-local function daemon_error(err)
-  if err == "not found" then
-    return "the MudiModem daemon is not running (/etc/init.d/mudimodem-collectd restart)"
-  end
-  return "the MudiModem daemon did not answer (" .. tostring(err) .. ")"
-end
-
+-- timeout + 5 s: the whole admin froze while the console waited. Now it is forwarded (see
+-- "mudimodemd" at the top): at_console queues the sequence and waits one slice; a sequence can
+-- take 8 x 65 s, so a {pending, id} reply continues with at_result.
 local function at_wait(id)
   local r, err = ucall("mudimodem", "at_wait", { id = id, wait = AT_WAIT_S })
   if type(r) ~= "table" then return { error = daemon_error(err) } end
-  -- over ubus an empty list arrives as {} (a job that has not finished its first step): send
-  -- the page a JSON array, as it always got
-  if type(r.steps) == "table" then r.steps = arr(r.steps) end
+  job_lists(r)          -- a sequence that has not finished its first step: steps {} -> []
   return r
 end
 
@@ -1247,32 +1282,15 @@ function M.at_result(args)
 end
 
 -- ======================= Phase: AT library sync (check/refresh) ==============
--- library_status / refresh_library spawn mudimodem-lib (a separate tool; see
--- reference) with a fixed literal mode arg ("check"/"refresh") — no user input
--- reaches the shell, so no injection concern. Neither touches ubus, so no
--- cosocket concern with the pcall(cjson.decode, ...) below (docs/knowledge.md §7: never pcall a
--- ubus call; cjson.decode is a plain C function, can't yield, pcall is safe).
-local LIB_TOOL = os.getenv("MUDIMODEM_LIB_TOOL") or "/usr/lib/mudimodem/mudimodem-lib"
-
-local function run_lib(mode)
-  local q = "'" .. LIB_TOOL:gsub("'", "'\\''") .. "'"
-  local f = io.popen("python3 " .. q .. " " .. mode .. " 2>/dev/null")
-  if not f then return { error = "failed to spawn the library tool" } end
-  local out = f:read("*a") or ""
-  f:close()
-  local ok, obj = pcall(cjson.decode, out)   -- cjson.decode can't yield; pcall is safe (knowledge.md §7)
-  if not ok or type(obj) ~= "table" then
-    return { error = "library tool returned no JSON" }
-  end
-  return obj
-end
-
+-- mudimodem-lib (python3 + a GitHub fetch) runs as a mudimodemd job; its JSON comes back
+-- verbatim: check -> {local_revision, remote_revision, update_available, checked, error?},
+-- refresh -> {ok, revision, count, error?}. Either may come back {pending, id} (job_result).
 function M.library_status(args)
-  return run_lib("check")
+  return job("lib_check")
 end
 
 function M.refresh_library(args)
-  return run_lib("refresh")
+  return job("lib_refresh")
 end
 
 -- ============================ Speedtest ============================
@@ -1464,13 +1482,12 @@ end
 
 -- ======================= Phase 5: MudiModem version check ====================
 -- app_version reads the installed version from a local file and the latest from
--- version.json on GitHub main. No ubus here (a plain file read + a curl
--- subprocess), so pcall(cjson.decode, ...) is safe (knowledge.md §7: pcall is only unsafe
--- around a ubus cosocket call). The URL is a fixed constant — no RPC arg reaches
--- the shell. Fail-silent: any network/parse failure sets error + checked=false.
+-- version.json at the recorded install source, fetched by a mudimodemd job (no RPC arg
+-- reaches it: the URL comes from that file, charset-checked here and again in the daemon).
+-- pcall(cjson.decode, ...) on the file is safe (knowledge.md §7: pcall is only unsafe around a
+-- ubus cosocket call). Fail-silent: any network/parse failure sets error + checked=false.
 local VERSION_FILE = os.getenv("MUDIMODEM_VERSION_FILE") or "/etc/mudimodem/version.json"
 local DEFAULT_BASE = "https://raw.githubusercontent.com/Antiman-cmyk/MudiModem/main"
-local CURL         = os.getenv("MUDIMODEM_CURL") or "curl"
 
 -- { version, base } from the file install.sh wrote. `base` is the raw-URL root
 -- the install came from (fork/branch aware); the update check follows it so a
@@ -1518,18 +1535,14 @@ function M.app_version(args)
   local out = { installed = installed, latest = nil, source = base,
                 update_available = false, checked = false }
   local url = os.getenv("MUDIMODEM_VERSION_URL") or (base .. "/version.json")
-  -- Shell-escaped defensively; the base is validated to a plain URL charset above.
-  local q = "'" .. url:gsub("'", "'\\''") .. "'"
-  local f = io.popen(CURL .. " -fsS --max-time 8 " .. q .. " 2>/dev/null")
-  if not f then out.error = "curl spawn failed"; return out end
-  local body = f:read("*a") or ""
-  f:close()
-  local ok, obj = pcall(cjson.decode, body)
-  if not ok or type(obj) ~= "table" or not obj.version then
-    out.error = "remote version.json unreachable or malformed"
+  -- The fetch (curl, up to 8 s) runs in mudimodemd; it re-checks the URL charset.
+  local r = job("version_fetch", { url = url })
+  if r.pending then out.error = "the version check is taking too long"; return out end
+  if type(r.version) ~= "string" then
+    out.error = r.error or "remote version.json unreachable or malformed"
     return out
   end
-  out.latest = tostring(obj.version)
+  out.latest = r.version
   out.checked = true
   out.update_available = version_newer(out.latest, out.installed)
   return out

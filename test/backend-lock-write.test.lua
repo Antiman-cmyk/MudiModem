@@ -9,6 +9,7 @@ local no_plmn = false      -- cellular.sim info carries no mcc/mnc (SIM searchin
 local lock5_reply = '\r\n+QNWLOCK: "common/5g",0\r\n\r\nOK\r\n'
 local lock4_reply = '\r\n+QNWLOCK: "common/4g",0\r\n\r\nOK\r\n'
 local setfeat_calls = {}
+local job_calls = {}
 package.loaded["oui.ubus"] = {
   call = function(object, method, params)
     if object == "modem.CPU.AT" and method == "get_result_AT" then
@@ -34,6 +35,10 @@ package.loaded["oui.ubus"] = {
     elseif object == "cellular.sim" and method == "info" then
       if no_plmn then return { sims = { { slot = 1, mcc = "", mnc = "" } } } end
       return { sims = { { slot = 1, mcc = "310", mnc = "260" } } }
+    elseif object == "mudimodem" then          -- the daemon's scan job (mudimodemd/tasks.lua)
+      job_calls[#job_calls + 1] = { method = method, params = params }
+      if method == "job_start" then return { id = 9 } end
+      if method == "job_wait" then return { done = false, pending = true, id = params.id, kind = "scan" } end
     end
     return {}
   end
@@ -286,5 +291,14 @@ assert(M.scan_cells({}).error:find("no active SIM"), "scan_cells must refuse wit
 assert(M.set_bands({ sa = { 71 } }).error:find("no active SIM"), "set_bands must refuse without a slot")
 for _, c in ipairs(glc_calls) do assert(not c:find("set_cell_tower") and not c:find("scan_cell_tower") and not c:find("set_band_config"), "nothing may be written without a slot") end
 assert(not io.open(PENDING, "r"), "no pending may remain")
+
+-- 12. The scan is a mudimodemd job for the ACTIVE slot (minutes long; GL's scan_cell_tower is
+--     called by the daemon, never inline here): {pending, id} comes back for job_result.
+no_slot = false; job_calls = {}; glc_calls = {}
+local sc = M.scan_cells({})
+assert(sc.pending and sc.id == 9, "scan comes back pending with the job id")
+assert(job_calls[1].method == "job_start" and job_calls[1].params.kind == "scan" and job_calls[1].params.args.slot == 1,
+       "a scan job for the active slot")
+for _, c in ipairs(glc_calls) do assert(not c:find("scan_cell_tower"), "the plugin never scans inline") end
 
 print("backend-lock-write.test.lua: all ok")
