@@ -1313,12 +1313,10 @@ function M.refresh_library(args)
 end
 
 -- ============================ Speedtest ============================
--- On-demand (+ optional scheduled) download/upload/latency test. The test
--- itself is pure IP traffic run by tools/mudimodem-speedtest.py, spawned
--- DETACHED (like mudimodem-revert) because a fixed-size test takes ~10-20s --
--- too long for a single $rpcRequest. Results persist in /etc/mudimodem (NOT
--- /tmp, unlike the RF-history telemetry) so they survive a normal reboot.
-local SPEEDTEST_BIN      = os.getenv("MUDIMODEM_SPEEDTEST_BIN")      or "/usr/lib/mudimodem/mudimodem-speedtest.py"
+-- On-demand (+ optional scheduled) download/upload/latency test. The test and its schedule run in
+-- mudimodemd (src/lib/mudimodemd/speedtest.lua): a fixed-size test takes 10-60 s, too long for a
+-- single $rpcRequest, so run_speedtest starts it and the page polls the status file. Results
+-- persist in /etc/mudimodem (NOT /tmp, unlike the RF-history telemetry) so they survive a reboot.
 local SPEEDTEST_HIST     = os.getenv("MUDIMODEM_SPEEDTEST_HIST")     or "/etc/mudimodem/speedtests.jsonl"
 local SPEEDTEST_STATUS   = os.getenv("MUDIMODEM_SPEEDTEST_STATUS")   or "/tmp/mudimodem/speedtest-status.json"
 local SPEEDTEST_SCHEDULE = os.getenv("MUDIMODEM_ST_SCHEDULE")        or "/etc/mudimodem/speedtest-schedule.json"
@@ -1402,7 +1400,8 @@ local function speedtest_alive(pid)
   if not f then return false end
   local cmd = f:read("*a") or ""
   f:close()
-  return cmd:find("mudimodem-speedtest", 1, true) ~= nil
+  -- the run's pid is mudimodemd's (a test before 3.0: the python tool's)
+  return cmd:find("mudimodemd", 1, true) ~= nil or cmd:find("mudimodem-speedtest", 1, true) ~= nil
 end
 
 local function speedtest_status()
@@ -1435,10 +1434,12 @@ function M.run_speedtest(args)
   local st = speedtest_status()
   if st and st.running then return { running = true } end
 
-  os.execute("mkdir -p /etc/mudimodem /tmp/mudimodem 2>/dev/null")
-  write_json_file(SPEEDTEST_STATUS, { running = true, phase = "starting", iface = iface, started = os.time() })
-  local quoted_bin = "'" .. SPEEDTEST_BIN:gsub("'", "'\\''") .. "'"
-  spawn_detached("python3 " .. quoted_bin .. " --trigger manual --iface " .. iface)
+  -- The test runs in mudimodemd (speedtest.lua), which writes the status the page polls (its
+  -- first write lands before this call returns). Not waited on: a test takes 10-60 s.
+  local r, err = ucall("mudimodem", "job_start", { kind = "speedtest", args = { iface = iface, trigger = "manual" } })
+  if type(r) ~= "table" then return { error = daemon_error(err) } end
+  if r.error then return { error = r.error } end
+  if r.joined then return { running = true } end
   return { started = true }
 end
 

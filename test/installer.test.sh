@@ -80,7 +80,6 @@ ok "keep.d: generated, abfota-parsable, covers every placed file and every enabl
 [ "$(cat "$R/etc/mudimodem/version.json")" = "{\"version\":\"$VER\",\"base\":\"$REPO\"}" ] || fail "version.json: $(cat "$R/etc/mudimodem/version.json")"
 [ "$(tail -n1 "$R/.mm-actions")" = "place /etc/mudimodem/version.json" ] || fail "version.json must be the very last write"
 must_before "$R" "sys deps install" "svc mudimodem-collectd restart"
-must_before "$R" "sys deps install" "svc mudimodem-speedtestd restart"
 must_before "$R" "place /usr/lib/oui-httpd/rpc/mudimodem" "svc nginx restart"
 must_before "$R" "place /usr/share/gl-validator.d/mudimodem.lua" "place /usr/lib/oui-httpd/rpc/mudimodem"
 must_before "$R" "place /usr/sbin/mudimodem-revert" "place /usr/lib/oui-httpd/rpc/mudimodem"
@@ -165,8 +164,7 @@ done
 for p in /usr/share/oui/menu.d/internet.json /usr/lib/oui-httpd/rpc/modem.so /www/views/gl-sdk4-ui-internet.common.js.gz; do
   [ -f "$R$p" ] || fail "uninstall removed GL's $p"
 done
-must_before "$R" "svc glbattlimit stop" "svc mudimodem-speedtestd stop"
-must_before "$R" "svc mudimodem-speedtestd stop" "svc mudimodem-collectd stop"
+must_before "$R" "svc glbattlimit stop" "svc mudimodem-collectd stop"
 must_before "$R" "svc mudimodem-collectd stop" "svc mudimodem-revert stop"
 must_before "$R" "sys glbattlimit off" "remove /usr/bin/glbattlimit"
 [ "$(tail -n1 "$R/.mm-actions")" = "svc nginx restart" ] || fail "uninstall must end with an nginx restart"

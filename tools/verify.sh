@@ -398,8 +398,8 @@ ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/oui/menu.d/mudimodem-speed
   || fail "speedtest menu json missing"
 onbox_lua test/onbox/json-parses.lua /usr/share/oui/menu.d/mudimodem-speedtest.json \
   || fail "speedtest menu json does not parse (would break ui.get_menu_list for EVERY page)"
-ssh -o BatchMode=yes "root@$HOST" 'test -x /usr/lib/mudimodem/mudimodem-speedtest.py' \
-  || fail "speedtest runner script missing or not executable"
+ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/lib/mudimodem/mudimodemd/speedtest.lua' \
+  || fail "the speed test module (mudimodemd/speedtest.lua) is missing"
 
 STBODY=$(ssh -o BatchMode=yes "root@$HOST" \
   'curl -sk -H "Accept-Encoding: gzip" "https://127.0.0.1/views/gl-sdk4-ui-mudimodem-speedtest.common.js?_t=1" | gzip -dc')
@@ -417,20 +417,21 @@ ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-st.test.lua' < test/backend-spe
 ssh -o BatchMode=yes "root@$HOST" 'MUDIMODEM_SPEEDTEST_HIST=/tmp/mmst-hist.jsonl MUDIMODEM_ST_SCHEDULE=/tmp/mmst-sched.json lua /tmp/mm-st.test.lua; rc=$?; rm -f /tmp/mm-st.test.lua /tmp/mmst-hist.jsonl /tmp/mmst-sched.json; exit $rc' \
   || fail "speedtest backend test failed on-device"
 
-echo "11b. Speedtest scheduler service present (off by default)"
-ssh -o BatchMode=yes "root@$HOST" 'test -x /usr/sbin/mudimodem-speedtestd' \
-  || fail "speedtestd not installed (run ./tools/deploy.sh)"
-ssh -o BatchMode=yes "root@$HOST" 'pgrep -f mudimodem-speedtestd >/dev/null' \
-  || fail "speedtestd process not running (/etc/init.d/mudimodem-speedtestd start)"
+echo "11b. Speedtest schedule runs inside mudimodemd (off by default)"
+ssh -o BatchMode=yes "root@$HOST" 'ubus call mudimodem health | grep -q "\"speedtests\""' \
+  || fail "mudimodemd does not report its speed test counter (logread -e mudimodemd)"
 
 echo "11c. LIVE: one real speed test end-to-end over Cellular"
 ssh -o BatchMode=yes "root@$HOST" 'rm -f /tmp/mudimodem/speedtest-status.json'
 # the row check is a shipped file (never inlined into ssh '...'), used inside the block below
 ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-onbox-speedtest-row.lua' < test/onbox/speedtest-row.lua
+ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-speedtest-driver.lua' < test/emu/speedtest-driver.lua
 RESULT=$(ssh -o BatchMode=yes "root@$HOST" '
   rm -f /tmp/mmv-speedtests.jsonl
-  python3 /usr/lib/mudimodem/mudimodem-speedtest.py --trigger manual --iface cellular --hist /tmp/mmv-speedtests.jsonl
+  MUDIMODEM_ST_HIST=/tmp/mmv-speedtests.jsonl MUDIMODEM_ST_STATUS=/tmp/mmv-st-status.json \
+    eco /tmp/mm-speedtest-driver.lua /usr/lib/mudimodem cellular >/dev/null
   rc=$?
+  rm -f /tmp/mm-speedtest-driver.lua /tmp/mmv-st-status.json
   if [ $rc -eq 0 ] && [ -s /tmp/mmv-speedtests.jsonl ]; then
     lua /tmp/mm-onbox-speedtest-row.lua /tmp/mmv-speedtests.jsonl \
       && rc=0 || rc=1

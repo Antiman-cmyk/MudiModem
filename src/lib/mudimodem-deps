@@ -18,7 +18,7 @@ set -u
 
 PKG=python3-light
 IMPORTS="import fcntl, gzip, json, select, signal, subprocess, tempfile"
-SERVICES="mudimodem-collectd mudimodem-speedtestd"
+SERVICES="mudimodem-collectd"
 INITD=${MUDIMODEM_INITD:-/etc/init.d}
 LOCK=${MUDIMODEM_DEPS_LOCK:-/tmp/mudimodem-deps.lock}
 TRIES=${MUDIMODEM_DEPS_TRIES:-40}    # feed retries, 15 s apart

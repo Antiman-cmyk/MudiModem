@@ -14,7 +14,7 @@
 --   ubus call mudimodem at_start {cmd, timeout}   queue an AT sequence (mudimodemd/atq.lua)
 --   ubus call mudimodem at_wait {id, wait}        its result, waiting up to `wait` s (<= 25)
 --   ubus call mudimodem job_start {kind, args}    version_fetch | lib_check | lib_refresh | scan
---                                                 | restore (a cell lock's "Revert now")
+--                                                 | restore (a cell lock's "Revert now") | speedtest
 --   ubus call mudimodem change_arm                start the revert watchdog, answer once armed
 --   ubus call mudimodem job_wait {id, wait}       its result, the same way (mudimodemd/jobs.lua)
 --
@@ -34,6 +34,7 @@ local atq = require "mudimodemd.atq"
 local jobs = require "mudimodemd.jobs"
 local tasks = require "mudimodemd.tasks"
 local change = require "mudimodemd.change"
+local speedtest = require "mudimodemd.speedtest"
 
 local function log(msg) io.stderr:write("mudimodemd: ", msg, "\n"); io.stderr:flush() end
 
@@ -75,6 +76,11 @@ J.register("version_fetch", function(a) return tasks.version_fetch(a, tcfg) end)
 J.register("lib_check", function() return tasks.library("check", tcfg) end, { single = true })
 J.register("lib_refresh", function() return tasks.library("refresh", tcfg) end, { single = true })
 J.register("scan", function(a) return tasks.scan(a, tcfg, event) end, { single = true })
+
+-- The speed test (manual and scheduled share the single-flight job) and its schedule.
+local ST = speedtest.new(conn, speedtest.config(), log)
+J.register("speedtest", function(a) return ST.run(a) end, { single = true })
+ST.scheduler(function(a) return J.start("speedtest", a) end, function(id, w) return J.wait(id, w) end)
 
 -- Confirm-or-revert: only the waiting moves here (change.lua); the watchdog stays the timer.
 local CH = change.new(change.config(), log)

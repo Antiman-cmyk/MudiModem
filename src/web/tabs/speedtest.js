@@ -3,8 +3,8 @@
 // lazy-loaded + embedded by the main page's "Speedtest" tab (props.embedded
 // drops the "← Modem" breadcrumb since the tab bar is already visible).
 //
-// The test itself runs device-side (tools/mudimodem-speedtest.py, spawned
-// detached by mudimodem.run_speedtest because a fixed-size download+upload+
+// The test itself runs device-side (mudimodemd's speedtest.lua, started
+// as a daemon job by mudimodem.run_speedtest because a fixed-size download+upload+
 // latency test takes ~10-20s -- too long for one $rpcRequest). This page
 // polls mudimodem.get_speedtest_status roughly once a second while a test is
 // in flight, then refetches history. Results persist in /etc/mudimodem (NOT
@@ -24,7 +24,7 @@ export default localize((function () {
   "use strict";
 
   var IFACES = [["cellular", "Cellular"], ["wired", "Wired WAN"]];
-  // Bytes one test moves (tools/mudimodem-speedtest.py: 20 MiB down + 2 MiB up + a few KiB of latency probes).
+  // Bytes one test moves (mudimodemd/speedtest.lua: 20 MiB down + 2 MiB up + a few KiB of latency probes).
   var TEST_MIB = 22;
   var INTERVALS = [[1800, "30 min"], [3600, "1 hour"], [7200, "2 hours"],
     [21600, "6 hours"], [43200, "12 hours"], [86400, "24 hours"]];

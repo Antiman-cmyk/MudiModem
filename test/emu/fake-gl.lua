@@ -6,6 +6,7 @@
 --
 -- scenario.json (every key optional):
 --   modem_status / modem_info / network_info / sim_info   replies of the no-arg calls
+--   network_dump                     network.interface dump (the speed test's interface lookup)
 --   cell_info: [payload, ...]        cycled one per call (a handover is the next payload);
 --                                    {"fail": true} answers with UBUS_STATUS_UNKNOWN_ERROR,
 --                                    {"hang": s} answers only after s seconds (a wedged modem)
@@ -47,6 +48,7 @@ end
 conn:add("cellular.modem", { status = fixed("cellular.modem", "status", "modem_status"),
                              info = fixed("cellular.modem", "info", "modem_info") })
 conn:add("cellular.sim", { info = fixed("cellular.sim", "info", "sim_info") })
+conn:add("network.interface", { dump = fixed("network.interface", "dump", "network_dump") })
 conn:add("cellular.network", {
   info = fixed("cellular.network", "info", "network_info"),
   cell_info = { function(req, msg)

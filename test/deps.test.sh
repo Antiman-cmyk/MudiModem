@@ -25,7 +25,7 @@ case "\$1" in
 esac
 EOF
 printf '#!/bin/sh\nexit 0\n' > "$T/bin/logger"
-for s in mudimodem-collectd mudimodem-speedtestd; do
+for s in mudimodem-collectd; do
   cat > "$T/initd/$s" <<EOF
 #!/bin/sh
 case "\$1" in
