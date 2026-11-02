@@ -152,7 +152,8 @@ from 3GPP TS 38.101-1 / 36.101.
 - `network_type` enum: 2/3 = 2G/3G, 4 = LTE, **41 = LTE-CA (4G+)**, **5 = NR SA**, **51 = NR NSA**.
   GL's own `getNetworkType` map is wrong (5/51 swapped, 2/3 shifted) — ignore it.
 - Under NSA the PCC row is the LTE anchor; the NR leg is in `signals[]`.
-- `networks_info` also carries `ambr_dl/ambr_ul` (carrier max bit rate), `ipv4{}`, `ipv6`.
+- `networks_info` also carries `ambr_dl/ambr_ul` (carrier max bit rate), `ipv4{}`, `ipv6`. On ubus the AMBR is in
+  `cellular.sim status`, **not** `cellular.sim info` (measured by running GL).
 
 ### 4.5 AT transport
 - Primary: `ubus call modem.CPU.AT get_result_AT {cmd, timeout, sub_id=slot, source_flag:1}` —

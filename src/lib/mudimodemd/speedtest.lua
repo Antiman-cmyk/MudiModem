@@ -280,9 +280,10 @@ function M.new(conn, cfg, log)
       local snapshot = iface == "cellular" and load_snapshot() or {}
       if iface == "cellular" then
         -- the carrier's max bit rate (AMBR, Mbps) for this SIM: a result at the cap is the plan,
-        -- not the radio. GL's sim info carries it (🟡 libcm_sim.so; GL's cellular-detail shows it)
+        -- not the radio. GL's sim STATUS carries it, not sim info (🟢 run: GL's cellular_manager
+        -- under mudi-emu answers ambr_* in `cellular.sim status` only; libcm_sim.so fill_ubus_sim_status)
         local slot = tonumber(snapshot.slot) or cc.active_slot(call("cellular.modem", "status"), cfg.bus)
-        local sims = call("cellular.sim", "info")
+        local sims = call("cellular.sim", "status")
         for _, s in ipairs(sims and type(sims.sims) == "table" and sims.sims or {}) do
           if type(s) == "table" and slot and tonumber(s.slot) == slot and (s.bus == nil or s.bus == cjson.null or s.bus == cfg.bus) then
             local dl, ul = tonumber(s.ambr_dl), tonumber(s.ambr_ul)

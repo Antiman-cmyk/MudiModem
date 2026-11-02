@@ -5,7 +5,8 @@ Nothing of GL is faked here but the modem's AT replies, so what GL returns is wh
 
   * the collector's RF comes from GL's sampler (cellular.collect get_signals), and its sample is
     the one GL's own cell_info gives — levels included (GL's thresholds, cellular_compat);
-  * cell_info runs only for the identity: once, then again after the serving cell changes.
+  * cell_info runs only for the identity: once, then again after the serving cell changes;
+  * the carrier's AMBR is in `cellular.sim status` (the speed test's source), not `sim info`.
 Needs firmware/rootfs, qemu-user + binfmt, and root for the namespaces/overlay; skips otherwise."""
 import json, os, shutil, subprocess, sys, tempfile, textwrap, unittest
 
@@ -51,6 +52,7 @@ INNER = textwrap.dedent(r'''
     before = samples()
     h1 = ubus("mudimodem", "health", {})
     gl_cell = ubus("cellular.network", "cell_info", {"bus": "cpu", "slot": 1})
+    sim_info, sim_status = ubus("cellular.sim", "info", {}), ubus("cellular.sim", "status", {})
     # a handover: the modem now serves another cell (new PCI, new id)
     line = '+QENG: "servingcell","NOCONN","NR5G-SA","FDD",310,260,187461999,333,870100,127490,71,2,-106,-17,7,0,-'
     json.dump({"replies": {'AT+QENG="servingcell"': line}}, open(os.path.join(W, "modem-state.json"), "w"))
@@ -59,7 +61,8 @@ INNER = textwrap.dedent(r'''
     h2 = ubus("mudimodem", "health", {})
     gl_cell2 = ubus("cellular.network", "cell_info", {"bus": "cpu", "slot": 1})
     d.terminate(); d.wait(10)
-    json.dump({"before": before, "after": after, "h1": h1, "h2": h2, "gl_cell": gl_cell, "gl_cell2": gl_cell2},
+    json.dump({"before": before, "after": after, "h1": h1, "h2": h2, "gl_cell": gl_cell, "gl_cell2": gl_cell2,
+               "sim_info": sim_info, "sim_status": sim_status},
               open(os.path.join(W, "result.json"), "w"))
 ''')
 
@@ -95,6 +98,13 @@ class AgainstGLsOwnStack(unittest.TestCase):
                          (g2["cell_id"], -106, g2["signal"][0]["rsrp_level"], g2["signal"][0]["rsrq_level"]))
         self.assertEqual(h2["cell_info_reads"], 2, "one more cell_info, for the new cell")
         self.assertTrue(all(x["pci"] in (721, 333) for x in before + after))
+        # the carrier's max bit rate: in sim STATUS (what the speed test reads), never in sim info;
+        # GL takes the AMBR line for the SIM's data APN (AT+CGDCONT?), so the APN is there too
+        st = {x["slot"]: x for x in r["sim_status"]["sims"]}
+        self.assertEqual((st[1]["ambr_dl"], st[1]["ambr_ul"]), (600, 100), "SA: nr5g_ambr, 586 x 4^5 kbps -> Mbps")
+        self.assertEqual((st[2]["ambr_dl"], st[2]["ambr_ul"]), (150, 50), "LTE: lte_ambr kbps -> Mbps")
+        self.assertEqual((st[1]["apn"], st[2]["apn"]), ("fast.t-mobile.com", "broadband"))
+        self.assertFalse(any("ambr_dl" in x for x in r["sim_info"]["sims"]), r["sim_info"])
 
 
 if __name__ == "__main__":

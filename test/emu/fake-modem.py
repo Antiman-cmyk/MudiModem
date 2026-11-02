@@ -28,13 +28,20 @@ lock = {1: {"common/4g": "0", "common/5g": "0", "save_ctrl": "0,0"}, 2: {"common
 counters = {"tx": 1000000, "rx": 50000000}
 
 SIM = {1: {"imsi": "310260000000001", "iccid": "8901260000000000001", "spn": '"T-Mobile","T-Mobile","",0,"310260"',
+           "apn": "fast.t-mobile.com",
            "cops": '0,0,"T-Mobile",12',
            "qeng": '+QENG: "servingcell","NOCONN","NR5G-SA","FDD",310,260,187461035,721,870100,127490,71,2,-99,-13,4,0,-',
-           "qcainfo": '+QCAINFO: "PCC",127490,2,"NR5G BAND 71",721,-99,-13,4'},
+           "qcainfo": '+QCAINFO: "PCC",127490,2,"NR5G BAND 71",721,-99,-13,4',
+           # AMBR: the baseband's formats (modem.b24); SA answers nr5g_ambr (unit 6 = 4^5 kbps)
+           "ambr": {'AT+QNWCFG="NR5G_AMBR"': ['+QNWCFG: "nr5g_ambr","fast.t-mobile.com",6,586,6,98'],
+                    'AT+QNWCFG="LTE_AMBR"': []}},
        2: {"imsi": "310410000000002", "iccid": "8901410000000000002", "spn": '"AT&T","AT&T","",0,"310410"',
+           "apn": "broadband",
            "cops": '0,0,"AT&T",7',
            "qeng": '+QENG: "servingcell","NOCONN","LTE","FDD",310,410,A1B2C03,136,67036,66,5,5,1D2E,-117,-15,-82,0,-',
-           "qcainfo": '+QCAINFO: "PCC",67036,100,"LTE BAND 66",5,136,-117,-15,-82,0'}}
+           "qcainfo": '+QCAINFO: "PCC",67036,100,"LTE BAND 66",5,136,-117,-15,-82,0',
+           "ambr": {'AT+QNWCFG="LTE_AMBR"': ['+QNWCFG: "lte_ambr","broadband",150000,50000'],
+                    'AT+QNWCFG="NR5G_AMBR"': []}}}
 
 
 def overrides():
@@ -113,9 +120,12 @@ def answer(cmd):
         "AT+QSIMDET?": ["+QSIMDET: 1,0"], "AT+QSIMSTAT?": ["+QSIMSTAT: 0,1"],
         "AT+QPINC?": ['+QPINC: "SC",3,10'],
         "AT+CNUM": [],
+        "AT+CGDCONT?": ['+CGDCONT: 1,"IPV4V6","%s","0.0.0.0",0,0' % s["apn"]],   # GL's APN: AMBR is matched to it
     }
     if u in table:
         return table[u]
+    if u in s.get("ambr", {}):
+        return s["ambr"][u]
     if u.endswith("?") or u.endswith("=?"):
         return []                      # an unknown query: a bare OK, as many Quectel queries answer
     return []                          # an unknown set command: OK

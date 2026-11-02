@@ -102,8 +102,10 @@ class SpeedTest(unittest.TestCase):
 
     def start(self, dump=DUMP_UP, cell=CELL, **extra):
         scen = {"modem_status": MODEM, "network_dump": dump, "cell_info": [cell], "network_info": {"networks": []},
-                "sim_info": {"sims": [{"slot": 2, "bus": "cpu", "ambr_dl": 999, "ambr_ul": 99},
-                                      {"slot": 1, "bus": "cpu", "ambr_dl": "150", "ambr_ul": 50}]}}
+                # GL's shapes, measured by running GL: sim info has no ambr_*, sim status has them
+                "sim_info": {"sims": [{"slot": 1, "bus": "cpu", "iccid": "8901260000000000001", "mcc": "310", "mnc": "260"}]},
+                "sim_status": {"sims": [{"slot": 2, "bus": "cpu", "ambr_dl": 999, "ambr_ul": 99},
+                                        {"slot": 1, "bus": "cpu", "ambr_dl": "150", "ambr_ul": 50}]}}
         with open(os.path.join(self.bus, "scen.json"), "w") as f:
             json.dump(scen, f)
         subprocess.run(["sh", BUS_SH, "start", self.bus, os.path.join(self.bus, "scen.json")], check=True)

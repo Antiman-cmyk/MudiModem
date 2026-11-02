@@ -39,7 +39,7 @@ R4 features built on it, plus the fixes they surfaced.
   The safety net itself is unchanged: the same watchdog reverts at the deadline, survives a
   daemon restart, and `panic` still works from ssh with nothing else running.
 - **Speed test shows the carrier's cap.** Each cellular result records the per-SIM bearer limit
-  the network signals (AMBR, from GL's `cellular.sim info`), and the result card says when a test
+  the network signals (AMBR, from GL's `cellular.sim status`), and the result card says when a test
   ran at that cap: a slow result can then be told apart from a throttled plan.
 - **Tracking has a throughput lane:** download and upload rate of the cellular link under the
   signal chart, from the interface's byte counters every RF tick (no extra modem commands), with a
