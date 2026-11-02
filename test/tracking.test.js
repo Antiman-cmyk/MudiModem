@@ -1154,3 +1154,55 @@ test('CSV export: the samples in range and the event log, quoted properly', () =
     assert.match(got, /User,Bands applied,"mode ""LTE"", B66"/, 'commas and quotes quoted');
   } finally { Object.assign(global, saved); }
 });
+
+// ---- render cost (audit §5): one frame per data change, hover reuses it, paths thinned ----
+function daySamples() {
+  const now = Date.now(), out = [];
+  for (let i = 8640; i >= 0; i--) {
+    out.push({ t: now - i * 10000, slot: '1', id: 'A1', band: 71, mode: 'NR5G-SA',
+      rsrp: -100 + 15 * Math.sin(i / 7), sinr: 5 + 8 * Math.sin(i / 11), rsrq: -13 + 3 * Math.sin(i / 5),
+      rsrp_level: 3, sinr_level: 2, rsrq_level: 3, carrier: 'T-Mobile', rx_kbps: 1000 + i % 300, tx_kbps: 100 });
+  }
+  return out;
+}
+
+test('hovering reuses the drawing frame; a push (tick) rebuilds it', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { samples: daySamples(), events: [], winW: 1440 });
+  let builds = 0;
+  const orig = vm.computeWin;
+  vm.computeWin = function (now) { builds++; return orig(now); };
+  for (let m = -1400; m < 0; m += 100) { vm.cursor = m; c.render.call(vm, h); }
+  assert.equal(builds, 1, 'fourteen hover renders, one window computed');
+  vm.samples.push(Object.assign({}, vm.samples[vm.samples.length - 1], { t: Date.now() + 10000 }));
+  vm.lastT += 1; vm.tick++;
+  c.render.call(vm, h);
+  assert.equal(builds, 2, 'new data, new frame');
+});
+
+test('a 24 h window draws at most a few points per pixel column, envelope intact', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { samples: daySamples(), events: [], winW: 1440, width: 900 });
+  const tree = c.render.call(vm, h);
+  const rsrp = walk(tree).find((n) => n.tag === 'path' && n.data.attrs.stroke === 'var(--primary)');
+  const pts = rsrp.data.attrs.d.match(/[ML]/g).length;
+  assert.ok(pts <= 4 * 900, '<= 4 points per column, got ' + pts + ' for 8,641 samples');
+  // thinning keeps every column's extremes: the lowest and highest y of the full run survive
+  const run = []; for (let i = 0; i < 1000; i++) run.push([i / 10, Math.sin(i) * 50]);
+  const thin = vm.thinRun(run);
+  const ys = (a) => a.map((p) => p[1]);
+  assert.equal(Math.min(...ys(thin)), Math.min(...ys(run)));
+  assert.equal(Math.max(...ys(thin)), Math.max(...ys(run)));
+  assert.deepEqual(thin[0], run[0]); assert.deepEqual(thin[thin.length - 1], run[run.length - 1]);
+  for (let i = 1; i < thin.length; i++) assert.ok(thin[i][0] >= thin[i - 1][0], 'drawing order kept');
+  assert.ok(thin.length <= 4 * 100);
+});
+
+test('nearestByT (binary search) agrees with a linear scan', () => {
+  const c = loadChunk();
+  const vm = makeVm(c);
+  const ss = [10, 20, 35, 50, 80].map((t) => ({ t }));
+  for (const [t, want] of [[0, 10], [14, 10], [15, 10], [16, 20], [42, 35], [43, 50], [79, 80], [500, 80]])
+    assert.equal(vm.nearestByT(ss, t).t, want, 't=' + t);
+  assert.strictEqual(vm.nearestByT([], 5), null);
+});

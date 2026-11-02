@@ -1374,7 +1374,31 @@ var __mm = (() => {
         // clock otherwise. Everything drawn (window, x-axis, clock labels, slice)
         // is relative to this; collection keeps using the real clock.
         viewNow: function() {
-          return this.frozenAt != null ? this.frozenAt : this.nowMs();
+          if (this.frozenAt != null) return this.frozenAt;
+          var f = this._frame;
+          return f && this.frameCurrent(f) ? f.now : this.nowMs();
+        },
+        // ---- the drawing frame: one per data change (a push, a fetch, a range, a resize, pause) ----
+        // Hover and pin re-render the whole tab on every mouse move; the window, its domains and
+        // every path are computed once per frame instead (a 24 h window is ~8,600 samples). Kept off
+        // Vue's reactivity on purpose (an instance field, not data).
+        frameKey: function() {
+          return [this.tick, this.samples.length, this.lastT, this.winW, this.width, this.frozenAt].join("|");
+        },
+        frameCurrent: function(f) {
+          return f.key === this.frameKey() && f.samples === this.samples;
+        },
+        frame: function() {
+          var f = this._frame;
+          if (f && this.frameCurrent(f)) return f;
+          f = {
+            key: this.frameKey(),
+            samples: this.samples,
+            now: this.frozenAt != null ? this.frozenAt : this.nowMs()
+          };
+          this._frame = f;
+          f.ss = this.computeWin(f.now);
+          return f;
         },
         // Minutes a window fetch must ask for so the VIEW's window is covered:
         // while paused the box has moved on past the frozen edge.
@@ -1467,7 +1491,10 @@ var __mm = (() => {
           return PADL + (m + this.winW) / this.winW * plotW;
         },
         winSamples: function() {
-          var now = this.viewNow(), cutoff = now - this.winW * 6e4;
+          return this.frame().ss;
+        },
+        computeWin: function(now) {
+          var cutoff = now - this.winW * 6e4;
           var top = this.frozenAt != null ? this.frozenAt : Infinity;
           var win = this.samples.filter(function(s) {
             return s.t >= cutoff && s.t <= top;
@@ -1577,13 +1604,17 @@ var __mm = (() => {
             return Object.assign({ m: self.mOf(e.t) }, e);
           });
         },
-        // Closest sample to box time `t` in an ascending array, or null.
+        // Closest sample to box time `t` in an ascending array, or null. Binary search: it runs on
+        // every mouse move over a window of up to ~8,600 samples.
         nearestByT: function(ss, t2) {
           if (!ss || !ss.length) return null;
-          var best = ss[0];
-          for (var i = 1; i < ss.length; i++)
-            if (Math.abs(ss[i].t - t2) < Math.abs(best.t - t2)) best = ss[i];
-          return best;
+          var lo = 0, hi = ss.length - 1;
+          while (hi - lo > 1) {
+            var mid = lo + hi >> 1;
+            if (ss[mid].t < t2) lo = mid;
+            else hi = mid;
+          }
+          return Math.abs(ss[hi].t - t2) < Math.abs(ss[lo].t - t2) ? ss[hi] : ss[lo];
         },
         nearestSample: function(m) {
           return this.nearestByT(this.winSamples(), this.viewNow() + m * 6e4);
@@ -1690,10 +1721,7 @@ var __mm = (() => {
         // ---- render helpers ----
         renderLanes: function(h) {
           var self = this, W = this.width, kids = [];
-          var ss = this.winSamples();
-          var doms = LINES.map(function(L) {
-            return self.domainFor(L, ss);
-          });
+          var doms = this.frameDoms();
           var plotTop = 22, plotBot = plotTop + PLOT_H;
           [plotTop, plotBot].forEach(function(yy) {
             kids.push(h("line", { attrs: {
@@ -1727,52 +1755,25 @@ var __mm = (() => {
             plotBot,
             W
           });
+          var P = this.lanePaths(plotTop, plotBot);
           LINES.forEach(function(L, i) {
-            var d0 = doms[i][0], d1 = doms[i][1], span = d1 - d0;
-            var yv = function(v) {
-              if (!span) return plotTop + PLOT_H / 2;
-              return plotBot - (Math.max(d0, Math.min(d1, v)) - d0) / span * PLOT_H;
-            };
-            var d = "", pen = false, prevT = null, prevSlot = null;
-            ss.forEach(function(s) {
-              var v = s[L.key];
-              var slot = s.slot == null ? null : String(s.slot);
-              if (prevSlot !== null && slot !== prevSlot) pen = false;
-              prevSlot = slot;
-              if (v == null) {
-                pen = false;
-                prevT = s.t != null ? s.t : prevT;
-                return;
-              }
-              if (prevT != null && s.t != null && s.t - prevT > GAP_MS) pen = false;
-              d += (pen ? "L" : "M") + self.xOf(s.m).toFixed(1) + " " + yv(v).toFixed(1) + " ";
-              pen = true;
-              prevT = s.t != null ? s.t : prevT;
-            });
-            if (d) kids.push(h("path", { attrs: {
+            if (P.lines[i]) kids.push(h("path", { attrs: {
               fill: "none",
               stroke: L.color,
               "stroke-width": 1.75,
               "stroke-linejoin": "round",
               "stroke-linecap": "round",
-              d: d.trim()
+              d: P.lines[i]
             } }));
           });
           var y = plotBot + 12;
-          var tpMax = 0;
-          ss.forEach(function(s) {
-            if (s.rx_kbps > tpMax) tpMax = s.rx_kbps;
-            if (s.tx_kbps > tpMax) tpMax = s.tx_kbps;
-          });
-          if (ss.some(function(s) {
-            return s.rx_kbps != null || s.tx_kbps != null;
-          })) {
-            var top = Math.max(1e3, tpMax), tpBot = y + TP_H;
+          if (P.tp) {
+            var tpBot = y + TP_H;
             kids.push(h("text", { attrs: { x: 6, y: y + 9, "font-size": 9, fill: "var(--text-badge)" } }, "MBPS"));
             kids.push(h(
               "text",
               { attrs: { x: W - PADR + 5, y: y + 9, "font-size": 9, fill: "var(--text-badge)" } },
-              String(Math.round(top / 100) / 10)
+              String(Math.round(P.tp.top / 100) / 10)
             ));
             kids.push(h("line", { attrs: {
               x1: PADL,
@@ -1782,47 +1783,24 @@ var __mm = (() => {
               stroke: "var(--divider)",
               "stroke-width": 1
             } }));
-            [["rx_kbps", "var(--primary)"], ["tx_kbps", "var(--success)"]].forEach(function(L) {
-              var d = "", pen = false, prevT = null, prevSlot = null;
-              ss.forEach(function(s) {
-                var v = s[L[0]];
-                var slot = s.slot == null ? null : String(s.slot);
-                if (prevSlot !== null && slot !== prevSlot) pen = false;
-                prevSlot = slot;
-                if (v == null) {
-                  pen = false;
-                  prevT = s.t != null ? s.t : prevT;
-                  return;
-                }
-                if (prevT != null && s.t != null && s.t - prevT > GAP_MS) pen = false;
-                var yy = tpBot - Math.min(v, top) / top * (TP_H - 4);
-                d += (pen ? "L" : "M") + self.xOf(s.m).toFixed(1) + " " + yy.toFixed(1) + " ";
-                pen = true;
-                prevT = s.t != null ? s.t : prevT;
-              });
-              if (d) kids.push(h("path", { attrs: {
+            [[P.tp.rx, "var(--primary)"], [P.tp.tx, "var(--success)"]].forEach(function(L) {
+              if (L[0]) kids.push(h("path", { attrs: {
                 fill: "none",
                 stroke: L[1],
                 "stroke-width": 1.5,
                 "stroke-linejoin": "round",
-                d: d.trim()
+                d: L[0]
               } }));
             });
             y = tpBot + 10;
           }
-          if (ss.some(function(s) {
-            return s.ping_ms != null || s.ping_lost;
-          })) {
-            var pMax = 0;
-            ss.forEach(function(s) {
-              if (s.ping_ms > pMax) pMax = s.ping_ms;
-            });
-            var pTop = pMax <= 100 ? 100 : pMax <= 250 ? 250 : pMax <= 500 ? 500 : 1e3, pBot = y + PING_H;
+          if (P.ping) {
+            var pBot = y + PING_H;
             kids.push(h("text", { attrs: { x: 6, y: y + 9, "font-size": 9, fill: "var(--text-badge)" } }, "PING"));
             kids.push(h(
               "text",
               { attrs: { x: W - PADR + 5, y: y + 9, "font-size": 9, fill: "var(--text-badge)" } },
-              String(pTop)
+              String(P.ping.top)
             ));
             kids.push(h("line", { attrs: {
               x1: PADL,
@@ -1832,36 +1810,29 @@ var __mm = (() => {
               stroke: "var(--divider)",
               "stroke-width": 1
             } }));
-            var dots = "", miss = "";
-            ss.forEach(function(s) {
-              var x = self.xOf(s.m).toFixed(1);
-              if (s.ping_lost) miss += "M" + x + " " + (y + 2) + "V" + pBot + " ";
-              else if (s.ping_ms != null)
-                dots += "M" + x + " " + (pBot - Math.min(s.ping_ms, pTop) / pTop * (PING_H - 4)).toFixed(1) + "h0 ";
-            });
-            if (dots) kids.push(h("path", { attrs: {
+            if (P.ping.dots) kids.push(h("path", { attrs: {
               fill: "none",
               stroke: "var(--text-weak)",
               "stroke-width": 3,
               "stroke-linecap": "round",
-              d: dots.trim()
+              d: P.ping.dots
             } }));
-            if (miss) kids.push(h("path", { attrs: {
+            if (P.ping.miss) kids.push(h("path", { attrs: {
               fill: "none",
               stroke: "var(--error)",
               "stroke-width": 1.5,
-              d: miss.trim()
+              d: P.ping.miss
             } }));
             y = pBot + 10;
           }
-          BUSES.forEach(function(B) {
+          BUSES.forEach(function(B, bi) {
             kids.push(h("text", { attrs: {
               x: 6,
               y: y + BUS_H / 2 + 3,
               "font-size": 9,
               fill: "var(--text-badge)"
             } }, B.label));
-            self.busRuns(B.key).forEach(function(r) {
+            P.buses[bi].forEach(function(r) {
               var x0 = Math.max(PADL, self.xOf(r.m0)), x1 = Math.min(W - PADR, self.xOf(r.m1));
               var w = x1 - x0;
               if (w < 1.2) return;
@@ -1947,13 +1918,128 @@ var __mm = (() => {
             preserveAspectRatio: "none"
           } }, kids);
         },
+        // Every path of the lanes for the current frame, built once (renderLanes reads it on every
+        // hover). Lines are thinned to the pixel grid: within one pen run, each pixel column keeps
+        // its first, lowest, highest and last point — the drawn envelope is identical, a 24 h
+        // window draws ~4 points per column instead of ~10 per pixel.
+        lanePaths: function(plotTop, plotBot) {
+          var f = this.frame(), ck = plotTop + "|" + plotBot;
+          if (f.paths && f.pathsKey === ck) return f.paths;
+          var self = this, ss = f.ss;
+          var doms = this.frameDoms();
+          var out = { doms, lines: [], tp: null, ping: null, buses: [] };
+          var runPath = function(key, yOf, thin) {
+            var d = "", run = [], prevT = null, prevSlot = null;
+            var flush = function() {
+              var pts = thin ? self.thinRun(run) : run;
+              for (var k = 0; k < pts.length; k++)
+                d += (k ? "L" : "M") + pts[k][0].toFixed(1) + " " + pts[k][1].toFixed(1) + " ";
+              run = [];
+            };
+            ss.forEach(function(s) {
+              var v = s[key];
+              var slot = s.slot == null ? null : String(s.slot);
+              if (prevSlot !== null && slot !== prevSlot) flush();
+              prevSlot = slot;
+              if (v == null) {
+                flush();
+                prevT = s.t != null ? s.t : prevT;
+                return;
+              }
+              if (prevT != null && s.t != null && s.t - prevT > GAP_MS) flush();
+              run.push([self.xOf(s.m), yOf(v)]);
+              prevT = s.t != null ? s.t : prevT;
+            });
+            flush();
+            return d.trim();
+          };
+          LINES.forEach(function(L, i) {
+            var d0 = doms[i][0], d1 = doms[i][1], span = d1 - d0;
+            out.lines.push(runPath(L.key, function(v) {
+              if (!span) return plotTop + PLOT_H / 2;
+              return plotBot - (Math.max(d0, Math.min(d1, v)) - d0) / span * PLOT_H;
+            }, true));
+          });
+          var y = plotBot + 12;
+          if (ss.some(function(s) {
+            return s.rx_kbps != null || s.tx_kbps != null;
+          })) {
+            var tpMax = 0;
+            ss.forEach(function(s) {
+              if (s.rx_kbps > tpMax) tpMax = s.rx_kbps;
+              if (s.tx_kbps > tpMax) tpMax = s.tx_kbps;
+            });
+            var top = Math.max(1e3, tpMax), tpBot = y + TP_H;
+            var tpY = function(v) {
+              return tpBot - Math.min(v, top) / top * (TP_H - 4);
+            };
+            out.tp = { top, rx: runPath("rx_kbps", tpY, true), tx: runPath("tx_kbps", tpY, true) };
+            y = tpBot + 10;
+          }
+          if (ss.some(function(s) {
+            return s.ping_ms != null || s.ping_lost;
+          })) {
+            var pMax = 0;
+            ss.forEach(function(s) {
+              if (s.ping_ms > pMax) pMax = s.ping_ms;
+            });
+            var pTop = pMax <= 100 ? 100 : pMax <= 250 ? 250 : pMax <= 500 ? 500 : 1e3, pBot = y + PING_H;
+            var dots = "", miss = "";
+            ss.forEach(function(s) {
+              var x = self.xOf(s.m).toFixed(1);
+              if (s.ping_lost) miss += "M" + x + " " + (y + 2) + "V" + pBot + " ";
+              else if (s.ping_ms != null)
+                dots += "M" + x + " " + (pBot - Math.min(s.ping_ms, pTop) / pTop * (PING_H - 4)).toFixed(1) + "h0 ";
+            });
+            out.ping = { top: pTop, dots: dots.trim(), miss: miss.trim() };
+          }
+          out.buses = BUSES.map(function(B) {
+            return self.busRuns(B.key);
+          });
+          f.paths = out;
+          f.pathsKey = ck;
+          return out;
+        },
+        frameDoms: function() {
+          var f = this.frame(), self = this;
+          if (!f.doms) f.doms = LINES.map(function(L) {
+            return self.domainFor(L, f.ss);
+          });
+          return f.doms;
+        },
+        // One pen run [[x, y], ...] reduced to the pixel grid: per column its first, lowest,
+        // highest and last point, in drawing order. Runs that already fit are returned as they are.
+        thinRun: function(run) {
+          if (run.length < 4) return run;
+          var out = [], i = 0;
+          while (i < run.length) {
+            var col = Math.floor(run[i][0]), first = run[i], lo = first, hi = first, last = first, j = i;
+            while (j < run.length && Math.floor(run[j][0]) === col) {
+              var p = run[j];
+              if (p[1] < lo[1]) lo = p;
+              if (p[1] > hi[1]) hi = p;
+              last = p;
+              j++;
+            }
+            var keep = [first];
+            [lo, hi, last].forEach(function(p3) {
+              if (keep.indexOf(p3) === -1) keep.push(p3);
+            });
+            keep.sort(function(a, b) {
+              return run.indexOf(a) - run.indexOf(b);
+            });
+            out.push.apply(out, keep);
+            i = j;
+          }
+          return out;
+        },
         // One swatch + name + domain range per metric. RSRP has a left y-axis and SINR a right one
         // (each in its own colour/unit); RSRQ stays legend + readout only — three absolute scales
         // can't all get an axis. Shows the *effective* domain (base, possibly expanded).
-        renderLegend: function(h, ss) {
-          var self = this;
-          return h("div", { staticClass: "mmt-legend" }, LINES.map(function(L) {
-            var dom = self.domainFor(L, ss);
+        renderLegend: function(h) {
+          var doms = this.frameDoms();
+          return h("div", { staticClass: "mmt-legend" }, LINES.map(function(L, i) {
+            var dom = doms[i];
             return h("span", { key: L.key }, [
               h("i", { staticStyle: { background: L.color } }),
               L.label + "  " + dom[0] + "…" + dom[1]
@@ -2230,7 +2316,7 @@ var __mm = (() => {
               [this.renderLanes(h), focused && !narrow ? this.sliceReadout(h) : null]
             );
             var under = narrow ? focused && this.sliceReadout(h, true) || h("div", { staticClass: "mmt-read empty" }, "Tap the chart for the readings at that moment.") : null;
-            body = h("div", [this.renderLegend(h, this.winSamples()), lanes, under]);
+            body = h("div", [this.renderLegend(h), lanes, under]);
             if (this.loadFails > 0)
               note = h("div", { staticClass: "mmt-note" }, t(this.preloaded ? "Couldn't load the wider range yet; retrying every {s} s." : "Earlier history didn't load — showing live samples since the page opened; retrying every {s} s.", { s: every }));
           } else {
