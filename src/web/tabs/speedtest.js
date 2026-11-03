@@ -21,6 +21,7 @@ import { mdhm } from "../kit/fmt.js";
 import { localize } from "../kit/i18n.js";
 import { t as T } from "../kit/i18n.js";
 import { csv, isoTime, download } from "../kit/csv.js";
+import { bandsText } from "../kit/carriers.js";
 export default localize((function () {
   "use strict";
 
@@ -39,13 +40,6 @@ export default localize((function () {
   function ifaceLabel(id) {
     for (var i = 0; i < IFACES.length; i++) if (IFACES[i][0] === id) return IFACES[i][1];
     return "—";
-  }
-  // The PRIMARY carrier's RAT for a result's radio snapshot — "LTE" for an
-  // NSA anchor, while `mode` is the cell's (NR5G-NSA). New results carry
-  // pcc_rat; older ones fall back to signals[0].rat, then mode.
-  function carrierRat(r) {
-    var sig = Array.isArray(r.signals) && r.signals[0];
-    return r.pcc_rat || (sig && sig.rat) || r.mode || "";
   }
   // Shared label+value rows for a result record `r` -- used by both the
   // graph's hover tooltip and the latest-result panel, so the field list and
@@ -78,7 +72,8 @@ export default localize((function () {
     ].concat(cap ? [cap] : []).concat(tr ? [tr] : []).concat([
       ["Carrier", (r.carrier || "—") + " · SIM " + (r.slot == null ? "—" : r.slot)],
       // The prefix follows the carrier: an EN-DC anchor on B2 is "B2", not "n2".
-      ["Band", r.band == null ? "—" : (/NR5G/.test(carrierRat(r)) ? "n" : "B") + r.band],
+      // every band of the result's radio snapshot, primary first — as the strip and Tracking say it
+      ["Band", bandsText(r)],
       ["Cell", r.cell_id == null ? "—" : r.cell_id],
       ["RSRP", r.rsrp == null ? "—" : r.rsrp + " dBm"],
       ["SINR", r.sinr == null ? "—" : r.sinr + " dB"],

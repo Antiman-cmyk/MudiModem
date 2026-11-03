@@ -1,6 +1,7 @@
 // Confirm-or-revert: the pending change as the router reports it (change_status), countdown, Keep / Revert, banner.
 import { rpc, rpcJob } from "../kit/rpc.js";
 import { t, tp } from "../kit/i18n.js";
+import { bandsText, carriers, pccRat } from "../kit/carriers.js";
 
 // GL's network_mode codes in the selector's own words.
 function modeName(m) { return t({ AUTO: "Auto", NR5G: "5G only", LTE: "4G only" }[m] || m); }
@@ -162,18 +163,22 @@ export default {
         });
     },
 
-    // A sample reduced to what the banner compares: {t, registered, rat, band, pci, rsrp, sinr},
-    // or null when there is none. Same shape as the router's BEFORE record.
+    // A sample reduced to what the banner compares: {t, registered, rat, band, pci, rsrp, sinr,
+    // signals: [{rat, band}]}, or null when there is none. Same shape as the router's BEFORE record.
     pictureOf(s) {
       if (!s || !s.t) return null;
       var num = function (v) { return (v === null || v === undefined || v === "" || isNaN(Number(v))) ? undefined : Number(v); };
-      return { t: s.t, registered: num(s.rsrp) !== undefined, rat: s.pcc_rat || s.mode, mode: s.mode,
-               band: num(s.band), pci: num(s.pci), rsrp: num(s.rsrp), sinr: num(s.sinr) };
+      var sigs = carriers(s).map(function (c) { return { rat: c.rat, band: c.band }; });
+      return { t: s.t, registered: num(s.rsrp) !== undefined, rat: pccRat(s), mode: s.mode,
+               band: num(s.band), pci: num(s.pci), rsrp: num(s.rsrp), sinr: num(s.sinr),
+               signals: sigs.length ? sigs : undefined };
     },
 
     pictureText(x) {
       if (!x.registered) return t("no service");
-      return [this.formatBand(x.rat, x.band), x.rsrp !== undefined ? "RSRP " + x.rsrp : "",
+      // A BEFORE record from 3.0.0 has no signals: its PCC band alone.
+      var bands = Array.isArray(x.signals) && x.signals.length ? bandsText({ signals: x.signals }) : this.formatBand(x.rat, x.band);
+      return [bands, x.rsrp !== undefined ? "RSRP " + x.rsrp : "",
               x.sinr !== undefined ? "SINR " + x.sinr : "", x.pci !== undefined ? "PCI " + x.pci : ""]
         .filter(function (v) { return v && v !== "—"; }).join(" · ");
     },

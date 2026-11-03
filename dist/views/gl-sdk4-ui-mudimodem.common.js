@@ -120,6 +120,8 @@ var __mm = (() => {
     "24 hours": "24 小时",
     "30 min": "30 分钟",
     "4G only": "仅 4G",
+    "5G NSA: an LTE anchor plus a 5G leg (B66 + n41). The readings, cell and channel shown are the LTE anchor's; Cell lock pins the 5G leg.": "5G NSA：一个 LTE 锚点加一路 5G（如 B66 + n41）。显示的读数、小区和信道都是 LTE 锚点的；锁定基站锁的是 5G 那一路。",
+    "5G leg · lock target": "5G 小区 · 锁定目标",
     "5G NR non-standalone": "5G NR 非独立组网（NSA）",
     "5G NR standalone": "5G NR 独立组网（SA）",
     "5G NSA only": "5G 仅 NSA",
@@ -167,6 +169,7 @@ var __mm = (() => {
     "Can't reach the router — battery history stopped updating.": "无法连接路由器 — 电池历史已停止更新。",
     "Cancel": "取消",
     "Carrier": "运营商",
+    "Carriers": "载波",
     "Carrier aggregation: several carriers combined for more speed.": "载波聚合：把多个载波合在一起以提高速度。",
     "Cell": "小区",
     "Cell / Ch": "小区 / 信道",
@@ -268,6 +271,8 @@ var __mm = (() => {
     "Kept": "已保留",
     "LIVE": "实时",
     "LTE": "LTE",
+    "LTE anchor": "LTE 锚点",
+    "LTE anchor {band}": "LTE 锚点 {band}",
     "Last seen": "最近一次",
     "Latency": "延迟",
     "Latest result": "最近结果",
@@ -342,6 +347,7 @@ var __mm = (() => {
     "RSRQ · dB": "RSRQ · dB",
     "Range {r}": "范围 {r}",
     "Raw AT": "AT 命令",
+    "Readings": "读数来自",
     "Read again": "重新读取",
     "Read neighbours": "读取邻区",
     "Reading band configuration from the modem...": "正在从 Modem 读取频段配置…",
@@ -402,7 +408,7 @@ var __mm = (() => {
     "The collector has not produced a sample for {age} (modem resetting, or mudimodem-collectd stopped) - these are its last known values, not live readings.": "采集器已经 {age} 没有产生新采样（Modem 正在重置，或 mudimodem-collectd 已停止），以下是最后一次的数值，不是实时读数。",
     "The collector's last sample is {age} old - nothing newer has been pushed": "采集器的最后一次采样已是 {age} 前，之后没有新的推送",
     "The connection dropped while applying, and nothing is pending on the router now - the change did not take, or was already reverted.": "应用时连接中断，且路由器上现在没有待确认的修改 - 修改没有生效，或已被恢复。",
-    "The frequency band in use: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter.": "当前使用的频段：n 表示 5G NR，B 表示 LTE。低频覆盖远；高频速度快但覆盖近。",
+    "The frequency bands in use, the one the readings come from first: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter.": "正在使用的频段，读数所属的那个排在最前：n 表示 5G NR，B 表示 LTE。低频覆盖远；高频速度快但覆盖近。",
     "The lock request was cut off by a connection drop and no lock is set - try again.": "锁定请求因连接中断而失败，目前没有设置锁定 - 请重试。",
     "The modem reports no neighbours. On 5G SA it never does - only a scan finds other cells there.": "Modem 没有报告邻区。5G SA 下从来不会报告 - 只有扫描才能找到其他小区。",
     "The modem restarted after a crash; GL saved a dump in /data/vendor/modem_crash_log": "Modem 崩溃后已自动重启；GL 已把转储保存在 /data/vendor/modem_crash_log",
@@ -653,6 +659,88 @@ var __mm = (() => {
     return component;
   }
 
+  // src/web/kit/carriers.js
+  function isNr(rat) {
+    return /NR5G/.test(rat || "");
+  }
+  function bandName(rat, band) {
+    if (band === void 0 || band === null || band === "") return null;
+    return (isNr(rat) ? "n" : "B") + band;
+  }
+  function pccRat(s) {
+    if (!s) return "";
+    var sig = Array.isArray(s.signals) && s.signals[0];
+    return s.pcc_rat || sig && sig.rat || s.mode || "";
+  }
+  function isEnDc(s) {
+    return !!s && /NSA/.test(s.rat || s.mode || "");
+  }
+  function carriers(s) {
+    if (!s) return [];
+    var rows = Array.isArray(s.signals) ? s.signals : [];
+    var out = [];
+    rows.forEach(function(g, i) {
+      if (!g || g.band === void 0 || g.band === null || g.band === "") return;
+      var rat = g.rat || (i === 0 ? pccRat(s) : s.mode) || "";
+      out.push({
+        role: g.role || (i === 0 ? "PCC" : "SCC"),
+        rat,
+        band: Number(g.band),
+        label: bandName(rat, g.band),
+        pci: g.pci,
+        arfcn: g.earfcn,
+        rsrp: g.rsrp,
+        rsrq: g.rsrq,
+        sinr: g.sinr
+      });
+    });
+    if (!out.length && s.band !== void 0 && s.band !== null && s.band !== "") {
+      var r = pccRat(s);
+      out.push({
+        role: "PCC",
+        rat: r,
+        band: Number(s.band),
+        label: bandName(r, s.band),
+        pci: s.pci,
+        arfcn: s.tx_channel,
+        rsrp: s.rsrp,
+        rsrq: s.rsrq,
+        sinr: s.sinr
+      });
+    }
+    return out;
+  }
+  function bandsText(s) {
+    var seen = [];
+    carriers(s).forEach(function(c) {
+      if (seen.indexOf(c.label) === -1) seen.push(c.label);
+    });
+    return seen.length ? seen.join(" + ") : "—";
+  }
+  function nrLeg(s) {
+    if (!isEnDc(s)) return null;
+    var rows = Array.isArray(s.signals) ? s.signals : [];
+    for (var i = 0; i < rows.length; i++) {
+      var g = rows[i];
+      if (g && isNr(g.rat) && g.pci !== void 0 && g.pci !== null && g.earfcn !== void 0 && g.earfcn !== null)
+        return g;
+    }
+    return null;
+  }
+  function lockTarget(s) {
+    if (!s) return null;
+    var rat = s.rat || s.mode || "";
+    var num = function(v) {
+      return v === void 0 || v === null || v === "" ? null : Number(v);
+    };
+    if (isEnDc(s)) {
+      var g = nrLeg(s);
+      return g ? { rat, pci: Number(g.pci), arfcn: Number(g.earfcn), band: num(g.band) } : null;
+    }
+    if (s.pci === void 0 || s.pci === null || s.tx_channel === void 0 || s.tx_channel === null) return null;
+    return { rat, pci: Number(s.pci), arfcn: Number(s.tx_channel), band: num(s.band) };
+  }
+
   // src/web/kit/rpc.js
   function hasRpc() {
     return typeof window !== "undefined" && !!window.$rpcRequest;
@@ -787,7 +875,8 @@ var __mm = (() => {
           ["RSRP", "Received power from the cell, in dBm. −100 or better is excellent, down to −105 good, down to −110 fair, below that poor."],
           ["SINR", "Signal against noise and interference, in dB. 12 or more is excellent, 6 to 12 good, 0 to 6 fair, below 0 poor."],
           ["RSRQ", "Signal quality including how busy the cell is, in dB. LTE: −6 or better is excellent, down to −10 good, down to −14 fair. 5G: −12, −16 and −20."],
-          ["Band", "The frequency band in use: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter."],
+          ["Band", "The frequency bands in use, the one the readings come from first: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter."],
+          ["NSA", "5G NSA: an LTE anchor plus a 5G leg (B66 + n41). The readings, cell and channel shown are the LTE anchor's; Cell lock pins the 5G leg."],
           ["Cell / Ch", "Which cell the modem is on (its ID) and the channel number with its frequency."],
           ["CA", "Carrier aggregation: several carriers combined for more speed."]
         ];
@@ -1187,28 +1276,33 @@ var __mm = (() => {
           ) });
         });
       },
-      // A sample reduced to what the banner compares: {t, registered, rat, band, pci, rsrp, sinr},
-      // or null when there is none. Same shape as the router's BEFORE record.
+      // A sample reduced to what the banner compares: {t, registered, rat, band, pci, rsrp, sinr,
+      // signals: [{rat, band}]}, or null when there is none. Same shape as the router's BEFORE record.
       pictureOf(s) {
         if (!s || !s.t) return null;
         var num = function(v) {
           return v === null || v === void 0 || v === "" || isNaN(Number(v)) ? void 0 : Number(v);
         };
+        var sigs = carriers(s).map(function(c) {
+          return { rat: c.rat, band: c.band };
+        });
         return {
           t: s.t,
           registered: num(s.rsrp) !== void 0,
-          rat: s.pcc_rat || s.mode,
+          rat: pccRat(s),
           mode: s.mode,
           band: num(s.band),
           pci: num(s.pci),
           rsrp: num(s.rsrp),
-          sinr: num(s.sinr)
+          sinr: num(s.sinr),
+          signals: sigs.length ? sigs : void 0
         };
       },
       pictureText(x) {
         if (!x.registered) return t("no service");
+        var bands = Array.isArray(x.signals) && x.signals.length ? bandsText({ signals: x.signals }) : this.formatBand(x.rat, x.band);
         return [
-          this.formatBand(x.rat, x.band),
+          bands,
           x.rsrp !== void 0 ? "RSRP " + x.rsrp : "",
           x.sinr !== void 0 ? "SINR " + x.sinr : "",
           x.pci !== void 0 ? "PCI " + x.pci : ""
@@ -2047,19 +2141,14 @@ var __mm = (() => {
       };
     },
     computed: {
-      // The serving cell as the collector's latest push sees it, built the way get_lock builds its
-      // own (rpc serving_from_sample): the PCC, or under EN-DC the NR leg. null when unknown/stale.
+      // The serving cell as the collector's latest push sees it, picked the way get_lock picks its
+      // own (kit/carriers.js lockTarget = rpc serving_from_sample): the PCC, or under EN-DC the NR
+      // leg. null when unknown/stale.
       liveCell() {
         var s = this.serving;
         if (!s || !s.t || s.stale) return null;
-        if (/NSA/.test(s.rat || s.mode || "")) {
-          var nr = (Array.isArray(s.signals) ? s.signals : []).filter(function(g) {
-            return g && /NR5G/.test(g.rat || "") && g.pci != null && g.earfcn != null;
-          })[0];
-          return nr ? { slot: s.slot, pci: Number(nr.pci), arfcn: Number(nr.earfcn) } : null;
-        }
-        if (s.pci == null || s.tx_channel == null) return null;
-        return { slot: s.slot, pci: Number(s.pci), arfcn: Number(s.tx_channel) };
+        var c = lockTarget(s);
+        return c ? { slot: s.slot, pci: c.pci, arfcn: c.arfcn } : null;
       },
       // The Lock tab's picture names a cell the modem has since left (a handover after get_lock):
       // the cell it is on now, else null. Only for the same SIM — a slot switch re-reads anyway.
@@ -2300,7 +2389,7 @@ var __mm = (() => {
       cellKey(rat, pci, freq) {
         return String(rat || "") + "|" + pci + "|" + freq;
       },
-      // Copy one identifier (Cell ID / PCI / ARFCN) and say so next to it for a moment.
+      // Copy one identifier (Cell ID / PCI / ARFCN; k = its row key, "t:pci") and say so next to it for a moment.
       copyValue(k, v) {
         var self = this;
         return copyText(v).then(function(ok) {
@@ -2331,25 +2420,63 @@ var __mm = (() => {
         return t2;
       },
       // ---- cell-lock render helpers ----
+      // The card's cells, each with only its own identifiers and readings: [{id, title, rows}],
+      // rows [key, label, value, copy]. Under 5G NSA two sections — the 5G leg (the lock target)
+      // and its LTE anchor (which owns the cell ID and GL's readings); otherwise one, untitled. A
+      // "Carriers" row lists every band in use (the strip's text) when the sections don't show them all.
+      currentCellSections() {
+        var d = this.lockData || {}, s = d.serving || {}, an = s.anchor || null;
+        var live = this.servingMoved || !this.serving || !this.serving.t ? null : this.serving;
+        var cs = carriers(live);
+        var liveOf = function(pci, arfcn) {
+          return cs.filter(function(c) {
+            return String(c.pci) === String(pci) && String(c.arfcn) === String(arfcn);
+          })[0] || null;
+        };
+        var mk = function(id) {
+          var rows = [];
+          return { rows, push: function(k, label, v, copy) {
+            if (v !== void 0 && v !== null && v !== "") rows.push([id + ":" + k, label, v, copy]);
+          } };
+        };
+        var reads = function(sec, c) {
+          if (!c) return;
+          sec.push("rsrp", "RSRP", c.rsrp != null ? c.rsrp + " dBm" : null);
+          sec.push("sinr", "SINR", c.sinr != null ? c.sinr + " dB" : null);
+        };
+        var tgt = mk("t");
+        tgt.push("rat", "RAT", s.rat);
+        tgt.push("band", t("Band"), bandName(s.rat, s.band));
+        tgt.push("pci", "PCI", s.pci, true);
+        tgt.push("arfcn", "ARFCN", s.arfcn, true);
+        if (!an) tgt.push("cell", t("Cell ID"), s.cell_id, true);
+        reads(tgt, liveOf(s.pci, s.arfcn));
+        var out = [{ id: "t", title: an ? t("5G leg · lock target") : "", rows: tgt.rows }];
+        var shown = [bandName(s.rat, s.band)];
+        if (an) {
+          var a = mk("a");
+          a.push("band", t("Band"), bandName(an.rat, an.band));
+          a.push("pci", "PCI", an.pci, true);
+          a.push("arfcn", "EARFCN", an.arfcn, true);
+          a.push("cell", t("Cell ID"), an.cell_id, true);
+          reads(a, liveOf(an.pci, an.arfcn));
+          out.push({ id: "a", title: t("LTE anchor"), rows: a.rows });
+          shown.push(bandName(an.rat, an.band));
+        }
+        if (cs.some(function(c) {
+          return shown.indexOf(c.label) === -1;
+        })) {
+          var all = mk("c");
+          all.push("carriers", t("Carriers"), bandsText(live));
+          out.unshift({ id: "c", title: "", rows: all.rows });
+        }
+        return out;
+      },
       renderCurrentCell(h) {
         var self = this, d = this.lockData;
-        var s = d.serving || {};
         var l5 = d.lock && d.lock.l5g || {}, l4 = d.lock && d.lock.l4g || {};
         var locked = !!(l5.locked || l4.locked || d.gl && d.gl.locked);
-        var rows = [];
-        var push = function(k, v, copy) {
-          if (v !== void 0 && v !== null && v !== "") rows.push([k, v, copy]);
-        };
-        push("RAT", s.rat);
-        push("PCI", s.pci, true);
-        push("ARFCN", s.arfcn, true);
-        push(t("Band"), s.band != null ? (/NR5G/.test(s.rat || "") ? "n" : "B") + s.band : null);
-        push(t("Cell ID"), s.cell_id, true);
         var moved = this.servingMoved;
-        if (!moved) {
-          push("RSRP", this.serving.rsrp != null ? this.serving.rsrp + " dBm" : null);
-          push("SINR", this.serving.sinr != null ? this.serving.sinr + " dB" : null);
-        }
         var action;
         if (locked) {
           var lk = l5.locked ? l5 : l4.locked ? l4 : d.gl && d.gl.tower || {};
@@ -2433,27 +2560,28 @@ var __mm = (() => {
           h("div", { staticClass: "mm-grp-h" }, [
             h("span", { staticClass: "mm-grp-t" }, "Current cell"),
             h("span", { staticClass: "mm-hint" }, locked ? "locked" : "serving now")
-          ]),
-          h("div", { staticClass: "mm-dl" }, rows.map(function(r, i) {
+          ])
+        ].concat(this.currentCellSections().map(function(sec) {
+          var dl = h("div", { staticClass: "mm-dl" }, sec.rows.map(function(r) {
             var c = self.copied && self.copied.k === r[0] ? self.copied : null;
-            return h("div", { key: i }, [
-              h("span", { staticClass: "k" }, r[0]),
-              h("b", String(r[1])),
-              r[2] ? h(
+            return h("div", { key: r[0] }, [
+              h("span", { staticClass: "k" }, r[1]),
+              h("b", String(r[2])),
+              r[3] ? h(
                 "button",
                 {
                   staticClass: "mm-copy",
                   attrs: { type: "button", title: "Copy" },
                   on: { click: function() {
-                    self.copyValue(r[0], String(r[1]));
+                    self.copyValue(r[0], String(r[2]));
                   } }
                 },
                 c ? c.ok ? "copied" : "copy failed" : "⧉"
               ) : null
             ]);
-          })),
-          action
-        ]);
+          }));
+          return sec.title ? h("div", { key: sec.id, staticClass: "mm-cellsec" }, [h("div", { staticClass: "mm-cellsec-t" }, sec.title), dl]) : dl;
+        }), [action]));
       },
       // Nearby-cells scan card. GL's scan_cells is DISRUPTIVE (modem offline up
       // to ~10 minutes), so it never fires without an explicit confirm step. The no-scan neighbour
@@ -3421,10 +3549,9 @@ var __mm = (() => {
         if (/LTE/.test(m)) return "LTE";
         return null;
       },
-      // The one band formatter: "n78" / "B3" from the carrier's RAT.
+      // One band, "n78" / "B3" from the carrier's RAT (kit/carriers.js bandName); "—" for none.
       formatBand(rat, band) {
-        if (band === void 0 || band === null || band === "") return "—";
-        return (/NR5G/.test(rat || "") ? "n" : "B") + band;
+        return bandName(rat, band) || "—";
       },
       // Channel -> MHz. NR: 3GPP TS 38.104 global raster (no band needed).
       // LTE: band-aware (TS 36.101); unknown band => null (show the raw EARFCN).
@@ -3469,7 +3596,7 @@ var __mm = (() => {
       injectStyle() {
         if (typeof document === "undefined") return;
         if (document.getElementById(this.styleId)) return;
-        var css = '.mm{color:var(--text-regular);font-variant-numeric:tabular-nums}.mm-strip{display:flex;align-items:stretch;background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);margin-bottom:11px;overflow:hidden}.mm-trace{flex:1;min-width:0;padding:9px 0 6px 13px}.mm-eyebrow{font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge)}.mm-plot{height:40px;margin-top:3px}.mm-plot svg{display:block;width:100%;height:100%;overflow:visible}.mm-axis{display:flex;justify-content:space-between;font-size:9.5px;color:var(--text-hint);margin-top:2px}.mm-read{flex:none;min-width:120px;padding:10px 14px 9px 15px;text-align:right;border-left:1px solid var(--divider);display:flex;flex-direction:column;justify-content:center}.mm-rsrp{font-size:29px;font-weight:600;line-height:1;letter-spacing:-.025em}.mm-rsrp .u{font-size:11px;font-weight:500;color:var(--text-hint);margin-left:2px}.mm-facts{display:flex;flex-wrap:wrap;gap:5px 13px;justify-content:flex-end;margin-top:7px}.mm-facts .k{display:block;font-size:9px;letter-spacing:.04em;text-transform:uppercase;color:var(--text-badge)}.mm-facts b{font-size:12.5px;font-weight:600}.mm-lockbadges{display:flex;gap:6px;align-items:center}.mm-lockbadge{background:var(--background-badge);border:1px solid transparent;border-radius:9px;padding:1px 8px;font:inherit;font-size:10px;font-weight:600;letter-spacing:.02em;color:var(--text-hint);cursor:pointer;white-space:nowrap}.mm-lockbadge.mode{color:var(--warning);border-color:var(--warning-disabled,var(--warning));background:var(--warning-disabled,transparent)}.mm-lockbadge.lock{color:var(--error);border-color:var(--error);background:transparent}.mm-tabs{display:flex;gap:22px;border-bottom:1px solid var(--divider);margin-bottom:11px;padding:0 4px;overflow-x:auto;scrollbar-width:none}.mm-tabs::-webkit-scrollbar{display:none}.mm-tab{flex:none;white-space:nowrap;background:none;border:0;padding:9px 0 8px;font:inherit;font-size:13px;cursor:pointer;color:var(--text-weak);border-bottom:2px solid transparent;margin-bottom:-1px}.mm-tab.on{color:var(--primary);border-bottom-color:var(--primary);font-weight:600}.mm-tab:disabled{color:var(--text-hint);cursor:default}.mm-card{background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);padding:13px 14px}.mm-sect{font-size:13px;font-weight:600;color:var(--text-title)}.mm-hint{font-size:11.5px;color:var(--text-badge)}.mm-dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px 16px;margin-top:11px}.mm-dl .k{display:block;font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge)}.mm-dl b{font-size:13px;font-weight:600;color:var(--text-title)}.mm-soon{padding:26px 14px;text-align:center;color:var(--text-hint);font-size:12px;line-height:1.6}.mm-empty{padding:30px 14px;text-align:center;color:var(--text-hint);font-size:12.5px}.mm-grp{margin-bottom:15px}.mm-grp:last-child{margin-bottom:2px}.mm-grp-h{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px}.mm-grp-t{font-size:12px;font-weight:600;color:var(--text-title)}.mm-acts{display:flex;gap:2px}.mm-act{background:none;border:0;font:inherit;font-size:10.5px;cursor:pointer;color:var(--primary);padding:2px 6px;border-radius:3px}.mm-act:hover{background:var(--primary-background)}.mm-grp-off .mm-wrap{opacity:.5}.mm-gate{font-size:10.5px;color:var(--warning-hover);background:var(--warning-background);border:1px solid var(--warning-disabled);border-radius:3px;padding:4px 8px;margin-bottom:6px}.mm-seg{display:inline-flex;border:1px solid var(--border);border-radius:4px;overflow:hidden}.mm-seg-b{font:inherit;font-size:12px;background:transparent;border:0;padding:5px 14px;cursor:pointer;color:var(--text-weak);border-right:1px solid var(--border)}.mm-seg-b:last-child{border-right:0}.mm-seg-b.on{background:var(--primary);color:#fff;font-weight:600}.mm-seg-b:disabled{cursor:default;opacity:.6}.mm-wrap{display:flex;gap:4px;flex-wrap:wrap}.mm-band{position:relative;min-width:44px;padding:4px 6px 3px;text-align:center;border:1px solid var(--border);border-radius:4px;background:var(--background-card);transition:border-color .1s,background .1s}.mm-band b{display:block;font-size:12px;font-weight:600;line-height:1.2}.mm-band s{display:block;font-size:9px;line-height:1.2;color:var(--text-hint);text-decoration:none}.mm-band.active{background:var(--success);border-color:var(--success)}.mm-band.active b{color:#fff}.mm-band.active s{color:rgba(255,255,255,.75)}.mm-band.permitted{border-color:var(--primary)}.mm-band.permitted b{color:var(--primary)}.mm-band.sel{background:var(--success);border-color:var(--success)}.mm-band.sel b{color:#fff}.mm-band.sel s{color:rgba(255,255,255,.75)}.mm-band.unsel b{color:var(--text-regular)}.mm-band.blocked{opacity:.5}.mm-band.blocked b{color:var(--text-hint);text-decoration:line-through}.mm-band.clickable{cursor:pointer}.mm-band.clickable:hover{border-color:var(--primary)}.mm-band.serving{box-shadow:0 0 0 2px var(--success)}.mm-band.serving::after{content:"";position:absolute;top:-3px;right:-3px;width:7px;height:7px;border-radius:50%;background:var(--success);border:1.5px solid var(--background-card)}.mm-axis2{display:flex;justify-content:space-between;font-size:9.5px;color:var(--text-hint);margin-top:6px}.mm-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:10.5px;color:var(--text-badge);margin-top:12px;padding-top:10px;border-top:1px solid var(--divider)}.mm-legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}.mm-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;border-top:1px solid var(--divider);padding-top:11px;margin-top:11px}.mm-btn{font:inherit;font-size:11.5px;font-weight:600;border-radius:3px;padding:6px 13px;cursor:pointer;border:1px solid transparent}.mm-btn.primary{background:var(--primary);color:#fff;border-color:var(--primary)}.mm-btn.primary:disabled{background:var(--primary-disabled);border-color:transparent;cursor:default}.mm-btn.keep{background:var(--warning);color:#fff;border-color:var(--warning)}.mm-btn.danger{background:transparent;color:var(--error);border-color:var(--error)}.mm-revert{background:var(--warning-background);border:1px solid var(--warning);border-radius:3px;padding:9px 11px;margin:0 0 12px}.mm-revert-row{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:11.5px;color:var(--warning-hover)}.mm-revert b{font-weight:600}.mm-cd{font-variant-numeric:tabular-nums}.mm-bar{height:2px;background:var(--warning-disabled);border-radius:1px;margin-top:8px;overflow:hidden}.mm-bar i{display:block;height:100%;background:var(--warning);transition:width 1s linear}.mm-copy{margin-left:6px;border:0;background:transparent;color:var(--text-badge);font:inherit;font-size:11px;cursor:pointer;padding:0 2px}.mm-copy:hover{color:var(--primary)}.mm-bandtip{margin:6px 0 0}.mm-help{margin-left:6px;width:15px;height:15px;line-height:13px;border-radius:50%;border:1px solid var(--border);background:transparent;color:var(--text-weak);font-size:10px;font-weight:700;cursor:pointer;padding:0;vertical-align:1px}.mm-gloss{flex-basis:100%;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:4px 16px;font-size:11.5px;color:var(--text-weak);border-top:1px solid var(--divider);padding-top:8px;margin-top:4px}.mm-gloss b{color:var(--text-title)}.mm-scan-row{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;padding:7px 4px;border-bottom:1px solid var(--divider);font-size:12px}.mm-scan-row>span{min-width:0}.mm-scan-row>span:nth-child(2){flex:1}.mm-scan-badge{flex:none;font-size:10px;padding:1px 6px;border:1px solid var(--border);border-radius:3px;color:var(--text-badge)}@media(max-width:640px){.mm-strip{flex-direction:column}.mm-read{border-left:0;border-top:1px solid var(--divider);text-align:left;align-items:flex-start}.mm-facts{justify-content:flex-start}.mm-revert-row{flex-direction:column;align-items:flex-start}}.mm-card+.mm-card{margin-top:11px}.mm-card-h{font-size:13px;font-weight:600;color:var(--text-title);margin-bottom:6px}.mm-kv{display:flex;gap:12px;padding:4px 0;font-size:14px}.mm-k{color:var(--text-hint);min-width:64px}.mm-v{color:var(--text-title)}.mm-link{color:var(--primary);cursor:pointer;text-decoration:underline}.mm-warn{color:var(--warning)}.mm-upd{color:var(--text-hint)}.mm-note{margin-top:8px;color:var(--text-hint);font-size:13px}';
+        var css = '.mm{color:var(--text-regular);font-variant-numeric:tabular-nums}.mm-strip{display:flex;align-items:stretch;background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);margin-bottom:11px;overflow:hidden}.mm-trace{flex:1;min-width:0;padding:9px 0 6px 13px}.mm-eyebrow{font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge)}.mm-plot{height:40px;margin-top:3px}.mm-plot svg{display:block;width:100%;height:100%;overflow:visible}.mm-axis{display:flex;justify-content:space-between;font-size:9.5px;color:var(--text-hint);margin-top:2px}.mm-read{flex:none;min-width:120px;padding:10px 14px 9px 15px;text-align:right;border-left:1px solid var(--divider);display:flex;flex-direction:column;justify-content:center}.mm-rsrp{font-size:29px;font-weight:600;line-height:1;letter-spacing:-.025em}.mm-rsrp .u{font-size:11px;font-weight:500;color:var(--text-hint);margin-left:2px}.mm-facts{display:flex;flex-wrap:wrap;gap:5px 13px;justify-content:flex-end;margin-top:7px}.mm-facts .k{display:block;font-size:9px;letter-spacing:.04em;text-transform:uppercase;color:var(--text-badge)}.mm-facts b{font-size:12.5px;font-weight:600}.mm-lockbadges{display:flex;gap:6px;align-items:center}.mm-lockbadge{background:var(--background-badge);border:1px solid transparent;border-radius:9px;padding:1px 8px;font:inherit;font-size:10px;font-weight:600;letter-spacing:.02em;color:var(--text-hint);cursor:pointer;white-space:nowrap}.mm-lockbadge.mode{color:var(--warning);border-color:var(--warning-disabled,var(--warning));background:var(--warning-disabled,transparent)}.mm-lockbadge.lock{color:var(--error);border-color:var(--error);background:transparent}.mm-tabs{display:flex;gap:22px;border-bottom:1px solid var(--divider);margin-bottom:11px;padding:0 4px;overflow-x:auto;scrollbar-width:none}.mm-tabs::-webkit-scrollbar{display:none}.mm-tab{flex:none;white-space:nowrap;background:none;border:0;padding:9px 0 8px;font:inherit;font-size:13px;cursor:pointer;color:var(--text-weak);border-bottom:2px solid transparent;margin-bottom:-1px}.mm-tab.on{color:var(--primary);border-bottom-color:var(--primary);font-weight:600}.mm-tab:disabled{color:var(--text-hint);cursor:default}.mm-card{background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);padding:13px 14px}.mm-sect{font-size:13px;font-weight:600;color:var(--text-title)}.mm-hint{font-size:11.5px;color:var(--text-badge)}.mm-dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px 16px;margin-top:11px}.mm-dl .k{display:block;font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge)}.mm-dl b{font-size:13px;font-weight:600;color:var(--text-title)}.mm-soon{padding:26px 14px;text-align:center;color:var(--text-hint);font-size:12px;line-height:1.6}.mm-empty{padding:30px 14px;text-align:center;color:var(--text-hint);font-size:12.5px}.mm-grp{margin-bottom:15px}.mm-grp:last-child{margin-bottom:2px}.mm-grp-h{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px}.mm-grp-t{font-size:12px;font-weight:600;color:var(--text-title)}.mm-cellsec{margin-top:13px}.mm-cellsec+.mm-cellsec{border-top:1px solid var(--divider);padding-top:11px}.mm-cellsec-t{font-size:11px;font-weight:600;color:var(--text-weak)}.mm-cellsec .mm-dl{margin-top:7px}.mm-acts{display:flex;gap:2px}.mm-act{background:none;border:0;font:inherit;font-size:10.5px;cursor:pointer;color:var(--primary);padding:2px 6px;border-radius:3px}.mm-act:hover{background:var(--primary-background)}.mm-grp-off .mm-wrap{opacity:.5}.mm-gate{font-size:10.5px;color:var(--warning-hover);background:var(--warning-background);border:1px solid var(--warning-disabled);border-radius:3px;padding:4px 8px;margin-bottom:6px}.mm-seg{display:inline-flex;border:1px solid var(--border);border-radius:4px;overflow:hidden}.mm-seg-b{font:inherit;font-size:12px;background:transparent;border:0;padding:5px 14px;cursor:pointer;color:var(--text-weak);border-right:1px solid var(--border)}.mm-seg-b:last-child{border-right:0}.mm-seg-b.on{background:var(--primary);color:#fff;font-weight:600}.mm-seg-b:disabled{cursor:default;opacity:.6}.mm-wrap{display:flex;gap:4px;flex-wrap:wrap}.mm-band{position:relative;min-width:44px;padding:4px 6px 3px;text-align:center;border:1px solid var(--border);border-radius:4px;background:var(--background-card);transition:border-color .1s,background .1s}.mm-band b{display:block;font-size:12px;font-weight:600;line-height:1.2}.mm-band s{display:block;font-size:9px;line-height:1.2;color:var(--text-hint);text-decoration:none}.mm-band.active{background:var(--success);border-color:var(--success)}.mm-band.active b{color:#fff}.mm-band.active s{color:rgba(255,255,255,.75)}.mm-band.permitted{border-color:var(--primary)}.mm-band.permitted b{color:var(--primary)}.mm-band.sel{background:var(--success);border-color:var(--success)}.mm-band.sel b{color:#fff}.mm-band.sel s{color:rgba(255,255,255,.75)}.mm-band.unsel b{color:var(--text-regular)}.mm-band.blocked{opacity:.5}.mm-band.blocked b{color:var(--text-hint);text-decoration:line-through}.mm-band.clickable{cursor:pointer}.mm-band.clickable:hover{border-color:var(--primary)}.mm-band.serving{box-shadow:0 0 0 2px var(--success)}.mm-band.serving::after{content:"";position:absolute;top:-3px;right:-3px;width:7px;height:7px;border-radius:50%;background:var(--success);border:1.5px solid var(--background-card)}.mm-axis2{display:flex;justify-content:space-between;font-size:9.5px;color:var(--text-hint);margin-top:6px}.mm-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:10.5px;color:var(--text-badge);margin-top:12px;padding-top:10px;border-top:1px solid var(--divider)}.mm-legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}.mm-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;border-top:1px solid var(--divider);padding-top:11px;margin-top:11px}.mm-btn{font:inherit;font-size:11.5px;font-weight:600;border-radius:3px;padding:6px 13px;cursor:pointer;border:1px solid transparent}.mm-btn.primary{background:var(--primary);color:#fff;border-color:var(--primary)}.mm-btn.primary:disabled{background:var(--primary-disabled);border-color:transparent;cursor:default}.mm-btn.keep{background:var(--warning);color:#fff;border-color:var(--warning)}.mm-btn.danger{background:transparent;color:var(--error);border-color:var(--error)}.mm-revert{background:var(--warning-background);border:1px solid var(--warning);border-radius:3px;padding:9px 11px;margin:0 0 12px}.mm-revert-row{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:11.5px;color:var(--warning-hover)}.mm-revert b{font-weight:600}.mm-cd{font-variant-numeric:tabular-nums}.mm-bar{height:2px;background:var(--warning-disabled);border-radius:1px;margin-top:8px;overflow:hidden}.mm-bar i{display:block;height:100%;background:var(--warning);transition:width 1s linear}.mm-copy{margin-left:6px;border:0;background:transparent;color:var(--text-badge);font:inherit;font-size:11px;cursor:pointer;padding:0 2px}.mm-copy:hover{color:var(--primary)}.mm-bandtip{margin:6px 0 0}.mm-help{margin-left:6px;width:15px;height:15px;line-height:13px;border-radius:50%;border:1px solid var(--border);background:transparent;color:var(--text-weak);font-size:10px;font-weight:700;cursor:pointer;padding:0;vertical-align:1px}.mm-gloss{flex-basis:100%;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:4px 16px;font-size:11.5px;color:var(--text-weak);border-top:1px solid var(--divider);padding-top:8px;margin-top:4px}.mm-gloss b{color:var(--text-title)}.mm-scan-row{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;padding:7px 4px;border-bottom:1px solid var(--divider);font-size:12px}.mm-scan-row>span{min-width:0}.mm-scan-row>span:nth-child(2){flex:1}.mm-scan-badge{flex:none;font-size:10px;padding:1px 6px;border:1px solid var(--border);border-radius:3px;color:var(--text-badge)}@media(max-width:640px){.mm-strip{flex-direction:column}.mm-read{border-left:0;border-top:1px solid var(--divider);text-align:left;align-items:flex-start}.mm-facts{justify-content:flex-start}.mm-revert-row{flex-direction:column;align-items:flex-start}}.mm-card+.mm-card{margin-top:11px}.mm-card-h{font-size:13px;font-weight:600;color:var(--text-title);margin-bottom:6px}.mm-kv{display:flex;gap:12px;padding:4px 0;font-size:14px}.mm-k{color:var(--text-hint);min-width:64px}.mm-v{color:var(--text-title)}.mm-link{color:var(--primary);cursor:pointer;text-decoration:underline}.mm-warn{color:var(--warning)}.mm-upd{color:var(--text-hint)}.mm-note{margin-top:8px;color:var(--text-hint);font-size:13px}';
         var el = document.createElement("style");
         el.id = this.styleId;
         el.textContent = css;
@@ -3571,18 +3698,12 @@ var __mm = (() => {
         return this.activeNet.mcc ? this.activeNet.mcc + this.activeNet.mnc : "";
       },
       // Every serving component carrier, as {group, band, role} — SA = one NR
-      // chip, NSA = LTE anchor + NR chips, LTE-CA = several LTE chips.
+      // chip, NSA = LTE anchor + NR chips, LTE-CA = several LTE chips (kit/carriers.js).
       servingBands() {
-        var self = this, out = [];
-        var sigs = this.serving.signals;
-        if (Array.isArray(sigs) && sigs.length) {
-          sigs.forEach(function(sg) {
-            if (sg && sg.band != null) out.push({ group: self.groupOf(sg.rat || self.serving.mode), band: Number(sg.band), role: sg.role || "PCC" });
-          });
-        } else if (this.serving.band != null && this.serving.band !== "") {
-          out.push({ group: this.groupOf(this.serving.mode), band: Number(this.serving.band), role: "PCC" });
-        }
-        return out.filter(function(b) {
+        var self = this;
+        return carriers(this.serving).map(function(c) {
+          return { group: self.groupOf(c.rat), band: c.band, role: c.role };
+        }).filter(function(b) {
           return b.group;
         });
       },
@@ -3597,7 +3718,7 @@ var __mm = (() => {
       // here" ring follow the carrier, never the cell's mode: the LTE anchor of
       // an EN-DC cell is B3 at 1855 MHz, not "n3" on the NR raster.
       servingRat() {
-        return this.serving.pcc_rat || this.serving.mode;
+        return pccRat(this.serving);
       },
       // The /ws seed is flagged `stale` (with its box-clock age) when the
       // collector has not written for over a minute; live pushes never are.
@@ -3605,9 +3726,9 @@ var __mm = (() => {
       staleFor() {
         return this.serving.stale ? Number(this.serving.age_s) || 1 : 0;
       },
+      // Every band in use, primary first ("B66 + n41"): the same text Tracking and Cell lock show.
       bandLabel() {
-        if (this.serving.band === void 0 || this.serving.band === null || this.serving.band === "") return "—";
-        return this.formatBand(this.servingRat, this.serving.band);
+        return bandsText(this.serving);
       },
       // Which band group the PCC is on (for the "you are here" ring).
       servingGroup() {

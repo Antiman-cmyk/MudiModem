@@ -106,6 +106,8 @@ var __mm = (() => {
     "24 hours": "24 小时",
     "30 min": "30 分钟",
     "4G only": "仅 4G",
+    "5G NSA: an LTE anchor plus a 5G leg (B66 + n41). The readings, cell and channel shown are the LTE anchor's; Cell lock pins the 5G leg.": "5G NSA：一个 LTE 锚点加一路 5G（如 B66 + n41）。显示的读数、小区和信道都是 LTE 锚点的；锁定基站锁的是 5G 那一路。",
+    "5G leg · lock target": "5G 小区 · 锁定目标",
     "5G NR non-standalone": "5G NR 非独立组网（NSA）",
     "5G NR standalone": "5G NR 独立组网（SA）",
     "5G NSA only": "5G 仅 NSA",
@@ -153,6 +155,7 @@ var __mm = (() => {
     "Can't reach the router — battery history stopped updating.": "无法连接路由器 — 电池历史已停止更新。",
     "Cancel": "取消",
     "Carrier": "运营商",
+    "Carriers": "载波",
     "Carrier aggregation: several carriers combined for more speed.": "载波聚合：把多个载波合在一起以提高速度。",
     "Cell": "小区",
     "Cell / Ch": "小区 / 信道",
@@ -254,6 +257,8 @@ var __mm = (() => {
     "Kept": "已保留",
     "LIVE": "实时",
     "LTE": "LTE",
+    "LTE anchor": "LTE 锚点",
+    "LTE anchor {band}": "LTE 锚点 {band}",
     "Last seen": "最近一次",
     "Latency": "延迟",
     "Latest result": "最近结果",
@@ -328,6 +333,7 @@ var __mm = (() => {
     "RSRQ · dB": "RSRQ · dB",
     "Range {r}": "范围 {r}",
     "Raw AT": "AT 命令",
+    "Readings": "读数来自",
     "Read again": "重新读取",
     "Read neighbours": "读取邻区",
     "Reading band configuration from the modem...": "正在从 Modem 读取频段配置…",
@@ -388,7 +394,7 @@ var __mm = (() => {
     "The collector has not produced a sample for {age} (modem resetting, or mudimodem-collectd stopped) - these are its last known values, not live readings.": "采集器已经 {age} 没有产生新采样（Modem 正在重置，或 mudimodem-collectd 已停止），以下是最后一次的数值，不是实时读数。",
     "The collector's last sample is {age} old - nothing newer has been pushed": "采集器的最后一次采样已是 {age} 前，之后没有新的推送",
     "The connection dropped while applying, and nothing is pending on the router now - the change did not take, or was already reverted.": "应用时连接中断，且路由器上现在没有待确认的修改 - 修改没有生效，或已被恢复。",
-    "The frequency band in use: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter.": "当前使用的频段：n 表示 5G NR，B 表示 LTE。低频覆盖远；高频速度快但覆盖近。",
+    "The frequency bands in use, the one the readings come from first: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter.": "正在使用的频段，读数所属的那个排在最前：n 表示 5G NR，B 表示 LTE。低频覆盖远；高频速度快但覆盖近。",
     "The lock request was cut off by a connection drop and no lock is set - try again.": "锁定请求因连接中断而失败，目前没有设置锁定 - 请重试。",
     "The modem reports no neighbours. On 5G SA it never does - only a scan finds other cells there.": "Modem 没有报告邻区。5G SA 下从来不会报告 - 只有扫描才能找到其他小区。",
     "The modem restarted after a crash; GL saved a dump in /data/vendor/modem_crash_log": "Modem 崩溃后已自动重启；GL 已把转储保存在 /data/vendor/modem_crash_log",
@@ -679,6 +685,62 @@ var __mm = (() => {
     return true;
   }
 
+  // src/web/kit/carriers.js
+  function isNr(rat) {
+    return /NR5G/.test(rat || "");
+  }
+  function bandName(rat, band) {
+    if (band === void 0 || band === null || band === "") return null;
+    return (isNr(rat) ? "n" : "B") + band;
+  }
+  function pccRat(s) {
+    if (!s) return "";
+    var sig = Array.isArray(s.signals) && s.signals[0];
+    return s.pcc_rat || sig && sig.rat || s.mode || "";
+  }
+  function carriers(s) {
+    if (!s) return [];
+    var rows = Array.isArray(s.signals) ? s.signals : [];
+    var out = [];
+    rows.forEach(function(g, i) {
+      if (!g || g.band === void 0 || g.band === null || g.band === "") return;
+      var rat = g.rat || (i === 0 ? pccRat(s) : s.mode) || "";
+      out.push({
+        role: g.role || (i === 0 ? "PCC" : "SCC"),
+        rat,
+        band: Number(g.band),
+        label: bandName(rat, g.band),
+        pci: g.pci,
+        arfcn: g.earfcn,
+        rsrp: g.rsrp,
+        rsrq: g.rsrq,
+        sinr: g.sinr
+      });
+    });
+    if (!out.length && s.band !== void 0 && s.band !== null && s.band !== "") {
+      var r = pccRat(s);
+      out.push({
+        role: "PCC",
+        rat: r,
+        band: Number(s.band),
+        label: bandName(r, s.band),
+        pci: s.pci,
+        arfcn: s.tx_channel,
+        rsrp: s.rsrp,
+        rsrq: s.rsrq,
+        sinr: s.sinr
+      });
+    }
+    return out;
+  }
+  function bandsText(s) {
+    var seen = [];
+    carriers(s).forEach(function(c) {
+      if (seen.indexOf(c.label) === -1) seen.push(c.label);
+    });
+    return seen.length ? seen.join(" + ") : "—";
+  }
+
   // src/web/tabs/speedtest.js
   var speedtest_default = localize(function() {
     "use strict";
@@ -706,10 +768,6 @@ var __mm = (() => {
       for (var i = 0; i < IFACES.length; i++) if (IFACES[i][0] === id) return IFACES[i][1];
       return "—";
     }
-    function carrierRat(r) {
-      var sig = Array.isArray(r.signals) && r.signals[0];
-      return r.pcc_rat || sig && sig.rat || r.mode || "";
-    }
     function capRow(r) {
       if (r.ambr_dl == null && r.ambr_ul == null) return null;
       var v = t("{dl} / {ul} Mbps", { dl: r.ambr_dl == null ? "—" : r.ambr_dl, ul: r.ambr_ul == null ? "—" : r.ambr_ul });
@@ -735,7 +793,8 @@ var __mm = (() => {
       ].concat(cap ? [cap] : []).concat(tr2 ? [tr2] : []).concat([
         ["Carrier", (r.carrier || "—") + " · SIM " + (r.slot == null ? "—" : r.slot)],
         // The prefix follows the carrier: an EN-DC anchor on B2 is "B2", not "n2".
-        ["Band", r.band == null ? "—" : (/NR5G/.test(carrierRat(r)) ? "n" : "B") + r.band],
+        // every band of the result's radio snapshot, primary first — as the strip and Tracking say it
+        ["Band", bandsText(r)],
         ["Cell", r.cell_id == null ? "—" : r.cell_id],
         ["RSRP", r.rsrp == null ? "—" : r.rsrp + " dBm"],
         ["SINR", r.sinr == null ? "—" : r.sinr + " dB"],

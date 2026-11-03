@@ -173,6 +173,9 @@ src/web/
              i18n.js        t(key, vars)；mergeLocaleMessage 注入；跟随 $i18n.locale；缺失时回退英文
              theme.js       语义色到 GL 变量的映射（good → --secondary 等），配合 lint 测试
              fmt.js         频段 / ARFCN↔MHz / 时间 / 单位（现在分散在各个 chunk 里）
+             carriers.js    （已实现）一个采样的所有载波，所有页面共用：频段列表"B66 + n41"（主载波在前）、
+                            锁定目标（NSA 下是 5G 那一路）、NSA 锚点；和插件的 serving_from_sample
+                            由 test/fixtures/carriers.json 同一张表约束
              ui/            Card、Btn、Seg、Badge、Tip（点击展开，支持触屏）、Banner、WindowPicker
              chart/         时间轴、按像素列 min/max 抽稀、多车道布局、HTML 图例和读数（不会在手机上溢出）
   shell/     index.js       标签栏（可横向滚动，记住上次的标签，支持 hash 深链）

@@ -42,6 +42,8 @@ export default {
         '.mm-grp{margin-bottom:15px}.mm-grp:last-child{margin-bottom:2px}' +
         '.mm-grp-h{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px}' +
         '.mm-grp-t{font-size:12px;font-weight:600;color:var(--text-title)}' +
+        '.mm-cellsec{margin-top:13px}.mm-cellsec+.mm-cellsec{border-top:1px solid var(--divider);padding-top:11px}' +
+        '.mm-cellsec-t{font-size:11px;font-weight:600;color:var(--text-weak)}.mm-cellsec .mm-dl{margin-top:7px}' +
         '.mm-acts{display:flex;gap:2px}' +
         '.mm-act{background:none;border:0;font:inherit;font-size:10.5px;cursor:pointer;color:var(--primary);padding:2px 6px;border-radius:3px}' +
         '.mm-act:hover{background:var(--primary-background)}' +

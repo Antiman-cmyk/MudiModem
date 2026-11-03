@@ -3,6 +3,7 @@
 import { rpc, hasRpc, rpcJob } from "../kit/rpc.js";
 import { t as T, tp as TP } from "../kit/i18n.js";
 import { copyText } from "../kit/clipboard.js";
+import { bandName, bandsText, carriers, lockTarget } from "../kit/carriers.js";
 export default {
   data() {
     return {
@@ -24,19 +25,14 @@ export default {
     };
   },
   computed: {
-    // The serving cell as the collector's latest push sees it, built the way get_lock builds its
-    // own (rpc serving_from_sample): the PCC, or under EN-DC the NR leg. null when unknown/stale.
+    // The serving cell as the collector's latest push sees it, picked the way get_lock picks its
+    // own (kit/carriers.js lockTarget = rpc serving_from_sample): the PCC, or under EN-DC the NR
+    // leg. null when unknown/stale.
     liveCell() {
       var s = this.serving;
       if (!s || !s.t || s.stale) return null;
-      if (/NSA/.test(s.rat || s.mode || "")) {
-        var nr = (Array.isArray(s.signals) ? s.signals : []).filter(function (g) {
-          return g && /NR5G/.test(g.rat || "") && g.pci != null && g.earfcn != null;
-        })[0];
-        return nr ? { slot: s.slot, pci: Number(nr.pci), arfcn: Number(nr.earfcn) } : null;
-      }
-      if (s.pci == null || s.tx_channel == null) return null;
-      return { slot: s.slot, pci: Number(s.pci), arfcn: Number(s.tx_channel) };
+      var c = lockTarget(s);
+      return c ? { slot: s.slot, pci: c.pci, arfcn: c.arfcn } : null;
     },
     // The Lock tab's picture names a cell the modem has since left (a handover after get_lock):
     // the cell it is on now, else null. Only for the same SIM — a slot switch re-reads anyway.
@@ -271,7 +267,7 @@ export default {
     // One cell, whatever list it is in: RAT + PCI + channel.
     cellKey(rat, pci, freq) { return String(rat || "") + "|" + pci + "|" + freq; },
 
-    // Copy one identifier (Cell ID / PCI / ARFCN) and say so next to it for a moment.
+    // Copy one identifier (Cell ID / PCI / ARFCN; k = its row key, "t:pci") and say so next to it for a moment.
     copyValue(k, v) {
       var self = this;
       return copyText(v).then(function (ok) {
@@ -293,22 +289,59 @@ export default {
     },
 
     // ---- cell-lock render helpers ----
+    // The card's cells, each with only its own identifiers and readings: [{id, title, rows}],
+    // rows [key, label, value, copy]. Under 5G NSA two sections — the 5G leg (the lock target)
+    // and its LTE anchor (which owns the cell ID and GL's readings); otherwise one, untitled. A
+    // "Carriers" row lists every band in use (the strip's text) when the sections don't show them all.
+    currentCellSections() {
+      var d = this.lockData || {}, s = d.serving || {}, an = s.anchor || null;
+      // Live readings belong to the cell the modem is on: after a handover, not to this one.
+      var live = (this.servingMoved || !this.serving || !this.serving.t) ? null : this.serving;
+      var cs = carriers(live);
+      var liveOf = function (pci, arfcn) {
+        return cs.filter(function (c) { return String(c.pci) === String(pci) && String(c.arfcn) === String(arfcn); })[0] || null;
+      };
+      var mk = function (id) {
+        var rows = [];
+        return { rows: rows, push: function (k, label, v, copy) {
+          if (v !== undefined && v !== null && v !== "") rows.push([id + ":" + k, label, v, copy]);
+        } };
+      };
+      var reads = function (sec, c) {
+        if (!c) return;
+        sec.push("rsrp", "RSRP", c.rsrp != null ? c.rsrp + " dBm" : null);
+        sec.push("sinr", "SINR", c.sinr != null ? c.sinr + " dB" : null);
+      };
+      var tgt = mk("t");
+      tgt.push("rat", "RAT", s.rat);
+      tgt.push("band", T("Band"), bandName(s.rat, s.band));
+      tgt.push("pci", "PCI", s.pci, true); tgt.push("arfcn", "ARFCN", s.arfcn, true);
+      if (!an) tgt.push("cell", T("Cell ID"), s.cell_id, true);
+      reads(tgt, liveOf(s.pci, s.arfcn));
+      var out = [{ id: "t", title: an ? T("5G leg · lock target") : "", rows: tgt.rows }];
+      var shown = [bandName(s.rat, s.band)];
+      if (an) {
+        var a = mk("a");
+        a.push("band", T("Band"), bandName(an.rat, an.band));
+        a.push("pci", "PCI", an.pci, true); a.push("arfcn", "EARFCN", an.arfcn, true);
+        a.push("cell", T("Cell ID"), an.cell_id, true);
+        reads(a, liveOf(an.pci, an.arfcn));
+        out.push({ id: "a", title: T("LTE anchor"), rows: a.rows });
+        shown.push(bandName(an.rat, an.band));
+      }
+      if (cs.some(function (c) { return shown.indexOf(c.label) === -1; })) {
+        var all = mk("c");
+        all.push("carriers", T("Carriers"), bandsText(live));
+        out.unshift({ id: "c", title: "", rows: all.rows });
+      }
+      return out;
+    },
+
     renderCurrentCell(h) {
       var self = this, d = this.lockData;
-      var s = d.serving || {};
       var l5 = (d.lock && d.lock.l5g) || {}, l4 = (d.lock && d.lock.l4g) || {};
       var locked = !!(l5.locked || l4.locked || (d.gl && d.gl.locked));
-      var rows = [];
-      var push = function (k, v, copy) { if (v !== undefined && v !== null && v !== "") rows.push([k, v, copy]); };
-      push("RAT", s.rat); push("PCI", s.pci, true); push("ARFCN", s.arfcn, true);
-      push(T("Band"), s.band != null ? ((/NR5G/.test(s.rat || "") ? "n" : "B") + s.band) : null);
-      push(T("Cell ID"), s.cell_id, true);
       var moved = this.servingMoved;
-      // Live readings belong to the cell the modem is on: after a handover, not to this one.
-      if (!moved) {
-        push("RSRP", this.serving.rsrp != null ? this.serving.rsrp + " dBm" : null);
-        push("SINR", this.serving.sinr != null ? this.serving.sinr + " dB" : null);
-      }
 
       var action;
       if (locked) {
@@ -379,15 +412,16 @@ export default {
           h("span", { staticClass: "mm-grp-t" }, "Current cell"),
           h("span", { staticClass: "mm-hint" }, locked ? "locked" : "serving now")
         ]),
-        h("div", { staticClass: "mm-dl" }, rows.map(function (r, i) {
+      ].concat(this.currentCellSections().map(function (sec) {
+        var dl = h("div", { staticClass: "mm-dl" }, sec.rows.map(function (r) {
           var c = self.copied && self.copied.k === r[0] ? self.copied : null;
-          return h("div", { key: i }, [h("span", { staticClass: "k" }, r[0]), h("b", String(r[1])),
-            r[2] ? h("button", { staticClass: "mm-copy", attrs: { type: "button", title: "Copy" },
-              on: { click: function () { self.copyValue(r[0], String(r[1])); } } },
+          return h("div", { key: r[0] }, [h("span", { staticClass: "k" }, r[1]), h("b", String(r[2])),
+            r[3] ? h("button", { staticClass: "mm-copy", attrs: { type: "button", title: "Copy" },
+              on: { click: function () { self.copyValue(r[0], String(r[2])); } } },
               c ? (c.ok ? "copied" : "copy failed") : "⧉") : null]);
-        })),
-        action
-      ]);
+        }));
+        return sec.title ? h("div", { key: sec.id, staticClass: "mm-cellsec" }, [h("div", { staticClass: "mm-cellsec-t" }, sec.title), dl]) : dl;
+      }), [action]));
     },
 
     // Nearby-cells scan card. GL's scan_cells is DISRUPTIVE (modem offline up

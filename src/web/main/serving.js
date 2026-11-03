@@ -1,4 +1,6 @@
 // Signal / band formatting helpers shared by the strip, the Bands and Cell lock tabs.
+import { bandName } from "../kit/carriers.js";
+
 export default {
   data() {
     return {
@@ -82,11 +84,8 @@ export default {
       return null;
     },
 
-    // The one band formatter: "n78" / "B3" from the carrier's RAT.
-    formatBand(rat, band) {
-      if (band === undefined || band === null || band === "") return "—";
-      return (/NR5G/.test(rat || "") ? "n" : "B") + band;
-    },
+    // One band, "n78" / "B3" from the carrier's RAT (kit/carriers.js bandName); "—" for none.
+    formatBand(rat, band) { return bandName(rat, band) || "—"; },
 
     // Channel -> MHz. NR: 3GPP TS 38.104 global raster (no band needed).
     // LTE: band-aware (TS 36.101); unknown band => null (show the raw EARFCN).

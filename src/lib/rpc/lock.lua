@@ -15,6 +15,10 @@ local at_expect, parse_qnwlock4, parse_qnwlock5, parse_savectrl, parse_serving =
 -- so the NR leg is taken from signals[] (the row cellular_compat tags NR5G),
 -- exactly what parse_serving returns from a multi-line QENG (`sa or nsa or
 -- lte`); with no NR row in the sample we decline and let the AT read answer.
+-- The lock target from the collector's sample. Under 5G NSA (EN-DC) that is the NR leg (a 5G
+-- lock); the LTE anchor rides along as `anchor`, and the cell ID is the anchor's (the NR leg has
+-- none in GL's data), so it lives there. The page's kit/carriers.js lockTarget must pick the same
+-- cell: test/fixtures/carriers.json pins both.
 local function serving_from_sample(latest)
   local rat = nn(latest.rat) or nn(latest.mode)
   local cell_id = nn(latest.cell_id) or nn(latest.id)
@@ -24,8 +28,10 @@ local function serving_from_sample(latest)
       local r = type(sg) == "table" and nn(sg.rat) or nil
       local pci, arfcn = tonumber(nn(sg and sg.pci)), tonumber(nn(sg and sg.earfcn))
       if type(r) == "string" and r:find("NR5G", 1, true) and pci and arfcn then
-        return { rat = rat, cell_id = cell_id, pci = pci, arfcn = arfcn,
-                 band = tonumber(nn(sg.band)), source = "collector" }
+        return { rat = rat, pci = pci, arfcn = arfcn, band = tonumber(nn(sg.band)), source = "collector",
+                 anchor = { rat = nn(latest.pcc_rat) or "LTE", band = tonumber(nn(latest.band)),
+                            pci = tonumber(nn(latest.pci)), arfcn = tonumber(nn(latest.tx_channel)),
+                            cell_id = cell_id } }
       end
     end
     return nil

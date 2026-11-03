@@ -227,13 +227,21 @@ end
 
 -- The radio picture just before a change, for the confirm banner's "before -> now": the
 -- collector's sample of THIS slot if it is under a minute old, else nil (the page then shows
--- the live picture alone). Numbers and the RAT only; nil fields are left out.
+-- the live picture alone). Numbers and the RAT, plus each carrier's rat + band (signals, so the
+-- banner lists "B66 + n41" as every other surface does); nil fields are left out.
 local function before_snapshot(slot)
   local s = read_latest(60)
   if not s or tonumber(nn(s.slot)) ~= slot then return nil end
+  local sigs
+  if type(s.signals) == "table" and #s.signals > 0 then
+    sigs = {}
+    for _, g in ipairs(s.signals) do
+      if type(g) == "table" then sigs[#sigs + 1] = { rat = nn(g.rat), band = tonumber(nn(g.band)) } end
+    end
+  end
   return { t = nn(s.t), registered = nn(s.rsrp) ~= nil, rat = nn(s.pcc_rat) or nn(s.mode), mode = nn(s.mode),
            band = tonumber(nn(s.band)), pci = tonumber(nn(s.pci)), rsrp = tonumber(nn(s.rsrp)),
-           sinr = tonumber(nn(s.sinr)), rsrq = tonumber(nn(s.rsrq)) }
+           sinr = tonumber(nn(s.sinr)), rsrq = tonumber(nn(s.rsrq)), signals = sigs }
 end
 
 -- The built-in modem's object out of `cellular.modem status/info` called WITHOUT
@@ -607,6 +615,8 @@ local function parse_serving(blob)
                      arfcn = tonumber(f[7]), band = tonumber(f[8]) }
     end
   end
+  -- NSA: the NR leg is the lock target; the LTE line is its anchor (and holds the cell ID)
+  if nsa and not sa then nsa.anchor = lte end
   return sa or nsa or lte
 end
 

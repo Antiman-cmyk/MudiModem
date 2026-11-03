@@ -3,7 +3,8 @@
 -- The 24 h sample history is too fine and too short to compare days or places; this keeps 30 days
 -- of hourly aggregates (a few hundred KB) on flash. Each line covers one cell for one hour:
 --   { t = hour start (epoch ms; `t` so jsonl.trim ages it), secs = time covered (samples x poll), slot, carrier, rat, band,
---     cell, pci, ch,  rsrp = {min, avg, max}, sinr = {...}, rsrq = {...},
+--     cell, pci, ch,  signals = [{rat, band}] (every carrier seen in the hour, PCC first: the
+--     page lists "B66 + n41" from it as everywhere else), rsrp = {min, avg, max}, sinr = {...}, rsrq = {...},
 --     ping_n, ping_lost, ping_ms (avg), rx_kbps / tx_kbps (avg of the ticks that had one), rx_max }
 -- and "no service" time in the hour as { t, secs, slot, no_service = true }. A daemon restart mid-
 -- hour leaves two lines for the same hour and cell; readers merge them (secs-weighted).
@@ -46,6 +47,7 @@ function M.new(period_s, poll_s)
     if not no_service then
       r.carrier, r.rat, r.band = nn(s.carrier), nn(s.pcc_rat) or nn(s.mode), nn(s.band)
       r.cell, r.pci, r.ch = nn(s.cell_id) or nn(s.id), nn(s.pci), nn(s.tx_channel)
+      r.signals, r.seen = {}, {}
       r.rsrp, r.sinr, r.rsrq, r.rx, r.tx = stat(), stat(), stat(), stat(), stat()
       r.ping_n, r.ping_lost, r.ping = 0, 0, stat()
     end
@@ -64,6 +66,7 @@ function M.new(period_s, poll_s)
         line.no_service = true
       else
         line.carrier, line.rat, line.band, line.cell, line.pci, line.ch = r.carrier, r.rat, r.band, r.cell, r.pci, r.ch
+        if #r.signals > 0 then line.signals = r.signals end
         line.rsrp, line.sinr, line.rsrq = triple(r.rsrp), triple(r.sinr), triple(r.rsrq)
         if r.ping_n > 0 then
           line.ping_n, line.ping_lost = r.ping_n, r.ping_lost
@@ -91,6 +94,14 @@ function M.new(period_s, poll_s)
     r.n = r.n + 1
     if registered then
       push(r.rsrp, s.rsrp); push(r.sinr, s.sinr); push(r.rsrq, s.rsrq)
+      for _, g in ipairs(type(s.signals) == "table" and s.signals or {}) do
+        local rat, band = type(g) == "table" and nn(g.rat), type(g) == "table" and tonumber(nn(g.band))
+        local k = tostring(rat) .. "|" .. tostring(band)
+        if band and not r.seen[k] and #r.signals < 8 then
+          r.seen[k] = true
+          r.signals[#r.signals + 1] = { rat = rat or nil, band = band }
+        end
+      end
       push(r.rx, s.rx_kbps); push(r.tx, s.tx_kbps)
       if nn(s.ping_ms) ~= nil then r.ping_n = r.ping_n + 1; push(r.ping, s.ping_ms) end
       if s.ping_lost == true then r.ping_n, r.ping_lost = r.ping_n + 1, r.ping_lost + 1 end

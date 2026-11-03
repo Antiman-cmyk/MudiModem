@@ -4,7 +4,10 @@
 //
 //   node tools/preview.js [--tab bands] [--theme default|dark|classic] [--width 1280] [--height 900]
 //                         [--pending] [--out build/preview/bands.png]
-//   node tools/preview.js --matrix            every tab x {desktop, phone} x {default, dark}
+//   node tools/preview.js --matrix            every tab x {desktop, phone} x {default, dark}, plus the
+//                                             RF tabs under each radio scenario below
+//   node tools/preview.js --scenario nsa ...  the radio picture: sa (default, T-Mobile n71) or a case of
+//                                             test/fixtures/carriers.json (lte, lte_ca, nsa, nsa_ca, …)
 //   node tools/preview.js --locale zh-cn ...  as if GL's language were zh-cn (window.$i18n.locale)
 //   node tools/preview.js --i18n-audit [--locale zh-cn]
 //                                             render every tab (also with a pending change) and
@@ -55,7 +58,11 @@ function themeCss(theme) {
 
 // ---- fake GL data (shapes: docs/cellular-api-4.10.md) ----
 const NOW = Date.now();
-const SAMPLE = {
+// The radio scenarios: the same table test/carriers.test.js checks every surface against.
+const CARRIERS = JSON.parse(fs.readFileSync(path.join(ROOT, "test/fixtures/carriers.json"), "utf8")).cases;
+const SCENARIOS = ["nsa", "nsa_ca", "lte_ca"];        // rendered by --matrix on the RF tabs
+function fixtures(scenario) {
+const SA = {
   t: NOW, slot: 1, registered: true, carrier: "T-Mobile", rat: "NR5G-SA", network_type: 5,
   cell_id: "187461035", tac: "870100",
   signals: [{ role: "PCC", ca: 0, network_type: 5, rat: "NR5G-SA", band: 71, earfcn: 127490, pci: 516,
@@ -63,11 +70,14 @@ const SAMPLE = {
   id: "187461035", band: 71, mode: "NR5G-SA", pci: 516, tx_channel: 127490, dl_bandwidth: "15MHz",
   rsrp: -101, rsrq: -14, sinr: 4, rssi: null, rsrp_level: 3, rsrq_level: 3, sinr_level: 2
 };
+const fx = scenario && scenario !== "sa" ? CARRIERS.find((c) => c.name === scenario) : null;
+if (scenario && scenario !== "sa" && !fx) throw new Error("no scenario " + scenario + " (sa, " + CARRIERS.map((c) => c.name).join(", ") + ")");
+const SAMPLE = fx ? Object.assign(JSON.parse(JSON.stringify(fx.sample)), { t: NOW }) : SA;
 const history = [];
 for (let i = 90; i >= 0; i--) {
   const w = Math.sin(i / 7) * 6;
   history.push(Object.assign({}, SAMPLE, { t: NOW - i * 10000, rsrp: Math.round(-101 + w), sinr: Math.round(4 + w / 2),
-    rsrq: Math.round(-14 + w / 3), signals: [Object.assign({}, SAMPLE.signals[0], { rsrp: Math.round(-101 + w) })],
+    rsrq: Math.round(-14 + w / 3), signals: SAMPLE.signals.map((g, j) => j ? g : Object.assign({}, g, { rsrp: Math.round(-101 + w) })),
     rx_kbps: i === 90 ? undefined : Math.round(24000 + w * 3000), tx_kbps: i === 90 ? undefined : Math.round(1800 + w * 200) }));
   const h = history[history.length - 1];
   if (i % 3 === 0) { if (i >= 30 && i <= 36) h.ping_lost = true; else h.ping_ms = Math.round(38 + Math.abs(w) * 4); }
@@ -85,6 +95,11 @@ const WS = {
     { slot: 2, bus: "cpu", carrier: "AT&T", mcc: "310", mnc: "410", iccid: "89014100000000000002", imsi: "310410000000002" }] },
   "mudimodem.collect": SAMPLE, "mudimodem.battery": {}, "mudimodem.event": {}
 };
+// get_lock's serving cell for the scenario, as the plugin builds it (backend-lock.test.lua 7f)
+const serving = !fx ? { rat: "NR5G-SA", pci: 516, arfcn: 127490, band: 71, cell_id: "187461035", source: "collector" }
+  : !fx.expect.lock ? null
+  : Object.assign({ source: "collector" }, fx.expect.lock, fx.expect.anchor ? { anchor: fx.expect.anchor } : { cell_id: fx.sample.cell_id });
+const snap = () => fx ? ["band", "mode", "pcc_rat", "cell_id", "pci", "tx_channel", "signals"].reduce((o, x) => (o[x] = SAMPLE[x], o), {}) : { band: 41, pcc_rat: "NR5G-SA" };
 const nowS = Math.floor(NOW / 1000);
 const RPC = {
   get_bands: { supported: { sa: WS["cellular.modems_info"].modems[0].band["NR-SA"], nsa: WS["cellular.modems_info"].modems[0].band["NR-NSA"],
@@ -94,7 +109,7 @@ const RPC = {
                capability: { sa: [25, 41, 48, 66, 71, 77], nsa: [2, 5, 41, 66, 71, 77], LTE: [2, 4, 5, 12, 66, 71] },
                meta: { bus: "cpu", slot: 1, mode: "AUTO", mode_known: true, plmn: "310260", sub_id: 1, plmn_matched: true, lock: { active: false } } },
   get_lock: { lock: { l4g: { locked: false }, l5g: { locked: false }, save_ctrl: {} }, gl: { locked: false, tower: {} },
-              serving: { rat: "NR5G-SA", pci: 516, arfcn: 127490, band: 71, cell_id: "187461035", source: "collector" },
+              serving,
               stale: false, meta: { slot: 1, sub_id: 1, plmn: "310260", plmn_matched: true } },
   get_history: { now: NOW, samples: history, events: [
     { t: NOW - 600000, kind: "user", label: "Bands applied", detail: "SA n71" },
@@ -118,17 +133,20 @@ const RPC = {
   get_speedtest_history: { results: [0, 1, 2, 3, 4, 5].map((i) => ({ t: NOW - (5 - i) * 21600000, iface: "cellular",
     trigger: i % 2 ? "schedule" : "manual", down_mbps: [182.4, 240.1, 96.3, 310.7, 205.2, 268.9][i],
     up_mbps: [22.1, 31.4, 12.9, 40.2, 27.5, 35.8][i], latency_ms: [38, 34, 61, 29, 41, 33][i], jitter_ms: 4,
-    slot: 1, carrier: "T-Mobile", band: 41, pcc_rat: "NR5G-SA", ambr_dl: 300, ambr_ul: 50,
+    slot: 1, carrier: SAMPLE.carrier, ...snap(), ambr_dl: 300, ambr_ul: 50,
     profile: i === 3 ? "full" : "quick", streams: i === 3 ? 4 : 2, data_mb: i === 3 ? 251.3 : 27.4, server: "cloudflare" })) }, get_speedtest_schedule: { enabled: true, interval_seconds: 21600 },
   get_speedtest_settings: { profile: "quick", server: "librespeed", librespeed_url: "https://speed.example.com/backend/" },
   get_speedtest_status: { running: false }, get_battlimit: { enabled: false, limit_gui: 80, state: "off" }
 };
+return { WS, RPC };
+}
 function chunk(name) { return fs.readFileSync(path.join(ROOT, "dist/views", name), "utf8"); }
 const CHUNKS = {};
 for (const f of fs.readdirSync(path.join(ROOT, "dist/views"))) CHUNKS["/views/" + f] = chunk(f);
 CHUNKS["/mudimodem/at-library.json"] = JSON.parse(fs.readFileSync(path.join(ROOT, "src/at-library.snapshot.json"), "utf8"));
 
-function page(theme) {
+function page(theme, scenario) {
+  const { WS, RPC } = fixtures(scenario);
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>${themeCss(theme)}
 html,body{margin:0;background:var(--background-content);color:var(--text-regular);font:14px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif}
@@ -166,7 +184,7 @@ async function shot(browser, o) {
   pg.on("pageerror", (e) => errors.push(String(e)));
   pg.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
   // Serve from a real origin (not about:blank) so localStorage behaves as on the router.
-  const html = page(o.theme);
+  const html = page(o.theme, o.scenario);
   await pg.route("http://mudi.preview/**", (r) => r.fulfill({ status: 200, contentType: "text/html", body: html }));
   await pg.goto("http://mudi.preview/", { waitUntil: "load" });
   await pg.waitForTimeout(300);
@@ -204,10 +222,16 @@ async function shot(browser, o) {
       for (const [dev, w, hgt] of [["desktop", 1280, 900], ["phone", 375, 800]])
         for (const theme of ["default", "dark"])
           jobs.push({ tab, theme, width: w, height: hgt, out: path.join(ROOT, `build/preview/${tab}-${dev}-${theme}.png`) });
+    // the radio pictures where the tabs differ (NSA anchor + 5G leg, carrier aggregation)
+    for (const scenario of SCENARIOS)
+      for (const tab of ["tracking", "lock", "speedtest"])
+        for (const [dev, w, hgt] of [["desktop", 1280, 900], ["phone", 375, 800]])
+          jobs.push({ tab, theme: "default", scenario, width: w, height: hgt,
+                      out: path.join(ROOT, `build/preview/${scenario}/${tab}-${dev}-default.png`) });
   } else {
-    const tab = opt("tab", "tracking"), theme = opt("theme", "default");
-    jobs.push({ tab, theme, width: +opt("width", 1280), height: +opt("height", 900),
-                out: path.resolve(opt("out", path.join(ROOT, `build/preview/${tab}-${theme}.png`))) });
+    const tab = opt("tab", "tracking"), theme = opt("theme", "default"), scenario = opt("scenario", "sa");
+    jobs.push({ tab, theme, scenario, width: +opt("width", 1280), height: +opt("height", 900),
+                out: path.resolve(opt("out", path.join(ROOT, `build/preview/${scenario === "sa" ? "" : scenario + "/"}${tab}-${theme}.png`))) });
   }
   if (flag("i18n-audit")) {
     const loc = opt("locale", "zh-cn");
@@ -217,6 +241,12 @@ async function shot(browser, o) {
       await shot(browser, j);
       j.seen.forEach((x) => all.add(x));
     }
+    for (const scenario of SCENARIOS)            // text only an NSA / CA picture shows
+      for (const tab of ["tracking", "lock"]) {
+        const j = { tab, theme: "default", scenario, width: 1280, height: 900, out: path.join(ROOT, `build/preview/i18n-${scenario}-${tab}.png`) };
+        await shot(browser, j);
+        j.seen.forEach((x) => all.add(x));
+      }
     await browser.close();
     // A string "needs translation" when it has a word of 2+ Latin letters that is not a
     // technical token, and the page did not translate it (it reached h() as English).

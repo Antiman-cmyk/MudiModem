@@ -23,6 +23,7 @@ import { render as renderLongTerm } from "./longterm.js";
 import { localize } from "../kit/i18n.js";
 import { t as T } from "../kit/i18n.js";
 import { csv, isoTime, download } from "../kit/csv.js";
+import { bandName, bandsText, carriers, isEnDc, pccRat } from "../kit/carriers.js";
 export default localize((function () {
   "use strict";
 
@@ -439,7 +440,8 @@ export default localize((function () {
                 // anchor is B2, not "n2"), never the cell's mode.
                 var fmt = function (x) {
                   var c = pcc(x);
-                  return (c.band != null ? ((/NR5G/.test(self.carrierRat(x)) ? " n" : " B") + c.band) : "");
+                  var b = bandName(pccRat(x), c.band);
+                  return b ? " " + b : "";
                 };
                 out.push({ t: s.t, kind: "net", label: "Handover",
                   detail: T("Cell {from} → {to}", { from: last.id, to: s.id }) + fmt(s) +
@@ -547,18 +549,9 @@ export default localize((function () {
         return null;
       },
       freqOf: function (b) { return FREQ_N[b]; },
-      // The PRIMARY carrier's own RAT — "LTE" for an NSA anchor, while `mode`
-      // is the cell's (NR5G-NSA). Same rule as the parent's servingRat():
-      // pcc_rat (4.10 collector) -> signals[0].rat -> mode (older samples).
-      carrierRat: function (s) {
-        if (!s) return "";
-        var sig = Array.isArray(s.signals) && s.signals[0];
-        return s.pcc_rat || (sig && sig.rat) || s.mode || "";
-      },
-      bandLabel: function (s) {
-        var pre = /NR5G/.test(this.carrierRat(s)) ? "n" : "B";
-        return (s.band == null || s.band === "") ? "—" : pre + s.band;
-      },
+      // Every band in use, primary first ("B66 + n41"): the strip's and Cell lock's text
+      // (kit/carriers.js). The readings are the primary's — an NSA sample's LTE anchor.
+      bandLabel: function (s) { return bandsText(s); },
 
       mOf: function (t) { return -((this.viewNow() - t) / 60000); },
       xOf: function (m) {
@@ -864,7 +857,7 @@ export default localize((function () {
             kids.push(h("rect", { attrs: { x: x0.toFixed(1), y: y, width: w.toFixed(1), height: BUS_H,
               rx: 2, fill: "var(--background-title,#f2f2f7)", stroke: "var(--border)", "stroke-width": 1 } }));
             var lab = r.v;
-            if (B.key === "band" && self.freqOf(r.s.band)) lab += " · " + self.freqOf(r.s.band) + " MHz";
+            if (B.key === "band" && lab.indexOf(" + ") === -1 && self.freqOf(r.s.band)) lab += " · " + self.freqOf(r.s.band) + " MHz";
             if (w > String(lab).length * 6.2 + 10)
               kids.push(h("text", { attrs: { x: ((x0 + x1) / 2).toFixed(1), y: y + BUS_H / 2 + 3.5,
                 "text-anchor": "middle", "font-size": 10, fill: "var(--text-weak)",
@@ -1028,7 +1021,7 @@ export default localize((function () {
           row("RSRP", s.rsrp, "dBm", this.qFromLevel(s.rsrp_level)),
           row("SINR", s.sinr, "dB", this.qFromLevel(s.sinr_level)),
           row("RSRQ", s.rsrq, "dB", this.qFromLevel(s.rsrq_level)),
-          row("Band", this.bandLabel(s), this.freqOf(s.band) ? "· " + this.freqOf(s.band) + " MHz" : "", null),
+          row("Band", this.bandLabel(s), this.bandLabel(s).indexOf(" + ") === -1 && this.freqOf(s.band) ? "· " + this.freqOf(s.band) + " MHz" : "", null),
           row("Cell", s.id == null ? "—" : s.id, "", null),
           row("SIM", (s.carrier || "SIM") + " · " + s.slot, "", null)
         ];
@@ -1038,6 +1031,9 @@ export default localize((function () {
           extra.push(row(T("Down / Up"), mbps(s.rx_kbps) + " / " + mbps(s.tx_kbps), "Mbps", null));
         var p = this.probeNear(s);
         if (p) extra.push(p.ping_lost ? row("Ping", T("no reply"), "", "poor") : row("Ping", p.ping_ms, "ms", null));
+        // 5G NSA: GL's readings are the LTE anchor's, not the 5G leg's — say whose they are.
+        if (isEnDc(s) && carriers(s).length > 1)
+          rows.splice(4, 0, row(T("Readings"), T("LTE anchor {band}", { band: bandName(pccRat(s), s.band) || "—" }), "", null));
         rows.splice.apply(rows, [3, 0].concat(extra));
         var kids = [h("div", { staticClass: "t" },
           this.clock(s.t) + (this.pinnedT != null ? " · " + T("pinned") : ""))];
@@ -1075,7 +1071,8 @@ export default localize((function () {
         var text = csv(this.winSamples(), [
           ["time_utc", function (s) { return isoTime(s.t); }], ["t_ms", function (s) { return s.t; }],
           ["sim", function (s) { return s.slot; }], ["carrier", function (s) { return s.carrier; }],
-          ["mode", function (s) { return s.mode; }], ["band", function (s) { return s.band == null ? "" : self.bandLabel(s); }],
+          ["mode", function (s) { return s.mode; }], ["band", function (s) { return bandName(pccRat(s), s.band) || ""; }],
+          ["bands", function (s) { var b = self.bandLabel(s); return b === "—" ? "" : b; }],
           ["pci", function (s) { return s.pci; }], ["cell_id", function (s) { return s.id; }],
           ["channel", function (s) { return s.tx_channel; }],
           ["rsrp_dbm", function (s) { return s.rsrp; }], ["rsrq_db", function (s) { return s.rsrq; }],

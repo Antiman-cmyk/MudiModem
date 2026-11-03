@@ -1428,8 +1428,8 @@ test('lock tab: PCI / ARFCN / Cell ID can be copied, with feedback', async () =>
   vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
   const copyBtns = () => walk(component.render.call(vm, h)).filter((n) => n.data && n.data.staticClass === 'mm-copy');
   assert.equal(copyBtns().length, 3, 'PCI, ARFCN and Cell ID');
-  await vm.copyValue('PCI', '516');      // no clipboard in node: says it failed instead of nothing
-  assert.deepEqual(vm.copied, { k: 'PCI', ok: false });
+  await vm.copyValue('t:pci', '516');    // no clipboard in node: says it failed instead of nothing
+  assert.deepEqual(vm.copied, { k: 't:pci', ok: false });
   assert.ok(copyBtns().some((n) => textOf(n) === 'copy failed'));
   clearTimeout(vm.copiedTimer);
 });
@@ -2102,7 +2102,7 @@ test('strip: an NSA anchor renders as B3 on the LTE raster (pcc_rat), while mode
               { role: 'SCC1', rat: 'NR5G-NSA', network_type: 51, band: 78, earfcn: 627264, pci: 142, rsrp: -99 }]
   });
   const vm = makeVm(c, live);
-  assert.strictEqual(vm.bandLabel, 'B3', 'the anchor is an LTE band');
+  assert.strictEqual(vm.bandLabel, 'B3 + n78', 'the anchor is an LTE band, listed first; then the NR leg');
   assert.strictEqual(vm.servingGroup, 'LTE', 'the "you are here" ring goes to the LTE grid');
   assert.strictEqual(vm.chanLabel(vm.servingRat, 3, 1700), '1700 (1855.0 MHz)', 'LTE B3 raster, not 8.5 MHz');
   assert.strictEqual(vm.isNR, true, 'the CELL is still NR (EN-DC)');

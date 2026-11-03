@@ -67,7 +67,8 @@ install.sh uninstall.sh bootstrap scripts run on the router (curl | sh)
 src/installer/          the one on-box installer every path runs
 src/web/main/          the main chunk: index.js (shell) + strip/change/bands/lock/config/… modules
 src/web/tabs/          lazy tab chunks (tracking, console, speedtest, battery)
-src/web/kit/           shared: rpc, i18n, compose, chunks, fmt     src/web/locales/  zh-cn table
+src/web/kit/           shared: rpc, i18n, compose, chunks, fmt, carriers (one reading of a sample's
+                        carriers for every page), clipboard, csv     src/web/locales/  zh-cn table
 dist/views/            BUILT chunks (committed, shipped)           src/menu/*.json   menu entries
 src/rpc/mudimodem       nginx Lua plugin loader (object "mudimodem"); its code is src/lib/rpc/ (core.lua
                         shared helpers + one file per concern); src/validator/ its arg validator
@@ -79,7 +80,8 @@ tools/mudi-emu/         SUBMODULE: firmware fetch/extract, router userland, fake
                         + the RG650V model, RE tools/notes (its README)
 test/                   every suite; tools/test-local.sh runs them all (host + router userland via
                         mudi-emu); test/mudiemu.py = how the Python suites reach it; test/emu/ = our
-                        drivers + the gl-real scenario
+                        drivers + the gl-real scenario; test/fixtures/carriers.json = the SA/LTE/CA/
+                        NSA pictures every surface and get_lock must agree on
 reference/              quectel-at-reference.md (AT evidence); GL file copies are in
                         tools/mudi-emu/reference/e5800-4.10.0/ (theme-vars.txt feeds the CSS lint)
 docs/                   architecture.md · cellular-api-4.10.md · knowledge.md · audit · design/ (history)
