@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.0.1 — 2026-11-03
 - **Every page names the same carriers.** Under 5G NSA, Tracking showed the LTE anchor's band
   (B66) while the Cell lock card showed the 5G leg's (n41), and the card mixed the two cells: its
   band and PCI were the 5G leg's, its cell ID and readings the anchor's. Now the strip, Tracking
