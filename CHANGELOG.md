@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.0.2 — 2026-11-03
 - Cell lock: the 5G NSA section is titled "5G cell · lock target" instead of the jargon "5G leg",
   and the strip's NSA explanation says plainly that the modem uses an LTE cell (the anchor) and a
   5G cell together.
