@@ -100,6 +100,8 @@ var __mm = (() => {
     "24 hours": "24 小时",
     "30 min": "30 分钟",
     "4G only": "仅 4G",
+    "5G NSA: an LTE anchor plus a 5G leg (B66 + n41). The readings, cell and channel shown are the LTE anchor's; Cell lock pins the 5G leg.": "5G NSA：一个 LTE 锚点加一路 5G（如 B66 + n41）。显示的读数、小区和信道都是 LTE 锚点的；锁定基站锁的是 5G 那一路。",
+    "5G leg · lock target": "5G 小区 · 锁定目标",
     "5G NR non-standalone": "5G NR 非独立组网（NSA）",
     "5G NR standalone": "5G NR 独立组网（SA）",
     "5G NSA only": "5G 仅 NSA",
@@ -147,6 +149,7 @@ var __mm = (() => {
     "Can't reach the router — battery history stopped updating.": "无法连接路由器 — 电池历史已停止更新。",
     "Cancel": "取消",
     "Carrier": "运营商",
+    "Carriers": "载波",
     "Carrier aggregation: several carriers combined for more speed.": "载波聚合：把多个载波合在一起以提高速度。",
     "Cell": "小区",
     "Cell / Ch": "小区 / 信道",
@@ -248,6 +251,8 @@ var __mm = (() => {
     "Kept": "已保留",
     "LIVE": "实时",
     "LTE": "LTE",
+    "LTE anchor": "LTE 锚点",
+    "LTE anchor {band}": "LTE 锚点 {band}",
     "Last seen": "最近一次",
     "Latency": "延迟",
     "Latest result": "最近结果",
@@ -322,6 +327,7 @@ var __mm = (() => {
     "RSRQ · dB": "RSRQ · dB",
     "Range {r}": "范围 {r}",
     "Raw AT": "AT 命令",
+    "Readings": "读数来自",
     "Read again": "重新读取",
     "Read neighbours": "读取邻区",
     "Reading band configuration from the modem...": "正在从 Modem 读取频段配置…",
@@ -382,7 +388,7 @@ var __mm = (() => {
     "The collector has not produced a sample for {age} (modem resetting, or mudimodem-collectd stopped) - these are its last known values, not live readings.": "采集器已经 {age} 没有产生新采样（Modem 正在重置，或 mudimodem-collectd 已停止），以下是最后一次的数值，不是实时读数。",
     "The collector's last sample is {age} old - nothing newer has been pushed": "采集器的最后一次采样已是 {age} 前，之后没有新的推送",
     "The connection dropped while applying, and nothing is pending on the router now - the change did not take, or was already reverted.": "应用时连接中断，且路由器上现在没有待确认的修改 - 修改没有生效，或已被恢复。",
-    "The frequency band in use: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter.": "当前使用的频段：n 表示 5G NR，B 表示 LTE。低频覆盖远；高频速度快但覆盖近。",
+    "The frequency bands in use, the one the readings come from first: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter.": "正在使用的频段，读数所属的那个排在最前：n 表示 5G NR，B 表示 LTE。低频覆盖远；高频速度快但覆盖近。",
     "The lock request was cut off by a connection drop and no lock is set - try again.": "锁定请求因连接中断而失败，目前没有设置锁定 - 请重试。",
     "The modem reports no neighbours. On 5G SA it never does - only a scan finds other cells there.": "Modem 没有报告邻区。5G SA 下从来不会报告 - 只有扫描才能找到其他小区。",
     "The modem restarted after a crash; GL saved a dump in /data/vendor/modem_crash_log": "Modem 崩溃后已自动重启；GL 已把转储保存在 /data/vendor/modem_crash_log",
@@ -645,6 +651,65 @@ var __mm = (() => {
     return m ? t("{n} h", { n: h }) + " " + t("{n} min", { n: m }) : t("{n} h", { n: h });
   }
 
+  // src/web/kit/carriers.js
+  function isNr(rat) {
+    return /NR5G/.test(rat || "");
+  }
+  function bandName(rat, band) {
+    if (band === void 0 || band === null || band === "") return null;
+    return (isNr(rat) ? "n" : "B") + band;
+  }
+  function pccRat(s) {
+    if (!s) return "";
+    var sig = Array.isArray(s.signals) && s.signals[0];
+    return s.pcc_rat || sig && sig.rat || s.mode || "";
+  }
+  function isEnDc(s) {
+    return !!s && /NSA/.test(s.rat || s.mode || "");
+  }
+  function carriers(s) {
+    if (!s) return [];
+    var rows = Array.isArray(s.signals) ? s.signals : [];
+    var out = [];
+    rows.forEach(function(g, i) {
+      if (!g || g.band === void 0 || g.band === null || g.band === "") return;
+      var rat = g.rat || (i === 0 ? pccRat(s) : s.mode) || "";
+      out.push({
+        role: g.role || (i === 0 ? "PCC" : "SCC"),
+        rat,
+        band: Number(g.band),
+        label: bandName(rat, g.band),
+        pci: g.pci,
+        arfcn: g.earfcn,
+        rsrp: g.rsrp,
+        rsrq: g.rsrq,
+        sinr: g.sinr
+      });
+    });
+    if (!out.length && s.band !== void 0 && s.band !== null && s.band !== "") {
+      var r = pccRat(s);
+      out.push({
+        role: "PCC",
+        rat: r,
+        band: Number(s.band),
+        label: bandName(r, s.band),
+        pci: s.pci,
+        arfcn: s.tx_channel,
+        rsrp: s.rsrp,
+        rsrq: s.rsrq,
+        sinr: s.sinr
+      });
+    }
+    return out;
+  }
+  function bandsText(s) {
+    var seen = [];
+    carriers(s).forEach(function(c) {
+      if (seen.indexOf(c.label) === -1) seen.push(c.label);
+    });
+    return seen.length ? seen.join(" + ") : "—";
+  }
+
   // src/web/tabs/longterm.js
   var HOUR = 36e5;
   function wavg(acc, v, w) {
@@ -690,12 +755,19 @@ var __mm = (() => {
         rat: l.rat,
         band: l.band,
         cell: l.cell,
+        signals: [],
         secs: 0,
         rsrp: { s: 0, w: 0 },
         sinr: { s: 0, w: 0 },
         ping_n: 0,
         ping_lost: 0,
         last: 0
+      });
+      (Array.isArray(l.signals) ? l.signals : []).forEach(function(g) {
+        if (g && g.band != null && !c.signals.some(function(x) {
+          return x.rat === g.rat && x.band === g.band;
+        }))
+          c.signals.push({ rat: g.rat, band: g.band });
       });
       var w = l.secs || 0;
       c.secs += w;
@@ -713,6 +785,7 @@ var __mm = (() => {
         rat: c.rat,
         band: c.band,
         cell: c.cell,
+        signals: c.signals,
         secs: c.secs,
         rsrp: avgOf(c.rsrp),
         sinr: avgOf(c.sinr),
@@ -731,8 +804,8 @@ var __mm = (() => {
     return best ? best.slot : null;
   }
   function bandLabel(c) {
-    if (c.band == null) return "";
-    return (/NR5G/.test(c.rat || "") ? "n" : "B") + c.band;
+    if (Array.isArray(c.signals) && c.signals.length) return bandsText({ signals: c.signals });
+    return bandName(c.rat, c.band) || "";
   }
   function render(h, vm) {
     var lt = vm.lt, W = vm.width || 900;
@@ -1343,7 +1416,8 @@ var __mm = (() => {
                 if (a && b && a !== b) {
                   var fmt = function(x) {
                     var c = pcc(x);
-                    return c.band != null ? (/NR5G/.test(self.carrierRat(x)) ? " n" : " B") + c.band : "";
+                    var b2 = bandName(pccRat(x), c.band);
+                    return b2 ? " " + b2 : "";
                   };
                   out.push({
                     t: s.t,
@@ -1471,17 +1545,10 @@ var __mm = (() => {
         freqOf: function(b) {
           return FREQ_N[b];
         },
-        // The PRIMARY carrier's own RAT — "LTE" for an NSA anchor, while `mode`
-        // is the cell's (NR5G-NSA). Same rule as the parent's servingRat():
-        // pcc_rat (4.10 collector) -> signals[0].rat -> mode (older samples).
-        carrierRat: function(s) {
-          if (!s) return "";
-          var sig = Array.isArray(s.signals) && s.signals[0];
-          return s.pcc_rat || sig && sig.rat || s.mode || "";
-        },
+        // Every band in use, primary first ("B66 + n41"): the strip's and Cell lock's text
+        // (kit/carriers.js). The readings are the primary's — an NSA sample's LTE anchor.
         bandLabel: function(s) {
-          var pre = /NR5G/.test(this.carrierRat(s)) ? "n" : "B";
-          return s.band == null || s.band === "" ? "—" : pre + s.band;
+          return bandsText(s);
         },
         mOf: function(t2) {
           return -((this.viewNow() - t2) / 6e4);
@@ -1847,7 +1914,7 @@ var __mm = (() => {
                 "stroke-width": 1
               } }));
               var lab = r.v;
-              if (B.key === "band" && self.freqOf(r.s.band)) lab += " · " + self.freqOf(r.s.band) + " MHz";
+              if (B.key === "band" && lab.indexOf(" + ") === -1 && self.freqOf(r.s.band)) lab += " · " + self.freqOf(r.s.band) + " MHz";
               if (w > String(lab).length * 6.2 + 10)
                 kids.push(h("text", { attrs: {
                   x: ((x0 + x1) / 2).toFixed(1),
@@ -2072,7 +2139,7 @@ var __mm = (() => {
             row("RSRP", s.rsrp, "dBm", this.qFromLevel(s.rsrp_level)),
             row("SINR", s.sinr, "dB", this.qFromLevel(s.sinr_level)),
             row("RSRQ", s.rsrq, "dB", this.qFromLevel(s.rsrq_level)),
-            row("Band", this.bandLabel(s), this.freqOf(s.band) ? "· " + this.freqOf(s.band) + " MHz" : "", null),
+            row("Band", this.bandLabel(s), this.bandLabel(s).indexOf(" + ") === -1 && this.freqOf(s.band) ? "· " + this.freqOf(s.band) + " MHz" : "", null),
             row("Cell", s.id == null ? "—" : s.id, "", null),
             row("SIM", (s.carrier || "SIM") + " · " + s.slot, "", null)
           ];
@@ -2084,6 +2151,8 @@ var __mm = (() => {
             extra.push(row(t("Down / Up"), mbps(s.rx_kbps) + " / " + mbps(s.tx_kbps), "Mbps", null));
           var p = this.probeNear(s);
           if (p) extra.push(p.ping_lost ? row("Ping", t("no reply"), "", "poor") : row("Ping", p.ping_ms, "ms", null));
+          if (isEnDc(s) && carriers(s).length > 1)
+            rows.splice(4, 0, row(t("Readings"), t("LTE anchor {band}", { band: bandName(pccRat(s), s.band) || "—" }), "", null));
           rows.splice.apply(rows, [3, 0].concat(extra));
           var kids = [h(
             "div",
@@ -2144,7 +2213,11 @@ var __mm = (() => {
               return s.mode;
             }],
             ["band", function(s) {
-              return s.band == null ? "" : self.bandLabel(s);
+              return bandName(pccRat(s), s.band) || "";
+            }],
+            ["bands", function(s) {
+              var b = self.bandLabel(s);
+              return b === "—" ? "" : b;
             }],
             ["pci", function(s) {
               return s.pci;

@@ -22,6 +22,7 @@
 // set_cell_lock) are confirm-or-revert through the backend + watchdog.
 import { compose } from "../kit/compose.js";
 import { localize, t } from "../kit/i18n.js";
+import { bandsText, carriers, pccRat } from "../kit/carriers.js";
 import strip from "./strip.js";
 import change from "./change.js";
 import bands from "./bands.js";
@@ -104,18 +105,11 @@ export default localize(compose({
       return this.activeNet.mcc ? (this.activeNet.mcc + this.activeNet.mnc) : "";
     },
     // Every serving component carrier, as {group, band, role} — SA = one NR
-    // chip, NSA = LTE anchor + NR chips, LTE-CA = several LTE chips.
+    // chip, NSA = LTE anchor + NR chips, LTE-CA = several LTE chips (kit/carriers.js).
     servingBands() {
-      var self = this, out = [];
-      var sigs = this.serving.signals;
-      if (Array.isArray(sigs) && sigs.length) {
-        sigs.forEach(function (sg) {
-          if (sg && sg.band != null) out.push({ group: self.groupOf(sg.rat || self.serving.mode), band: Number(sg.band), role: sg.role || "PCC" });
-        });
-      } else if (this.serving.band != null && this.serving.band !== "") {
-        out.push({ group: this.groupOf(this.serving.mode), band: Number(this.serving.band), role: "PCC" });
-      }
-      return out.filter(function (b) { return b.group; });
+      var self = this;
+      return carriers(this.serving).map(function (c) { return { group: self.groupOf(c.rat), band: c.band, role: c.role }; })
+        .filter(function (b) { return b.group; });
     },
     hasData() { return this.serving.rsrp !== undefined && this.serving.rsrp !== null; },
     isNR() { return /NR5G/.test(this.serving.mode || ""); },
@@ -123,15 +117,13 @@ export default localize(compose({
     // the cell's (NR5G-NSA). Band prefix, channel raster and the "you are
     // here" ring follow the carrier, never the cell's mode: the LTE anchor of
     // an EN-DC cell is B3 at 1855 MHz, not "n3" on the NR raster.
-    servingRat() { return this.serving.pcc_rat || this.serving.mode; },
+    servingRat() { return pccRat(this.serving); },
     // The /ws seed is flagged `stale` (with its box-clock age) when the
     // collector has not written for over a minute; live pushes never are.
     // >0 = seconds since the collector's last sample, as of the seed.
     staleFor() { return this.serving.stale ? Number(this.serving.age_s) || 1 : 0; },
-    bandLabel() {
-      if (this.serving.band === undefined || this.serving.band === null || this.serving.band === "") return "—";
-      return this.formatBand(this.servingRat, this.serving.band);
-    },
+    // Every band in use, primary first ("B66 + n41"): the same text Tracking and Cell lock show.
+    bandLabel() { return bandsText(this.serving); },
     // Which band group the PCC is on (for the "you are here" ring).
     servingGroup() { return this.groupOf(this.servingRat); },
     // Carrier-aggregation summary for the strip: "" for a single carrier.

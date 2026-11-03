@@ -76,7 +76,8 @@ export default {
         ["RSRP", "Received power from the cell, in dBm. −100 or better is excellent, down to −105 good, down to −110 fair, below that poor."],
         ["SINR", "Signal against noise and interference, in dB. 12 or more is excellent, 6 to 12 good, 0 to 6 fair, below 0 poor."],
         ["RSRQ", "Signal quality including how busy the cell is, in dB. LTE: −6 or better is excellent, down to −10 good, down to −14 fair. 5G: −12, −16 and −20."],
-        ["Band", "The frequency band in use: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter."],
+        ["Band", "The frequency bands in use, the one the readings come from first: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter."],
+        ["NSA", "5G NSA: an LTE anchor plus a 5G leg (B66 + n41). The readings, cell and channel shown are the LTE anchor's; Cell lock pins the 5G leg."],
         ["Cell / Ch", "Which cell the modem is on (its ID) and the channel number with its frequency."],
         ["CA", "Carrier aggregation: several carriers combined for more speed."]
       ];

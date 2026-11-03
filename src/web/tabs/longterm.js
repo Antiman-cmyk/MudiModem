@@ -10,6 +10,7 @@
 //   render(h, vm)        the card; vm carries lt {days, lines, loading, err, now} and width
 import { t as T } from "../kit/i18n.js";
 import { dur, mdhm } from "../kit/fmt.js";
+import { bandName, bandsText } from "../kit/carriers.js";
 
 var HOUR = 3600000;
 
@@ -44,8 +45,12 @@ export function cells(lines) {
   (lines || []).forEach(function (l) {
     if (!l || l.no_service || l.cell == null) return;
     var k = [l.slot, l.carrier, l.rat, l.band, l.cell].join("|");
-    var c = by[k] || (by[k] = { slot: l.slot, carrier: l.carrier, rat: l.rat, band: l.band, cell: l.cell,
+    var c = by[k] || (by[k] = { slot: l.slot, carrier: l.carrier, rat: l.rat, band: l.band, cell: l.cell, signals: [],
       secs: 0, rsrp: { s: 0, w: 0 }, sinr: { s: 0, w: 0 }, ping_n: 0, ping_lost: 0, last: 0 });
+    (Array.isArray(l.signals) ? l.signals : []).forEach(function (g) {
+      if (g && g.band != null && !c.signals.some(function (x) { return x.rat === g.rat && x.band === g.band; }))
+        c.signals.push({ rat: g.rat, band: g.band });
+    });
     var w = l.secs || 0;
     c.secs += w;
     wavg(c.rsrp, Array.isArray(l.rsrp) ? l.rsrp[1] : null, w);
@@ -55,7 +60,7 @@ export function cells(lines) {
   });
   return Object.keys(by).map(function (k) {
     var c = by[k];
-    return { slot: c.slot, carrier: c.carrier, rat: c.rat, band: c.band, cell: c.cell, secs: c.secs,
+    return { slot: c.slot, carrier: c.carrier, rat: c.rat, band: c.band, cell: c.cell, signals: c.signals, secs: c.secs,
              rsrp: avgOf(c.rsrp), sinr: avgOf(c.sinr), last: c.last,
              loss: c.ping_n ? Math.round(c.ping_lost / c.ping_n * 1000) / 10 : null };
   }).sort(function (a, b) { return b.secs - a.secs; });
@@ -70,9 +75,11 @@ export function chartSlot(lines) {
   return best ? best.slot : null;
 }
 
+// Every band the cell's hours saw, primary first ("B66 + n41", kit/carriers.js); an older line
+// has no signals: its PCC band alone.
 function bandLabel(c) {
-  if (c.band == null) return "";
-  return (/NR5G/.test(c.rat || "") ? "n" : "B") + c.band;
+  if (Array.isArray(c.signals) && c.signals.length) return bandsText({ signals: c.signals });
+  return bandName(c.rat, c.band) || "";
 }
 
 export function render(h, vm) {

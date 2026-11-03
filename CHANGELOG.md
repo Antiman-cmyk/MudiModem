@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.0.1 — 2026-11-03
+- **Every page names the same carriers.** Under 5G NSA, Tracking showed the LTE anchor's band
+  (B66) while the Cell lock card showed the 5G leg's (n41), and the card mixed the two cells: its
+  band and PCI were the 5G leg's, its cell ID and readings the anchor's. Now the strip, Tracking
+  (readout, band lane, CSV, long-term table), the confirm banner and speed-test results all list
+  every carrier, primary first ("B66 + n41"; "B66 + B2 + n41" with carrier aggregation), and say
+  that the readings are the LTE anchor's. The Cell lock card shows the 5G leg (the lock target) and
+  the LTE anchor as separate sections, each with only its own band, PCI, channel, cell ID and
+  readings; with carrier aggregation it also lists all carriers. One parser
+  (`src/web/kit/carriers.js`) serves every page; `get_lock` returns the anchor (`serving.anchor`),
+  the confirm record and the hourly summary keep every carrier's band. A new test renders one
+  sample on every surface for SA, LTE, LTE-CA, NSA and NSA + CA and checks they agree, against the
+  same table the plugin's tests use (`test/fixtures/carriers.json`); the preview renders these
+  cases too (`tools/preview.js --scenario`).
+
 ## 3.0.0 — 2026-11-03
 The 3.0 refactor (`docs/architecture.md`: R0–R4), the features built on it, and the fixes they
 surfaced. **Updating from 2.x:** press Update now on the Config tab, or run the install command

@@ -151,7 +151,14 @@ from 3GPP TS 38.101-1 / 36.101.
   `cell_info` itself.
 - `network_type` enum: 2/3 = 2G/3G, 4 = LTE, **41 = LTE-CA (4G+)**, **5 = NR SA**, **51 = NR NSA**.
   GL's own `getNetworkType` map is wrong (5/51 swapped, 2/3 shifted) — ignore it.
-- Under NSA the PCC row is the LTE anchor; the NR leg is in `signals[]`.
+- Under NSA the PCC row is the LTE anchor; the NR leg is in `signals[]`. GL's readings (the
+  sample's rsrp/sinr/rsrq and the cell ID) are the anchor's; NR SCC rows carry RSRP/RSRQ, never
+  SINR. Every surface reads carriers through ONE parser, `src/web/kit/carriers.js`: band lists
+  print every carrier primary first ("B66 + n41"), and the Cell lock card shows the lock target
+  (the NR leg under NSA, `get_lock` `serving`) and its LTE anchor (`serving.anchor`, which owns the
+  cell ID) as separate sections. `test/fixtures/carriers.json` pins the page, `get_lock`
+  (`serving_from_sample`) and `cellular_compat.build_sample` to one table of SA / LTE / LTE-CA /
+  NSA / NSA + CA cases; `tools/preview.js --scenario` renders them.
 - `networks_info` also carries `ambr_dl/ambr_ul` (carrier max bit rate), `ipv4{}`, `ipv6`. On ubus the AMBR is in
   `cellular.sim status`, **not** `cellular.sim info` (measured by running GL).
 

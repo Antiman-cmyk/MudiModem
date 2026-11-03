@@ -1,0 +1,647 @@
+{
+ "about": "One table of carrier pictures that every reader must agree on (test/carriers.test.js, test/backend-lock.test.lua, tools/preview.js). cell_info is GL's cellular.network cell_info reply (docs/cellular-api-4.10.md); sample is what cellular_compat.build_sample makes of it (the Lua test re-derives it, so the two cannot drift); expect is what the page and the plugin must show: bands = the band list every surface prints, lock = the cell 'Lock to this cell' targets (null = the sample cannot name it; get_lock then reads QENG itself), anchor = the NSA LTE anchor the Cell lock card lists next to it.",
+ "cases": [
+  {
+   "name": "sa",
+   "carrier": "T-Mobile",
+   "cell_info": {
+    "bus": "cpu",
+    "slot": 1,
+    "signal": [
+     {
+      "band": 71,
+      "earfcn": 127490,
+      "rsrp": -101,
+      "sinr": 4,
+      "rssi": -32768,
+      "pci": 516,
+      "bandwidth": 15,
+      "rsrq": -14,
+      "sinr_level": 2,
+      "rsrq_level": 3,
+      "rsrp_level": 3,
+      "network_type": 5
+     }
+    ],
+    "tac": "870100",
+    "cell_id": "187461035",
+    "network_type": 5
+   },
+   "sample": {
+    "rsrp": -101,
+    "rssi": null,
+    "tx_channel": 127490,
+    "pci": 516,
+    "rsrq": -14,
+    "pcc_network_type": 5,
+    "mode": "NR5G-SA",
+    "sinr_level": 2,
+    "band": 71,
+    "cell_id": "187461035",
+    "dl_bandwidth": "15MHz",
+    "slot": 1,
+    "id": "187461035",
+    "t": 1700000000000,
+    "rsrp_level": 3,
+    "sinr": 4,
+    "rsrq_level": 3,
+    "tac": "870100",
+    "pcc_rat": "NR5G-SA",
+    "registered": true,
+    "carrier": "T-Mobile",
+    "signals": [
+     {
+      "band": 71,
+      "earfcn": 127490,
+      "bandwidth_ul_mhz": null,
+      "rsrp": -101,
+      "sinr": 4,
+      "rssi": null,
+      "sinr_level": 2,
+      "rsrq_level": 3,
+      "ca": 0,
+      "role": "PCC",
+      "bandwidth_mhz": 15,
+      "rat": "NR5G-SA",
+      "rsrp_level": 3,
+      "rsrq": -14,
+      "pci": 516,
+      "network_type": 5
+     }
+    ],
+    "rat": "NR5G-SA",
+    "network_type": 5
+   },
+   "expect": {
+    "anchor": null,
+    "bands": "n71",
+    "lock": {
+     "pci": 516,
+     "band": 71,
+     "arfcn": 127490,
+     "rat": "NR5G-SA"
+    }
+   }
+  },
+  {
+   "name": "lte",
+   "carrier": "AT&T",
+   "cell_info": {
+    "bus": "cpu",
+    "slot": 1,
+    "signal": [
+     {
+      "band": 2,
+      "earfcn": 900,
+      "rsrp": -96,
+      "sinr": 11,
+      "rssi": -64,
+      "pci": 301,
+      "bandwidth": 20,
+      "rsrq": -9,
+      "sinr_level": 3,
+      "rsrq_level": 3,
+      "rsrp_level": 4,
+      "network_type": 4
+     }
+    ],
+    "tac": "8A01",
+    "cell_id": "A3F2201",
+    "network_type": 4
+   },
+   "sample": {
+    "rsrp": -96,
+    "rssi": -64,
+    "tx_channel": 900,
+    "pci": 301,
+    "rsrq": -9,
+    "pcc_network_type": 4,
+    "mode": "LTE",
+    "sinr_level": 3,
+    "band": 2,
+    "cell_id": "A3F2201",
+    "dl_bandwidth": "20MHz",
+    "slot": 1,
+    "id": "A3F2201",
+    "t": 1700000000000,
+    "rsrp_level": 4,
+    "sinr": 11,
+    "rsrq_level": 3,
+    "tac": "8A01",
+    "pcc_rat": "LTE",
+    "registered": true,
+    "carrier": "AT&T",
+    "signals": [
+     {
+      "band": 2,
+      "earfcn": 900,
+      "bandwidth_ul_mhz": null,
+      "rsrp": -96,
+      "sinr": 11,
+      "rssi": -64,
+      "sinr_level": 3,
+      "rsrq_level": 3,
+      "ca": 0,
+      "role": "PCC",
+      "bandwidth_mhz": 20,
+      "rat": "LTE",
+      "rsrp_level": 4,
+      "rsrq": -9,
+      "pci": 301,
+      "network_type": 4
+     }
+    ],
+    "rat": "LTE",
+    "network_type": 4
+   },
+   "expect": {
+    "anchor": null,
+    "bands": "B2",
+    "lock": {
+     "pci": 301,
+     "band": 2,
+     "arfcn": 900,
+     "rat": "LTE"
+    }
+   }
+  },
+  {
+   "name": "lte_ca",
+   "carrier": "AT&T",
+   "cell_info": {
+    "bus": "cpu",
+    "slot": 1,
+    "signal": [
+     {
+      "band": 66,
+      "earfcn": 66786,
+      "rsrp": -94,
+      "sinr": 13,
+      "rssi": -62,
+      "pci": 112,
+      "bandwidth": 20,
+      "rsrq": -10,
+      "sinr_level": 4,
+      "rsrq_level": 3,
+      "rsrp_level": 4,
+      "network_type": 41
+     },
+     {
+      "band": 66,
+      "earfcn": 67086,
+      "rsrp": -97,
+      "sinr": -32768,
+      "rssi": -66,
+      "pci": 112,
+      "bandwidth": 10,
+      "rsrq": -11,
+      "network_type": 41
+     },
+     {
+      "band": 2,
+      "earfcn": 900,
+      "rsrp": -103,
+      "sinr": -32768,
+      "rssi": -71,
+      "pci": 301,
+      "bandwidth": 20,
+      "rsrq": -13,
+      "network_type": 41
+     }
+    ],
+    "tac": "8A01",
+    "cell_id": "A3F2202",
+    "network_type": 41
+   },
+   "sample": {
+    "rsrp": -94,
+    "rssi": -62,
+    "tx_channel": 66786,
+    "pci": 112,
+    "rsrq": -10,
+    "pcc_network_type": 41,
+    "mode": "LTE+",
+    "sinr_level": 4,
+    "band": 66,
+    "cell_id": "A3F2202",
+    "dl_bandwidth": "20MHz",
+    "slot": 1,
+    "id": "A3F2202",
+    "t": 1700000000000,
+    "rsrp_level": 4,
+    "sinr": 13,
+    "rsrq_level": 3,
+    "tac": "8A01",
+    "pcc_rat": "LTE+",
+    "registered": true,
+    "carrier": "AT&T",
+    "signals": [
+     {
+      "band": 66,
+      "earfcn": 66786,
+      "bandwidth_ul_mhz": null,
+      "rsrp": -94,
+      "sinr": 13,
+      "rssi": -62,
+      "sinr_level": 4,
+      "rsrq_level": 3,
+      "ca": 0,
+      "role": "PCC",
+      "bandwidth_mhz": 20,
+      "rat": "LTE+",
+      "rsrp_level": 4,
+      "rsrq": -10,
+      "pci": 112,
+      "network_type": 41
+     },
+     {
+      "band": 66,
+      "earfcn": 67086,
+      "bandwidth_ul_mhz": null,
+      "rsrp": -97,
+      "sinr": null,
+      "rssi": -66,
+      "sinr_level": null,
+      "rsrq_level": null,
+      "ca": 1,
+      "role": "SCC1",
+      "bandwidth_mhz": 10,
+      "rat": "LTE+",
+      "rsrp_level": null,
+      "rsrq": -11,
+      "pci": 112,
+      "network_type": 41
+     },
+     {
+      "band": 2,
+      "earfcn": 900,
+      "bandwidth_ul_mhz": null,
+      "rsrp": -103,
+      "sinr": null,
+      "rssi": -71,
+      "sinr_level": null,
+      "rsrq_level": null,
+      "ca": 2,
+      "role": "SCC2",
+      "bandwidth_mhz": 20,
+      "rat": "LTE+",
+      "rsrp_level": null,
+      "rsrq": -13,
+      "pci": 301,
+      "network_type": 41
+     }
+    ],
+    "rat": "LTE+",
+    "network_type": 41
+   },
+   "expect": {
+    "anchor": null,
+    "bands": "B66 + B2",
+    "lock": {
+     "pci": 112,
+     "band": 66,
+     "arfcn": 66786,
+     "rat": "LTE+"
+    }
+   }
+  },
+  {
+   "name": "nsa",
+   "carrier": "T-Mobile",
+   "cell_info": {
+    "bus": "cpu",
+    "slot": 1,
+    "signal": [
+     {
+      "band": 66,
+      "earfcn": 67036,
+      "rsrp": -92,
+      "sinr": 9,
+      "rssi": -60,
+      "pci": 136,
+      "bandwidth": 20,
+      "rsrq": -11,
+      "sinr_level": 3,
+      "rsrq_level": 2,
+      "rsrp_level": 4,
+      "network_type": 4
+     },
+     {
+      "band": 41,
+      "earfcn": 520110,
+      "rsrp": -99,
+      "sinr": -32768,
+      "rssi": -32768,
+      "pci": 516,
+      "bandwidth": 100,
+      "rsrq": -12,
+      "network_type": 51
+     }
+    ],
+    "tac": "870100",
+    "cell_id": "A1B2C03",
+    "network_type": 51
+   },
+   "sample": {
+    "rsrp": -92,
+    "rssi": -60,
+    "tx_channel": 67036,
+    "pci": 136,
+    "rsrq": -11,
+    "pcc_network_type": 4,
+    "mode": "NR5G-NSA",
+    "sinr_level": 3,
+    "band": 66,
+    "cell_id": "A1B2C03",
+    "dl_bandwidth": "20MHz",
+    "slot": 1,
+    "id": "A1B2C03",
+    "t": 1700000000000,
+    "rsrp_level": 4,
+    "sinr": 9,
+    "rsrq_level": 2,
+    "tac": "870100",
+    "pcc_rat": "LTE",
+    "registered": true,
+    "carrier": "T-Mobile",
+    "signals": [
+     {
+      "band": 66,
+      "earfcn": 67036,
+      "bandwidth_ul_mhz": null,
+      "rsrp": -92,
+      "sinr": 9,
+      "rssi": -60,
+      "sinr_level": 3,
+      "rsrq_level": 2,
+      "ca": 0,
+      "role": "PCC",
+      "bandwidth_mhz": 20,
+      "rat": "LTE",
+      "rsrp_level": 4,
+      "rsrq": -11,
+      "pci": 136,
+      "network_type": 4
+     },
+     {
+      "band": 41,
+      "earfcn": 520110,
+      "bandwidth_ul_mhz": null,
+      "rsrp": -99,
+      "sinr": null,
+      "rssi": null,
+      "sinr_level": null,
+      "rsrq_level": null,
+      "ca": 1,
+      "role": "SCC1",
+      "bandwidth_mhz": 100,
+      "rat": "NR5G-NSA",
+      "rsrp_level": null,
+      "rsrq": -12,
+      "pci": 516,
+      "network_type": 51
+     }
+    ],
+    "rat": "NR5G-NSA",
+    "network_type": 51
+   },
+   "expect": {
+    "anchor": {
+     "pci": 136,
+     "cell_id": "A1B2C03",
+     "arfcn": 67036,
+     "rat": "LTE",
+     "band": 66
+    },
+    "bands": "B66 + n41",
+    "lock": {
+     "pci": 516,
+     "band": 41,
+     "arfcn": 520110,
+     "rat": "NR5G-NSA"
+    }
+   }
+  },
+  {
+   "name": "nsa_ca",
+   "carrier": "T-Mobile",
+   "cell_info": {
+    "bus": "cpu",
+    "slot": 1,
+    "signal": [
+     {
+      "band": 66,
+      "earfcn": 67036,
+      "rsrp": -92,
+      "sinr": 9,
+      "rssi": -60,
+      "pci": 136,
+      "bandwidth": 20,
+      "rsrq": -11,
+      "sinr_level": 3,
+      "rsrq_level": 2,
+      "rsrp_level": 4,
+      "network_type": 4
+     },
+     {
+      "band": 2,
+      "earfcn": 1150,
+      "rsrp": -98,
+      "sinr": -32768,
+      "rssi": -65,
+      "pci": 136,
+      "bandwidth": 15,
+      "rsrq": -12,
+      "network_type": 4
+     },
+     {
+      "band": 41,
+      "earfcn": 520110,
+      "rsrp": -99,
+      "sinr": -32768,
+      "rssi": -32768,
+      "pci": 516,
+      "bandwidth": 100,
+      "rsrq": -12,
+      "network_type": 51
+     }
+    ],
+    "tac": "870100",
+    "cell_id": "A1B2C03",
+    "network_type": 51
+   },
+   "sample": {
+    "rsrp": -92,
+    "rssi": -60,
+    "tx_channel": 67036,
+    "pci": 136,
+    "rsrq": -11,
+    "pcc_network_type": 4,
+    "mode": "NR5G-NSA",
+    "sinr_level": 3,
+    "band": 66,
+    "cell_id": "A1B2C03",
+    "dl_bandwidth": "20MHz",
+    "slot": 1,
+    "id": "A1B2C03",
+    "t": 1700000000000,
+    "rsrp_level": 4,
+    "sinr": 9,
+    "rsrq_level": 2,
+    "tac": "870100",
+    "pcc_rat": "LTE",
+    "registered": true,
+    "carrier": "T-Mobile",
+    "signals": [
+     {
+      "band": 66,
+      "earfcn": 67036,
+      "bandwidth_ul_mhz": null,
+      "rsrp": -92,
+      "sinr": 9,
+      "rssi": -60,
+      "sinr_level": 3,
+      "rsrq_level": 2,
+      "ca": 0,
+      "role": "PCC",
+      "bandwidth_mhz": 20,
+      "rat": "LTE",
+      "rsrp_level": 4,
+      "rsrq": -11,
+      "pci": 136,
+      "network_type": 4
+     },
+     {
+      "band": 2,
+      "earfcn": 1150,
+      "bandwidth_ul_mhz": null,
+      "rsrp": -98,
+      "sinr": null,
+      "rssi": -65,
+      "sinr_level": null,
+      "rsrq_level": null,
+      "ca": 1,
+      "role": "SCC1",
+      "bandwidth_mhz": 15,
+      "rat": "LTE",
+      "rsrp_level": null,
+      "rsrq": -12,
+      "pci": 136,
+      "network_type": 4
+     },
+     {
+      "band": 41,
+      "earfcn": 520110,
+      "bandwidth_ul_mhz": null,
+      "rsrp": -99,
+      "sinr": null,
+      "rssi": null,
+      "sinr_level": null,
+      "rsrq_level": null,
+      "ca": 2,
+      "role": "SCC2",
+      "bandwidth_mhz": 100,
+      "rat": "NR5G-NSA",
+      "rsrp_level": null,
+      "rsrq": -12,
+      "pci": 516,
+      "network_type": 51
+     }
+    ],
+    "rat": "NR5G-NSA",
+    "network_type": 51
+   },
+   "expect": {
+    "anchor": {
+     "pci": 136,
+     "cell_id": "A1B2C03",
+     "arfcn": 67036,
+     "rat": "LTE",
+     "band": 66
+    },
+    "bands": "B66 + B2 + n41",
+    "lock": {
+     "pci": 516,
+     "band": 41,
+     "arfcn": 520110,
+     "rat": "NR5G-NSA"
+    }
+   }
+  },
+  {
+   "name": "nsa_anchor_only",
+   "carrier": "CHN-UNICOM",
+   "cell_info": {
+    "bus": "cpu",
+    "slot": 1,
+    "signal": [
+     {
+      "band": 3,
+      "earfcn": 1700,
+      "rsrp_level": 4,
+      "sinr": 17,
+      "rssi": -67,
+      "pci": 61,
+      "rsrq": -9,
+      "sinr_level": 4,
+      "rsrq_level": 3,
+      "rsrp": -97
+     }
+    ],
+    "tac": "DE0000",
+    "cell_id": "DF30C",
+    "network_type": 51
+   },
+   "sample": {
+    "rsrp": -97,
+    "rssi": -67,
+    "tx_channel": 1700,
+    "pci": 61,
+    "rsrq": -9,
+    "pcc_network_type": 4,
+    "mode": "NR5G-NSA",
+    "sinr_level": 4,
+    "band": 3,
+    "cell_id": "DF30C",
+    "dl_bandwidth": null,
+    "slot": 1,
+    "id": "DF30C",
+    "t": 1700000000000,
+    "rsrp_level": 4,
+    "sinr": 17,
+    "rsrq_level": 3,
+    "tac": "DE0000",
+    "pcc_rat": "LTE",
+    "registered": true,
+    "carrier": "CHN-UNICOM",
+    "signals": [
+     {
+      "band": 3,
+      "earfcn": 1700,
+      "bandwidth_ul_mhz": null,
+      "rsrp": -97,
+      "sinr": 17,
+      "rssi": -67,
+      "sinr_level": 4,
+      "rsrq_level": 3,
+      "ca": 0,
+      "role": "PCC",
+      "bandwidth_mhz": null,
+      "rat": "LTE",
+      "rsrp_level": 4,
+      "rsrq": -9,
+      "pci": 61,
+      "network_type": 4
+     }
+    ],
+    "rat": "NR5G-NSA",
+    "network_type": 51
+   },
+   "expect": {
+    "anchor": null,
+    "bands": "B3",
+    "lock": null
+   }
+  }
+ ]
+}

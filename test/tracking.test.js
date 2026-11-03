@@ -1144,9 +1144,10 @@ test('CSV export: the samples in range and the event log, quoted properly', () =
     const vm = makeVm(c, { samples: seedSamples(), events: [], winW: 60 });
     assert.equal(vm.exportSamples(), true);
     const lines = got.replace(/^﻿/, '').trim().split('\r\n');
-    assert.equal(lines[0], 'time_utc,t_ms,sim,carrier,mode,band,pci,cell_id,channel,rsrp_dbm,rsrq_db,sinr_db,down_kbps,up_kbps,ping_ms,ping_lost');
+    // band = the primary carrier (whose readings these are); bands = every carrier, as the page lists them
+    assert.equal(lines[0], 'time_utc,t_ms,sim,carrier,mode,band,bands,pci,cell_id,channel,rsrp_dbm,rsrq_db,sinr_db,down_kbps,up_kbps,ping_ms,ping_lost');
     assert.equal(lines.length, 22, 'header + 21 samples');
-    assert.match(lines[1], /^\d{4}-\d\d-\d\dT.*,1,T-Mobile,NR5G-SA FDD,n71,,A1,127490,-120,-13,5,,,,$/);
+    assert.match(lines[1], /^\d{4}-\d\d-\d\dT.*,1,T-Mobile,NR5G-SA FDD,n71,n71,,A1,127490,-120,-13,5,,,,$/);
     assert.match(name, /^mudimodem-rf-\d{8}-\d{4}\.csv$/);
     const evs = [{ t: 1, kind: 'user', label: 'Bands applied', detail: 'mode "LTE", B66' }];
     Object.defineProperty(vm, 'allEvents', { get: () => evs, configurable: true });

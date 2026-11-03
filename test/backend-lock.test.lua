@@ -121,6 +121,11 @@ assert(r.serving and r.serving.rat == "NR5G-NSA",
        "NSA multi-line must pick NR5G-NSA, got " .. tostring(r.serving and r.serving.rat))
 assert(r.serving.pci == 61 and r.serving.arfcn == 425090 and r.serving.band == 1,
        "NSA pci/arfcn/band wrong")
+-- the LTE line is the NR leg's anchor, and the cell ID is its (the NR line has none)
+assert(r.serving.anchor and r.serving.anchor.rat == "LTE" and r.serving.anchor.cell_id == "DF30C"
+       and r.serving.anchor.band == 3 and r.serving.anchor.pci == 61 and r.serving.anchor.arfcn == 1700,
+       "NSA QENG: the LTE line must ride along as the anchor")
+assert(r.serving.cell_id == nil, "NSA QENG: no cell ID on the NR leg")
 
 -- 4c. Multi-line LTE-only (no NR line) falls back to the LTE row.
 package.loaded["oui.ubus"].call = (function(orig)
@@ -252,6 +257,71 @@ do
   assert(M.get_lock({}).last_scan == nil, "a broken file is no scan")
   os.remove(sp)
   assert(M.get_lock({}).last_scan == nil, "no file, no scan")
+end
+
+-- 7f. test/fixtures/carriers.json — the one table the page (test/carriers.test.js) reads too: for
+--     every case, cellular_compat turns GL's cell_info into the fixture's sample, and get_lock
+--     names the fixture's lock target (+ the NSA anchor, which owns the cell ID). A case whose
+--     sample cannot name the target (lock = null) falls back to QENG. The hourly summary line
+--     (mudimodemd/summary.lua) keeps every carrier's rat + band, PCC first, for the long-term table.
+if latest then
+  local cjson = require "cjson"
+  local here = (arg and arg[0] and arg[0]:match("^(.*)/[^/]*$")) or "test"
+  local ff = assert(io.open(here .. "/fixtures/carriers.json"))
+  local fix = cjson.decode(ff:read("*a")); ff:close()
+  local compat = dofile(here .. "/../src/lib/cellular_compat.lua")
+  local summary = dofile(here .. "/../src/lib/mudimodemd/summary.lua")
+  compat.init(cjson.null)
+  local function same(a, b, path)
+    if type(a) ~= type(b) then error(path .. ": " .. tostring(a) .. " vs " .. tostring(b), 2) end
+    if type(a) ~= "table" then
+      if a ~= b then error(path .. ": " .. tostring(a) .. " vs " .. tostring(b), 2) end
+      return
+    end
+    for k, v in pairs(a) do same(v, b[k], path .. "." .. tostring(k)) end
+    for k in pairs(b) do if a[k] == nil then error(path .. "." .. tostring(k) .. " missing", 2) end end
+  end
+  local nn = function(v) if v == cjson.null then return nil end return v end
+  local ms = { modems = { { bus = "cpu", current_sim_slot = 1, status = 0 } } }
+  package.loaded["oui.ubus"].call = base_ubus_call
+  for _, c in ipairs(fix.cases) do
+    local nets = { networks = { { bus = "cpu", slot = 1, carrier = c.carrier } } }
+    local built = compat.build_sample(ms, c.cell_info, nets, c.sample.t, "cpu", nil, cjson.empty_array)
+    same(cjson.decode(cjson.encode(built)), c.sample, c.name .. ": build_sample")
+
+    local acc = summary.new(3600, 10)
+    acc.add(c.sample); acc.add(c.sample)
+    local line = acc.drain()[1]
+    local want_sigs, seen = {}, {}
+    for _, g in ipairs(c.sample.signals) do
+      local k = tostring(g.rat) .. "|" .. tostring(g.band)
+      if not seen[k] then seen[k] = true; want_sigs[#want_sigs + 1] = { rat = g.rat, band = g.band } end
+    end
+    same(line.signals, want_sigs, c.name .. ": summary signals")
+
+    local s = cjson.decode(cjson.encode(c.sample)); s.t = os.time() * 1000
+    local lf = io.open(latest, "w"); lf:write(cjson.encode(s)); lf:close()
+    at_log = {}; at_replies = {}
+    r = M.get_lock({})
+    local want = nn(c.expect.lock)
+    if want then
+      assert(r.serving.source == "collector", c.name .. ": the sample names the target")
+      for _, k in ipairs({ "rat", "pci", "arfcn", "band" }) do
+        assert(r.serving[k] == want[k], c.name .. ": serving." .. k .. " = " .. tostring(r.serving[k]) .. ", want " .. tostring(want[k]))
+      end
+      local an = nn(c.expect.anchor)
+      if an then
+        same(r.serving.anchor, an, c.name .. ": anchor")
+        assert(r.serving.cell_id == nil, c.name .. ": the cell ID is the anchor's, not the NR leg's")
+      else
+        assert(r.serving.anchor == nil, c.name .. ": no anchor outside NSA")
+        assert(r.serving.cell_id == c.sample.cell_id, c.name .. ": cell ID")
+      end
+    else
+      assert(r.serving == nil or r.serving.source ~= "collector", c.name .. ": no target in the sample -> QENG")
+    end
+    os.remove(latest)
+  end
 end
 
 -- 8. No active slot (modem resetting / no SIM): get_lock refuses like every
