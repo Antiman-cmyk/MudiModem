@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased (toward 3.0)
-The 3.0 refactor (`docs/architecture.md`: R0, R1, the change-transaction part of R2, R3) and the
-R4 features built on it, plus the fixes they surfaced.
+## 3.0.0 — 2026-11-03
+The 3.0 refactor (`docs/architecture.md`: R0–R4), the features built on it, and the fixes they
+surfaced. **Updating from 2.x:** press Update now on the Config tab, or run the install command
+again. The installer stops and removes the 2.x Python pieces and the `mudimodem-speedtestd`
+service, and keeps your settings, history, speed-test results and AT-library cache.
 - **One manifest, one installer.** `manifest.txt` lists what ships where. `install.sh`,
   `uninstall.sh`, `tools/deploy.sh` and the self-updater all run `src/installer/mudimodem-install`.
   install.sh downloads everything before touching the router. The firmware-upgrade keep list
@@ -74,6 +76,25 @@ R4 features built on it, plus the fixes they surfaced.
   10 s on the shared AT channel), and asks only for the cell id when the serving cell changes (or
   once a minute). Same samples, same signal levels — verified by running GL's own cellular stack
   under emulation.
+- **Cell lock follows the cell you are on:** "Lock to this cell" used to target the cell the tab
+  saw when it opened. After a handover it now refuses that cell, says where the modem went and
+  re-reads it.
+- **The confirm banner shows the effect:** "Before n71 · RSRP −99 · SINR 4 → now B66 · RSRP −105 ·
+  SINR 2", recorded by the router when the change went out, so it survives a reload. The strip
+  marks the moment of the change. Apply and the lock confirm say up front that the link drops for
+  a few seconds, and "Reset to default" is now "Apply defaults" (it writes at once).
+- **A cell scan is kept:** the router keeps the last scan of each SIM, so a reload or another
+  browser does not cost another 5–10 minutes offline. The card says how old it is and for which SIM.
+- **Bands in one vocabulary:** module supports / carrier allows / selected / modem advertises /
+  in use, with a "?" that explains each. The footer names the change ("SA +n41 −n71") instead of
+  "2 SA". Scan, neighbour and strip colours all follow GL's own signal levels.
+- **Phones and small things:** Tracking's legend wraps and its readout sits under the chart on a
+  phone. The event log can hide a source, and clicking an event shows that moment on the chart.
+  RF samples, events, speed tests and battery history export as CSV. PCI, ARFCN and Cell ID have
+  copy buttons. Tapping a band chip explains it. The page reopens on the tab you last used, and a
+  scan row's Lock confirm stays with its cell when the list re-sorts.
+- **Tracking stays fast on 24 hours:** the chart is computed once per data change and thinned to
+  the pixel grid. Moving the mouse over a 24 h window went from ~51 ms to 0.2 ms per frame.
 - **Chinese:** the whole Modem page is available in Simplified Chinese and follows GL's language
   setting (switching GL's language switches the page). Technical terms (RSRP, n71, AT commands)
   stay as they are; the community AT library stays English.
@@ -84,6 +105,8 @@ R4 features built on it, plus the fixes they surfaced.
     and the higher-risk switch now lasts one browser session only.
   - Cell lock: an LTE lock shows its band as B<n>, and scan rows wrap on phones.
   - Status strip: a "?" explains each reading and its rough ranges.
+- **The nginx plugin is split by concern:** `src/rpc/mudimodem` is a small loader; the code is in
+  `src/lib/rpc/` (installed to `/usr/lib/mudimodem/rpc/`), moved verbatim.
 - **Page code is now built:** ES modules under `src/web` are compiled with esbuild into
   `dist/views` (committed). The main chunk is split into modules, and all `/rpc` calls go through
   one place.
