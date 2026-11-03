@@ -290,7 +290,7 @@ export default {
 
     // ---- cell-lock render helpers ----
     // The card's cells, each with only its own identifiers and readings: [{id, title, rows}],
-    // rows [key, label, value, copy]. Under 5G NSA two sections — the 5G leg (the lock target)
+    // rows [key, label, value, copy]. Under 5G NSA two sections — the 5G cell (the lock target)
     // and its LTE anchor (which owns the cell ID and GL's readings); otherwise one, untitled. A
     // "Carriers" row lists every band in use (the strip's text) when the sections don't show them all.
     currentCellSections() {
@@ -318,7 +318,7 @@ export default {
       tgt.push("pci", "PCI", s.pci, true); tgt.push("arfcn", "ARFCN", s.arfcn, true);
       if (!an) tgt.push("cell", T("Cell ID"), s.cell_id, true);
       reads(tgt, liveOf(s.pci, s.arfcn));
-      var out = [{ id: "t", title: an ? T("5G leg · lock target") : "", rows: tgt.rows }];
+      var out = [{ id: "t", title: an ? T("5G cell · lock target") : "", rows: tgt.rows }];
       var shown = [bandName(s.rat, s.band)];
       if (an) {
         var a = mk("a");

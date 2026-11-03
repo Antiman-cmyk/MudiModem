@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.0.2 — 2026-11-03
+- Cell lock: the 5G NSA section is titled "5G cell · lock target" instead of the jargon "5G leg",
+  and the strip's NSA explanation says plainly that the modem uses an LTE cell (the anchor) and a
+  5G cell together.
+
 ## 3.0.1 — 2026-11-03
 - **Every page names the same carriers.** Under 5G NSA, Tracking showed the LTE anchor's band
   (B66) while the Cell lock card showed the 5G leg's (n41), and the card mixed the two cells: its

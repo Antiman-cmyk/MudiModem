@@ -155,9 +155,9 @@ for (const c of FIX.cases) {
     }
     assert.deepStrictEqual([...cardBands].sort(), [...bandSet(want)].sort(), 'the card shows every band, no other');
     if (c.expect.anchor) {
-      assert.deepStrictEqual(secs.filter((s) => s.id !== 'c').map((s) => s.title), ['5G leg · lock target', 'LTE anchor']);
+      assert.deepStrictEqual(secs.filter((s) => s.id !== 'c').map((s) => s.title), ['5G cell · lock target', 'LTE anchor']);
       const txt = textOf(lv.renderCurrentCell(h));
-      assert.match(txt, /5G leg · lock target/); assert.match(txt, /LTE anchor/);
+      assert.match(txt, /5G cell · lock target/); assert.match(txt, /LTE anchor/);
     } else {
       assert.deepStrictEqual(secs.filter((s) => s.id !== 'c').map((s) => s.title), [''], 'one untitled section');
     }

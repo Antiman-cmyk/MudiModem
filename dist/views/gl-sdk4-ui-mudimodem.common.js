@@ -120,8 +120,8 @@ var __mm = (() => {
     "24 hours": "24 小时",
     "30 min": "30 分钟",
     "4G only": "仅 4G",
-    "5G NSA: an LTE anchor plus a 5G leg (B66 + n41). The readings, cell and channel shown are the LTE anchor's; Cell lock pins the 5G leg.": "5G NSA：一个 LTE 锚点加一路 5G（如 B66 + n41）。显示的读数、小区和信道都是 LTE 锚点的；锁定基站锁的是 5G 那一路。",
-    "5G leg · lock target": "5G 小区 · 锁定目标",
+    "5G NSA: the modem uses an LTE cell (the anchor) and a 5G cell together (B66 + n41). The readings, cell ID and channel shown are the LTE anchor's; Cell lock pins the 5G cell.": "5G NSA：Modem 同时连着一个 LTE 小区（锚点）和一个 5G 小区（如 B66 + n41）。显示的读数、小区 ID 和信道都是 LTE 锚点的；锁定基站锁的是那个 5G 小区。",
+    "5G cell · lock target": "5G 小区 · 锁定目标",
     "5G NR non-standalone": "5G NR 非独立组网（NSA）",
     "5G NR standalone": "5G NR 独立组网（SA）",
     "5G NSA only": "5G 仅 NSA",
@@ -876,7 +876,7 @@ var __mm = (() => {
           ["SINR", "Signal against noise and interference, in dB. 12 or more is excellent, 6 to 12 good, 0 to 6 fair, below 0 poor."],
           ["RSRQ", "Signal quality including how busy the cell is, in dB. LTE: −6 or better is excellent, down to −10 good, down to −14 fair. 5G: −12, −16 and −20."],
           ["Band", "The frequency bands in use, the one the readings come from first: n = 5G NR, B = LTE. Low bands reach far; high bands are faster but shorter."],
-          ["NSA", "5G NSA: an LTE anchor plus a 5G leg (B66 + n41). The readings, cell and channel shown are the LTE anchor's; Cell lock pins the 5G leg."],
+          ["NSA", "5G NSA: the modem uses an LTE cell (the anchor) and a 5G cell together (B66 + n41). The readings, cell ID and channel shown are the LTE anchor's; Cell lock pins the 5G cell."],
           ["Cell / Ch", "Which cell the modem is on (its ID) and the channel number with its frequency."],
           ["CA", "Carrier aggregation: several carriers combined for more speed."]
         ];
@@ -2421,7 +2421,7 @@ var __mm = (() => {
       },
       // ---- cell-lock render helpers ----
       // The card's cells, each with only its own identifiers and readings: [{id, title, rows}],
-      // rows [key, label, value, copy]. Under 5G NSA two sections — the 5G leg (the lock target)
+      // rows [key, label, value, copy]. Under 5G NSA two sections — the 5G cell (the lock target)
       // and its LTE anchor (which owns the cell ID and GL's readings); otherwise one, untitled. A
       // "Carriers" row lists every band in use (the strip's text) when the sections don't show them all.
       currentCellSections() {
@@ -2451,7 +2451,7 @@ var __mm = (() => {
         tgt.push("arfcn", "ARFCN", s.arfcn, true);
         if (!an) tgt.push("cell", t("Cell ID"), s.cell_id, true);
         reads(tgt, liveOf(s.pci, s.arfcn));
-        var out = [{ id: "t", title: an ? t("5G leg · lock target") : "", rows: tgt.rows }];
+        var out = [{ id: "t", title: an ? t("5G cell · lock target") : "", rows: tgt.rows }];
         var shown = [bandName(s.rat, s.band)];
         if (an) {
           var a = mk("a");
