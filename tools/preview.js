@@ -112,7 +112,7 @@ const RPC = {
   change_status: flag("pending")
     ? { now: nowS, pending: { kind: "bands", slot: 1, deadline: nowS + 42, window: 60, applied: { sa: "41:71", mode: "AUTO" } } }
     : { now: nowS },
-  app_version: { version: "2.2.0", latest: "2.2.0", update_available: false },
+  app_version: { version: "3.0.0", latest: "3.0.0", update_available: false },
   device_info: {}, get_history_persist: { enabled: false, size_bytes: 0 },
   library_status: { ok: true }, get_speedtest_interfaces: { cellular: { up: true }, wired: { up: false } },
   get_speedtest_history: { results: [0, 1, 2, 3, 4, 5].map((i) => ({ t: NOW - (5 - i) * 21600000, iface: "cellular",
