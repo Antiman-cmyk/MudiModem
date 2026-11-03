@@ -236,6 +236,24 @@ if latest then
   os.remove(latest)
 end
 
+-- 7e. The router keeps the last scan: get_lock returns it for the SAME slot only.
+do
+  local hist = assert(os.getenv("MUDIMODEM_HIST"), "runner sets MUDIMODEM_HIST")
+  local sp = hist .. "/last-scan.json"
+  local sf = assert(io.open(sp, "w"))
+  sf:write('{"towers":[{"pci":101,"freq":627264,"network_type":"5G SA","band":78,"scs":30}],"ts":1700000000000,"slot":1}')
+  sf:close()
+  r = M.get_lock({})
+  assert(r.last_scan and r.last_scan.slot == 1 and #r.last_scan.towers == 1 and r.last_scan.towers[1].pci == 101,
+         "get_lock must hand back this SIM's last scan")
+  sf = assert(io.open(sp, "w")); sf:write('{"towers":[],"ts":1700000000000,"slot":2}'); sf:close()
+  assert(M.get_lock({}).last_scan == nil, "another SIM's scan is not this SIM's")
+  sf = assert(io.open(sp, "w")); sf:write('not json'); sf:close()
+  assert(M.get_lock({}).last_scan == nil, "a broken file is no scan")
+  os.remove(sp)
+  assert(M.get_lock({}).last_scan == nil, "no file, no scan")
+end
+
 -- 8. No active slot (modem resetting / no SIM): get_lock refuses like every
 --    other resolve_active() caller instead of reading the fallback sub_id.
 package.loaded["oui.ubus"].call = (function(orig)

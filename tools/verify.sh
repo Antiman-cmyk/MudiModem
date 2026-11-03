@@ -10,40 +10,13 @@ fail() { echo "FAIL: $1" >&2; exit 1; }
 
 # Authenticate to /rpc on the box; print the sid on stdout. Fails if login fails.
 rpc_login() {
-  # Password is exported into the remote env so shell-metacharacters in MM_PW
-  # cannot break the remote python string (still keep MM_PW free of newlines).
-  ssh -o BatchMode=yes "root@$HOST" "MM_PW=$(printf %s "$MM_PW" | sed "s/'/'\\\\''/g")" \
-    'python3 - <<'"'"'PY'"'"'
-import hashlib, json, os, subprocess, urllib.request, ssl
-ctx = ssl._create_unverified_context()
-def post(obj):
-    req = urllib.request.Request(
-        "https://127.0.0.1/rpc",
-        data=json.dumps(obj).encode(),
-        headers={"Content-Type": "application/json"},
-    )
-    return json.loads(urllib.request.urlopen(req, context=ctx, timeout=30).read())
-pw = os.environ["MM_PW"]
-user = "root"
-chal = post({"jsonrpc":"2.0","id":1,"method":"challenge","params":{"username":user}})
-r = chal.get("result") or {}
-if not r.get("salt") or not r.get("nonce"):
-    raise SystemExit("challenge failed: " + json.dumps(chal))
-alg = int(r.get("alg") or 5)
-crypt = subprocess.check_output(
-    ["openssl", "passwd", "-%d" % alg, "-salt", r["salt"], pw], text=True
-).strip()
-h = hashlib.sha256(("%s:%s:%s" % (user, crypt, r["nonce"])).encode()).hexdigest()
-res = post({"jsonrpc":"2.0","id":1,"method":"login","params":{"username":user,"hash":h}})
-sid = (res.get("result") or {}).get("sid")
-if not sid:
-    raise SystemExit("login failed: " + json.dumps(res))
-print(sid)
-PY'
+  # GL's challenge/login, done on the box with what the image ships (test/onbox/rpc-login.sh).
+  # The password goes in the remote env, quoted, so its metacharacters cannot break the command.
+  ssh -o BatchMode=yes "root@$HOST" "MM_PW='$(printf %s "$MM_PW" | sed "s/'/'\\\\''/g")' sh -s" < test/onbox/rpc-login.sh
 }
 
 # Run one of test/onbox/*.lua ON the box with the given args. Scripts are shipped
-# as files — never inlined into ssh '...' (CLAUDE.md §8: nested quoting).
+# as files — never inlined into ssh '...' (docs/knowledge.md §7: nested quoting).
 onbox_lua() {  # $1 = test/onbox/<name>.lua, $2.. = args
   _f="$1"; shift
   _n="/tmp/mm-onbox-$(basename "$_f")"
@@ -51,23 +24,16 @@ onbox_lua() {  # $1 = test/onbox/<name>.lua, $2.. = args
   ssh -o BatchMode=yes "root@$HOST" "lua $_n $*; rc=\$?; rm -f $_n; exit \$rc"
 }
 
-echo "0. firmware is 4.10+ (MudiModem 2.x is 4.10-only)"
-# Numeric major.minor compare — the same expression install.sh uses (a glob
-# like `4.[2-9]*` would accept 4.8.5).
-GLVER=$(ssh -o BatchMode=yes "root@$HOST" 'cat /etc/glversion' 2>/dev/null | tr -d '\r\n')
-GLMAJ=${GLVER%%.*}; GLREST=${GLVER#*.}; GLMIN=${GLREST%%.*}
-case "$GLMAJ$GLMIN" in *[!0-9]*|"") GLMAJ=0; GLMIN=0 ;; esac
-if [ -z "${GLVER:-}" ] || [ "${GLMAJ:-0}" -lt 4 ] || { [ "${GLMAJ:-0}" -eq 4 ] && [ "${GLMIN:-0}" -lt 10 ]; }; then
-  fail "firmware '${GLVER:-unknown}' is not 4.10+"
-fi
-echo "   firmware $GLVER"
+echo "0. firmware is 4.10+ and the box is an E5800 (the installer's own preflight)"
+ssh -o BatchMode=yes "root@$HOST" 'sh -s preflight' < src/installer/mudimodem-install \
+  || fail "preflight refused this box"
 ssh -o BatchMode=yes "root@$HOST" 'ubus list gl-session >/dev/null && test -f /usr/share/gl-ngx/websocket/cellular.lua' \
   || fail "4.10 ws stack (gl-session + websocket/cellular.lua) not present"
 
 echo "0b. 4.10 helper files present"
 ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/lib/mudimodem/cellular_compat.py && test -x /usr/lib/mudimodem/mudimodem-detach && test -s /usr/share/gl-ngx/websocket/mudimodem.lua' \
   || fail "cellular_compat.py / mudimodem-detach / websocket/mudimodem.lua missing (run ./tools/deploy.sh)"
-# Script shipped as a file, never inlined into ssh '...' (CLAUDE.md §8).
+# Script shipped as a file, never inlined into ssh '...' (docs/knowledge.md §7).
 ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-ws-seed.test.lua' < test/ws-seed.test.lua
 ssh -o BatchMode=yes "root@$HOST" 'lua /tmp/mm-ws-seed.test.lua; rc=$?; rm -f /tmp/mm-ws-seed.test.lua; exit $rc' \
   || fail "websocket/mudimodem.lua seed module failed its self-test (collect/battery/event + stale flag)"
@@ -78,17 +44,19 @@ ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/mudimodem/www/views/gl-sdk
 ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/oui/menu.d/mudimodem.json' \
   || fail "menu json missing"
 
-echo "1b. survives a firmware upgrade (keep.d, nginx alias, python3 runtime)"
-ssh -o BatchMode=yes "root@$HOST" 'cat /lib/upgrade/keep.d/mudimodem' | cmp -s - src/upgrade/keep.d/mudimodem \
-  || fail "/lib/upgrade/keep.d/mudimodem missing or stale (run ./tools/deploy.sh)"
+echo "1b. survives a firmware upgrade (keep.d, nginx alias, the image's eco)"
+KEEP_WANT=$(mktemp); sh src/installer/mudimodem-install keepd --from . > "$KEEP_WANT"
+ssh -o BatchMode=yes "root@$HOST" 'cat /lib/upgrade/keep.d/mudimodem' | cmp -s - "$KEEP_WANT" \
+  || { rm -f "$KEEP_WANT"; fail "/lib/upgrade/keep.d/mudimodem missing or stale (run ./tools/deploy.sh)"; }
+rm -f "$KEEP_WANT"
 # abfota_update silently skips a listed path that does not exist, so a typo or
 # a renamed rc.d link would only surface as a file missing after the upgrade.
 MISSING=$(ssh -o BatchMode=yes "root@$HOST" 'grep "^/" /lib/upgrade/keep.d/mudimodem | while read -r p; do [ -e "$p" ] || echo "$p"; done')
 [ -z "$MISSING" ] || fail "keep.d lists paths missing on the box: $MISSING"
 ssh -o BatchMode=yes "root@$HOST" 'test -s /etc/nginx/gl-conf.d/mudimodem.conf' \
   || fail "nginx alias /etc/nginx/gl-conf.d/mudimodem.conf missing (step 3 would 404)"
-ssh -o BatchMode=yes "root@$HOST" '/usr/lib/mudimodem/mudimodem-deps check' \
-  || fail "python3 runtime missing (mudimodem-deps check): collector/speedtest/AT tool cannot run"
+ssh -o BatchMode=yes "root@$HOST" 'test -x /usr/bin/eco' \
+  || fail "/usr/bin/eco missing: mudimodemd (collector, AT queue, jobs) cannot run"
 LEFT=$(ssh -o BatchMode=yes "root@$HOST" 'ls -d /www/views/gl-sdk4-ui-mudimodem* /www/mudimodem 2>/dev/null; grep -e mudimodem -e glbattlimit /etc/sysupgrade.conf 2>/dev/null' || true)
 [ -z "$LEFT" ] || fail "2.0.0 leftovers still on the box (install.sh removes them): $LEFT"
 
@@ -184,7 +152,7 @@ fi
 
 echo "6c. clear_cell_lock: family-named GL unlock + GL re-applies its stored mode (static — never call it on the live link)"
 ssh -o BatchMode=yes "root@$HOST" '
-  f=/usr/lib/oui-httpd/rpc/mudimodem
+  f=/usr/lib/mudimodem/rpc/lock.lua
   grep -q "function M.clear_cell_lock" "$f" || exit 1
   grep -q "gl_unlock(slot, fam)" "$f" || exit 1
   grep -q "band_cfg_set(band_cfg_payload(slot, prev.mode_raw or prev.mode" "$f" || exit 1
@@ -192,23 +160,32 @@ ssh -o BatchMode=yes "root@$HOST" '
   || fail "clear_cell_lock must unlock per locked family and re-apply GL's stored band config; panic must reset mode_pref=AUTO"
 
 # 7. History collector: service running + get_history parses telemetry.
-if [ -f src/sbin/mudimodem-collectd ]; then
+if [ -f src/sbin/mudimodemd ]; then
   echo "7. history collector running + get_history"
-  ssh -o BatchMode=yes "root@$HOST" 'test -x /usr/sbin/mudimodem-collectd' \
+  ssh -o BatchMode=yes "root@$HOST" 'test -x /usr/sbin/mudimodemd' \
     || fail "collector not installed (run ./tools/deploy.sh)"
-  ssh -o BatchMode=yes "root@$HOST" 'pgrep -f mudimodem-collectd >/dev/null' \
+  ssh -o BatchMode=yes "root@$HOST" 'pgrep -f "mudimodemd" >/dev/null' \
     || fail "collector process not running (/etc/init.d/mudimodem-collectd start)"
+  ssh -o BatchMode=yes "root@$HOST" 'for i in 1 2 3 4 5 6; do ubus call mudimodem health 2>/dev/null | grep -q "\"collector\": true" && exit 0; sleep 2; done; exit 1' \
+    || fail "mudimodemd is not answering ubus call mudimodem health with its collector on (logread -e mudimodemd)"
   # It should be writing samples within a couple of poll intervals.
   ssh -o BatchMode=yes "root@$HOST" 'for i in 1 2 3 4 5 6; do [ -s /tmp/mudimodem/samples.jsonl ] && exit 0; sleep 5; done; exit 1' \
     || fail "no samples.jsonl written after ~30s"
   echo "   collector is sampling ($(ssh -o BatchMode=yes "root@$HOST" 'wc -l < /tmp/mudimodem/samples.jsonl' | tr -d " ") lines)"
   # AT budget: cell_info executes QENG/QCAINFO per call, so the cadence must be
   # the 4.10 default (10 s => <=6 reads/min), never the 1.x 4 s.
-  ssh -o BatchMode=yes "root@$HOST" 'grep -q "MUDIMODEM_POLL\", \"10\"" /usr/sbin/mudimodem-collectd && ! pgrep -f "MUDIMODEM_POLL=[0-9]" >/dev/null' \
+  ssh -o BatchMode=yes "root@$HOST" 'grep -q "envnum(\"MUDIMODEM_POLL\", 10)" /usr/lib/mudimodem/mudimodemd/collector.lua && ! pgrep -f "MUDIMODEM_POLL=[0-9]" >/dev/null' \
     || fail "collector cadence is not the 10 s default (AT budget)"
-  # The newest sample must be 4.10-normalized: signals[] + PCC aliases.
-  ssh -o BatchMode=yes "root@$HOST" 'python3 -c "import json;d=json.load(open(\"/tmp/mudimodem/latest.json\"));assert isinstance(d.get(\"signals\"),list);assert \"rat\" in d and \"cell_id\" in d and \"rsrp\" in d"' \
+  # The newest sample must be 4.10-normalized: signals[] + PCC aliases (checked with the box's
+  # own lua + cjson). A JSON null decodes to cjson.null, so `~= nil` = key present.
+  ssh -o BatchMode=yes "root@$HOST" 'lua -e "local c=require\"cjson\"; local f=assert(io.open(\"/tmp/mudimodem/latest.json\")); local d=c.decode(f:read(\"*a\")); assert(type(d.signals)==\"table\" and d.rat~=nil and d.cell_id~=nil and d.rsrp~=nil)"' \
     || fail "latest.json is not the 4.10 normalized sample (signals[] / rat / cell_id)"
+  # Connectivity probe (read-only; a ping every 30 s out of the cellular device): after ~40 s it
+  # has run and, on a box with cellular data, sees the link up. Wired-only boxes stay "unknown",
+  # so this only reports.
+  ssh -o BatchMode=yes "root@$HOST" 'for i in 1 2 3 4 5 6 7 8; do ubus call mudimodem health | grep -q "\"link_probes\": [1-9]" && exit 0; sleep 5; done; exit 1' \
+    || echo "   note: no connectivity probe yet (it pings only while the cellular interface is up)"
+  echo "   link: $(ssh -o BatchMode=yes "root@$HOST" 'ubus call mudimodem health | jsonfilter -e "@.link" -e "@.link_lost" -e "@.link_probes"' | tr '\n' ' ')(state, lost, probes)"
   # get_history parses the jsonl (fixtures under a temp HIST dir; ngx-stubbed).
   ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-hist.test.lua' < test/backend-history.test.lua
   ssh -o BatchMode=yes "root@$HOST" 'MUDIMODEM_HIST=/tmp/mmhist-test lua /tmp/mm-hist.test.lua; rc=$?; rm -f /tmp/mm-hist.test.lua; exit $rc' \
@@ -231,7 +208,7 @@ printf '%s' "$BBODY" | node -e '
     console.log("   battery eval + render-only OK ->", c.name);
   })' || fail "battery chunk eval failed"
 
-if [ -f src/sbin/mudimodem-collectd ]; then
+if [ -f src/sbin/mudimodemd ]; then
   # The newest battery sample must be FRESH (within 60 s of box now). Checking
   # freshness rather than watching the file grow avoids a 25 s sleep here.
   ssh -o BatchMode=yes "root@$HOST" 'for i in 1 2 3 4 5 6; do [ -s /tmp/mudimodem/battery.jsonl ] && exit 0; sleep 5; done; exit 1' \
@@ -269,8 +246,8 @@ ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/mudimodem/www/views/gl-sdk
   || fail "console chunk .gz missing"
 ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/mudimodem/www/mudimodem/at-library.json.gz' \
   || fail "at-library .gz missing"
-ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/lib/mudimodem/mudimodem-at.py' \
-  || fail "AT tool missing"
+ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/lib/mudimodem/mudimodemd/atport.lua' \
+  || fail "the direct AT port module is missing"
 
 echo "8a. library gz parses on-device and is served via gzip_static"
 ssh -o BatchMode=yes "root@$HOST" 'gzip -dc /usr/share/mudimodem/www/mudimodem/at-library.json.gz > /tmp/mm-lib.json' \
@@ -294,39 +271,44 @@ printf '%s' "$CONBODY" | node -e '
     console.log("   console chunk eval OK ->", c.name);
   })' || fail "console chunk eval failed"
 
-echo "8c. at_console backend (GL AT service + direct-port fallback, against FAKES only)"
-# Both transports are faked: the real `ubus` would send the test's commands to
-# the live modem through GL's AT service (the test refuses to run without the fake).
-ssh -o BatchMode=yes "root@$HOST" 'mkdir -p /tmp/mmtest/tmp'
-ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mmtest/fake-at.py' < test/fake-at-tool.py
-ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mmtest/fake-ubus-at.py' < test/fake-ubus-at.py
-ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mmtest/t.lua' < test/backend-console.test.lua
-ssh -o BatchMode=yes "root@$HOST" 'chmod +x /tmp/mmtest/fake-ubus-at.py; MM_TMP=/tmp/mmtest/tmp MUDIMODEM_UBUS=/tmp/mmtest/fake-ubus-at.py MUDIMODEM_AT_TOOL=/tmp/mmtest/fake-at.py lua /tmp/mmtest/t.lua >/dev/null; rc=$?; rm -rf /tmp/mmtest; exit $rc' \
-  || fail "at_console backend test failed on-device"
+echo "8c. at_console forwards to mudimodemd (fake oui.ubus only) + the daemon answers"
+# The plugin test uses a fake oui.ubus: nothing it sends can reach the modem.
+ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-console.test.lua' < test/backend-console.test.lua
+ssh -o BatchMode=yes "root@$HOST" 'MM_PLUGIN=/usr/lib/oui-httpd/rpc/mudimodem lua /tmp/mm-console.test.lua >/dev/null; rc=$?; rm -f /tmp/mm-console.test.lua; exit $rc' \
+  || fail "at_console forwarder test failed on-device"
+# A request the daemon must REJECT (empty) proves it is registered and validating, sending nothing.
+ssh -o BatchMode=yes "root@$HOST" 'ubus call mudimodem at_start "{\"cmd\":\"\"}" | grep -q "cmd required"' \
+  || fail "mudimodemd is not answering at_start (logread -e mudimodemd)"
+ssh -o BatchMode=yes "root@$HOST" 'ubus call mudimodem job_start "{\"kind\":\"none\"}" | grep -q "unknown job kind"' \
+  || fail "mudimodemd is not answering job_start (logread -e mudimodemd)"
 
 echo "8d. LIVE: one read-only AT through GL's AT service (the console's primary transport)"
 ssh -o BatchMode=yes "root@$HOST" \
   'ubus -t 10 call modem.CPU.AT get_result_AT "{\"cmd\":\"AT\",\"timeout\":5,\"source_flag\":1}" | grep -q "OK"' \
   || fail "live AT through modem.CPU.AT did not answer OK"
-echo "8d2. LIVE: one read-only AT through the direct-port fallback tool (per-step envelope)"
+echo "8d1. LIVE: the same read-only AT through mudimodemd's queue (what the console uses)"
 ssh -o BatchMode=yes "root@$HOST" \
-  'python3 /usr/lib/mudimodem/mudimodem-at.py --envelope --timeout 6 "AT" | head -1 | grep -qE "^MM-AT:ok:[0-9]+:1/1$"' \
-  || fail "live AT through /dev/at_mdm0 did not return a per-step MM-AT:ok frame"
+  'id=$(ubus call mudimodem at_start "{\"cmd\":\"AT\",\"timeout\":5}" | jsonfilter -e "@.id") && [ -n "$id" ] && ubus -t 30 call mudimodem at_wait "{\"id\":$id,\"wait\":15}" | jsonfilter -e "@.steps[0].status" | grep -qx ok' \
+  || fail "live AT through mudimodemd did not come back ok (logread -e mudimodemd)"
+echo "8d2. LIVE: one read-only AT through the direct-port fallback (mudimodemd/atport.lua under eco)"
+ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-atport.lua' < test/emu/atport-driver.lua
+ssh -o BatchMode=yes "root@$HOST" \
+  'eco /tmp/mm-atport.lua /usr/lib/mudimodem /dev/at_mdm0 /tmp/mudimodem/at.inflight 6 AT | jsonfilter -e "@.steps[0].status" | grep -qx ok; rc=$?; rm -f /tmp/mm-atport.lua; exit $rc' \
+  || fail "live AT through /dev/at_mdm0 did not come back ok"
 
 echo "8e. GL's AT server (modem_AT) alive and untouched after our AT call"
 ssh -o BatchMode=yes "root@$HOST" \
   'pids=$(pidof modem_AT); [ -n "$pids" ] || exit 1; for p in $pids; do s=$(cut -d" " -f3 "/proc/$p/stat"); [ "$s" = "T" ] && exit 1; done; exit 0' \
   || fail "modem_AT missing or left stopped (our tool must never signal GL processes)"
 
-echo "8f. library check/refresh tool installed + backend methods present"
-ssh -o BatchMode=yes "root@$HOST" 'test -x /usr/lib/mudimodem/mudimodem-lib' \
-  || fail "mudimodem-lib not installed (run ./tools/deploy.sh)"
-# `check` must always return valid JSON, even when the remote repo/dist is absent
-# (fail-silent -> checked:false). Tolerant: we only assert it emits parseable JSON.
-ssh -o BatchMode=yes "root@$HOST" 'python3 /usr/lib/mudimodem/mudimodem-lib check | python3 -c "import json,sys;d=json.load(sys.stdin);assert \"local_revision\" in d and \"checked\" in d"' \
-  || fail "mudimodem-lib check did not emit a valid status envelope"
+echo "8f. library check (a mudimodemd job) + backend methods present"
+# `check` always answers, even when the remote repo is unreachable (fail-silent -> checked:false):
+# only that it names the local revision is asserted.
+ssh -o BatchMode=yes "root@$HOST" \
+  'id=$(ubus call mudimodem job_start "{\"kind\":\"lib_check\",\"args\":{}}" | jsonfilter -e "@.id") && [ -n "$id" ] && ubus -t 30 call mudimodem job_wait "{\"id\":$id,\"wait\":20}" | jsonfilter -e "@.local_revision" | grep -q .' \
+  || fail "the library check job did not answer with a local revision"
 # Backend exposes both methods (dofile under the ngx stub is overkill here; grep the source is enough).
-ssh -o BatchMode=yes "root@$HOST" 'grep -q "function M.library_status" /usr/lib/oui-httpd/rpc/mudimodem && grep -q "function M.refresh_library" /usr/lib/oui-httpd/rpc/mudimodem' \
+ssh -o BatchMode=yes "root@$HOST" 'grep -q "function M.library_status" /usr/lib/mudimodem/rpc/console.lua && grep -q "function M.refresh_library" /usr/lib/mudimodem/rpc/console.lua' \
   || fail "backend missing library_status/refresh_library"
 
 # 9. Arg validator: the AT console's /rpc gate. Without this, oui's default
@@ -366,12 +348,12 @@ ssh -o BatchMode=yes "root@$HOST" 'test -s /etc/mudimodem/version.json' \
   || fail "version.json not installed (run ./tools/deploy.sh)"
 ssh -o BatchMode=yes "root@$HOST" 'test -x /usr/sbin/mudimodem-selfupdate' \
   || fail "self-update script not installed"
-ssh -o BatchMode=yes "root@$HOST" 'grep -q "function M.app_version" /usr/lib/oui-httpd/rpc/mudimodem && grep -q "function M.device_info" /usr/lib/oui-httpd/rpc/mudimodem && grep -q "function M.self_update" /usr/lib/oui-httpd/rpc/mudimodem && grep -q "function M.update_status" /usr/lib/oui-httpd/rpc/mudimodem' \
+ssh -o BatchMode=yes "root@$HOST" 'f=/usr/lib/mudimodem/rpc/config.lua; grep -q "function M.app_version" $f && grep -q "function M.device_info" $f && grep -q "function M.self_update" $f && grep -q "function M.update_status" $f' \
   || fail "backend missing app_version/device_info/self_update/update_status"
 
 echo "10a. app_version isolation test (offline, fake curl)"
 ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-ver.test.lua' < test/backend-version.test.lua
-ssh -o BatchMode=yes "root@$HOST" 'MM_TMP=/tmp/mm-ver-test MUDIMODEM_VERSION_FILE=/tmp/mm-ver-test/local.json MUDIMODEM_CURL=/tmp/mm-ver-test/curl.sh lua /tmp/mm-ver.test.lua; rc=$?; rm -rf /tmp/mm-ver.test.lua /tmp/mm-ver-test; exit $rc' \
+ssh -o BatchMode=yes "root@$HOST" 'MM_TMP=/tmp/mm-ver-test MUDIMODEM_VERSION_FILE=/tmp/mm-ver-test/local.json lua /tmp/mm-ver.test.lua; rc=$?; rm -rf /tmp/mm-ver.test.lua /tmp/mm-ver-test; exit $rc' \
   || fail "app_version isolation test failed"
 
 echo "10b. self-update script isolation test (no real install)"
@@ -390,8 +372,8 @@ ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/share/oui/menu.d/mudimodem-speed
   || fail "speedtest menu json missing"
 onbox_lua test/onbox/json-parses.lua /usr/share/oui/menu.d/mudimodem-speedtest.json \
   || fail "speedtest menu json does not parse (would break ui.get_menu_list for EVERY page)"
-ssh -o BatchMode=yes "root@$HOST" 'test -x /usr/lib/mudimodem/mudimodem-speedtest.py' \
-  || fail "speedtest runner script missing or not executable"
+ssh -o BatchMode=yes "root@$HOST" 'test -s /usr/lib/mudimodem/mudimodemd/speedtest.lua' \
+  || fail "the speed test module (mudimodemd/speedtest.lua) is missing"
 
 STBODY=$(ssh -o BatchMode=yes "root@$HOST" \
   'curl -sk -H "Accept-Encoding: gzip" "https://127.0.0.1/views/gl-sdk4-ui-mudimodem-speedtest.common.js?_t=1" | gzip -dc')
@@ -409,20 +391,21 @@ ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-st.test.lua' < test/backend-spe
 ssh -o BatchMode=yes "root@$HOST" 'MUDIMODEM_SPEEDTEST_HIST=/tmp/mmst-hist.jsonl MUDIMODEM_ST_SCHEDULE=/tmp/mmst-sched.json lua /tmp/mm-st.test.lua; rc=$?; rm -f /tmp/mm-st.test.lua /tmp/mmst-hist.jsonl /tmp/mmst-sched.json; exit $rc' \
   || fail "speedtest backend test failed on-device"
 
-echo "11b. Speedtest scheduler service present (off by default)"
-ssh -o BatchMode=yes "root@$HOST" 'test -x /usr/sbin/mudimodem-speedtestd' \
-  || fail "speedtestd not installed (run ./tools/deploy.sh)"
-ssh -o BatchMode=yes "root@$HOST" 'pgrep -f mudimodem-speedtestd >/dev/null' \
-  || fail "speedtestd process not running (/etc/init.d/mudimodem-speedtestd start)"
+echo "11b. Speedtest schedule runs inside mudimodemd (off by default)"
+ssh -o BatchMode=yes "root@$HOST" 'ubus call mudimodem health | grep -q "\"speedtests\""' \
+  || fail "mudimodemd does not report its speed test counter (logread -e mudimodemd)"
 
 echo "11c. LIVE: one real speed test end-to-end over Cellular"
 ssh -o BatchMode=yes "root@$HOST" 'rm -f /tmp/mudimodem/speedtest-status.json'
 # the row check is a shipped file (never inlined into ssh '...'), used inside the block below
 ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-onbox-speedtest-row.lua' < test/onbox/speedtest-row.lua
+ssh -o BatchMode=yes "root@$HOST" 'cat > /tmp/mm-speedtest-driver.lua' < test/emu/speedtest-driver.lua
 RESULT=$(ssh -o BatchMode=yes "root@$HOST" '
   rm -f /tmp/mmv-speedtests.jsonl
-  python3 /usr/lib/mudimodem/mudimodem-speedtest.py --trigger manual --iface cellular --hist /tmp/mmv-speedtests.jsonl
+  MUDIMODEM_ST_HIST=/tmp/mmv-speedtests.jsonl MUDIMODEM_ST_STATUS=/tmp/mmv-st-status.json \
+    eco /tmp/mm-speedtest-driver.lua /usr/lib/mudimodem cellular >/dev/null
   rc=$?
+  rm -f /tmp/mm-speedtest-driver.lua /tmp/mmv-st-status.json
   if [ $rc -eq 0 ] && [ -s /tmp/mmv-speedtests.jsonl ]; then
     lua /tmp/mm-onbox-speedtest-row.lua /tmp/mmv-speedtests.jsonl \
       && rc=0 || rc=1
@@ -446,7 +429,7 @@ if [ -f src/sbin/glbattlimit ]; then
     || fail "init glbattlimit missing"
   ssh -o BatchMode=yes "root@$HOST" 'test -f /etc/mudimodem/battlimit.json' \
     || fail "battlimit.json missing"
-  ssh -o BatchMode=yes "root@$HOST" 'grep -q "function M.get_battlimit" /usr/lib/oui-httpd/rpc/mudimodem && grep -q "function M.set_battlimit" /usr/lib/oui-httpd/rpc/mudimodem' \
+  ssh -o BatchMode=yes "root@$HOST" 'grep -q "function M.get_battlimit" /usr/lib/mudimodem/rpc/config.lua && grep -q "function M.set_battlimit" /usr/lib/mudimodem/rpc/config.lua' \
     || fail "backend missing get_battlimit/set_battlimit"
   # Live status (read-only; does not change charge path).
   ssh -o BatchMode=yes "root@$HOST" '/usr/bin/glbattlimit status >/dev/null' \
@@ -480,7 +463,7 @@ fi
 
 echo "14. collectd latest.json + battery-latest.json are live (the ws seeds)"
 ssh -o BatchMode=yes "root@$HOST" \
-  '[ -f /tmp/mudimodem/latest.json ] && python3 -c "import json; json.load(open(\"/tmp/mudimodem/latest.json\")); json.load(open(\"/tmp/mudimodem/battery-latest.json\"))"' \
+  '[ -f /tmp/mudimodem/latest.json ] && lua -e "local c=require\"cjson\"; for _,p in ipairs({\"/tmp/mudimodem/latest.json\",\"/tmp/mudimodem/battery-latest.json\"}) do local f=assert(io.open(p)); c.decode(f:read(\"*a\")); f:close() end"' \
   || fail "latest.json / battery-latest.json missing or invalid (is the collector on the new build?)"
 ssh -o BatchMode=yes "root@$HOST" '[ ! -S /tmp/mudimodem/collectd.sock ]' \
   || fail "stale collectd.sock present (2.x has no socket consumer; old collector still running?)"

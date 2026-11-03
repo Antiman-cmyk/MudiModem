@@ -3,11 +3,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
-const SRC = path.join(__dirname, '..', 'src', 'views', 'mudimodem-tracking.js');
+const SRC = path.join(__dirname, '..', 'src', 'web', 'tabs', 'tracking.js');          // source (static checks)
+const CHUNK = path.join(__dirname, '..', 'dist', 'views', 'gl-sdk4-ui-mudimodem-tracking.common.js');  // what ships (eval)
 
 function loadChunk() {
   const module = { exports: {} };
-  return eval(fs.readFileSync(SRC, 'utf8'));
+  return eval(fs.readFileSync(CHUNK, 'utf8'));
 }
 function h(tag, data, children) {
   if (Array.isArray(data) || typeof data === 'string') { children = data; data = {}; }
@@ -97,10 +98,72 @@ test('default range is the 15 m view (state + active segment)', () => {
   const c = loadChunk();
   const vm = makeVm(c);
   assert.strictEqual(vm.winW, 15, 'data() default winW is 15');
-  const on = walk(c.render.call(makeVm(c, { samples: seedSamples(), events: [] }), h))
+  const on = walk(c.render.call(makeVm(c, { samples: seedSamples(), events: [] }), h).children[0])   // the chart card
     .filter((n) => n.tag === 'button' && n.data.staticClass === 'on');
   assert.strictEqual(on.length, 1, 'exactly one active range segment');
   assert.strictEqual(textOf(on[0]), '15 m', 'the 15 m segment is the active one');
+});
+
+test('the throughput lane appears only with throughput data, and the readout shows Mbps', () => {
+  const c = loadChunk();
+  const plain = makeVm(c, { samples: seedSamples(), events: [], winW: 60 });
+  assert.doesNotMatch(textOf(c.render.call(plain, h)), /MBPS/, 'no lane for samples without counters');
+  const withTp = seedSamples().map((x, i) => Object.assign(x, { rx_kbps: 2000 + i * 100, tx_kbps: 300 }));
+  const vm = makeVm(c, { samples: withTp, events: [], winW: 60 });
+  const tree = c.render.call(vm, h);
+  assert.match(textOf(tree), /MBPS/);
+  assert.match(textOf(tree), /4/, 'the lane is scaled to the window peak (4.0 Mbps)');
+  const paths = walk(tree).filter((n) => n.tag === 'path' && n.data.attrs && n.data.attrs['stroke-width'] === 1.5);
+  assert.strictEqual(paths.length, 2, 'one down + one up line');
+  vm.pinnedT = withTp[withTp.length - 1].t;
+  const tip = textOf(vm.sliceReadout(h));
+  assert.match(tip, /Down \/ Up/); assert.match(tip, /4 \/ 0\.3 Mbps/);
+});
+
+test('the ping lane: dots for replies, error ticks for misses, the nearest probe in the readout', () => {
+  const c = loadChunk();
+  const plain = makeVm(c, { samples: seedSamples(), events: [], winW: 60 });
+  assert.doesNotMatch(textOf(c.render.call(plain, h)), /PING/, 'no lane without probe data');
+  const ss = seedSamples();
+  ss.forEach((x, i) => { if (i % 3 === 0) x.ping_ms = 20 + i; });
+  ss[4].ping_lost = true; delete ss[4].ping_ms;
+  ss[1].t = ss[0].t + 10000;                              // probes ride on one sample in three
+  const vm = makeVm(c, { samples: ss, events: [], winW: 60 });
+  const tree = c.render.call(vm, h);
+  assert.match(textOf(tree), /PING/);
+  const paths = walk(tree).filter((n) => n.tag === 'path' && n.data.attrs);
+  const dots = paths.filter((n) => n.data.attrs['stroke-linecap'] === 'round' && n.data.attrs['stroke-width'] === 3);
+  const miss = paths.filter((n) => n.data.attrs.stroke === 'var(--error)' && n.data.attrs['stroke-width'] === 1.5);
+  assert.strictEqual(dots.length, 1, 'all replies in ONE path');
+  assert.strictEqual(miss.length, 1, 'all misses in ONE path');
+  assert.strictEqual((miss[0].data.attrs.d.match(/M/g) || []).length, 1);
+  assert.ok((dots[0].data.attrs.d.match(/M/g) || []).length >= 3);
+  vm.pinnedT = ss[1].t;                                   // no probe of its own: the one before it
+  assert.match(textOf(vm.sliceReadout(h)), /Ping\s*20 ms/);
+  vm.pinnedT = ss[4].t;
+  assert.match(textOf(vm.sliceReadout(h)), /no reply/);
+  assert.strictEqual(vm.probeNear({ t: ss[0].t - 1 }), null, 'never a probe from after the sample');
+});
+
+test('link and modem events: colours, sources, the outage length in the page language', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const events = [
+    { t: now - 300000, kind: 'link', label: 'Offline', detail: 'No reply to ping', from: now - 310000 },
+    { t: now - 100000, kind: 'link', label: 'Back online', detail: 'after 200 s', secs: 200 },
+    { t: now - 50000, kind: 'modem', label: 'Modem crash', detail: 'x' },
+  ];
+  const vm = makeVm(c, { samples: seedSamples(), events: events, winW: 60 });
+  assert.strictEqual(vm.evColor(events[0]), 'var(--error)');
+  assert.strictEqual(vm.evColor(events[1]), 'var(--success)');
+  assert.strictEqual(vm.evColor(events[2]), 'var(--error)');
+  assert.strictEqual(vm.evDetail(events[1]), 'after 3 min 20 s offline');
+  assert.strictEqual(vm.evDetail({ kind: 'link', label: 'Back online', secs: 3725 }), 'after 1 h 2 min offline');
+  assert.strictEqual(vm.evDetail(events[0]), 'No reply to ping');
+  const log = textOf(vm.renderLog(h));
+  assert.match(log, /Internet/); assert.match(log, /Modem crash/); assert.match(log, /after 3 min 20 s offline/);
+  const src = fs.readFileSync(SRC, 'utf8');
+  assert.match(src, /\.mmt-chip\.link,\.mmt-chip\.modem\{/);
 });
 
 test('renders one overlaid plot (RSRP/SINR/RSRQ) + three buses + a derived handover tick', () => {
@@ -967,4 +1030,179 @@ test('the last bus run ends at the last sample once data has stopped, like the l
     serverNow: now, serverNowAt: Date.now(), winW: 15 });
   const last = vm.busRuns('band').slice(-1)[0];
   assert.ok(Math.abs(last.m1 + 5) < 0.05, 'ends at the last sample (-5 min), got ' + last.m1);
+});
+
+// ---- the long-term card (longterm.js; mudimodem.get_summary) ----
+function ltLines() {
+  const H = 3600000, t0 = Date.UTC(2026, 10, 1, 0);
+  return [
+    { t: t0, secs: 1800, slot: 1, carrier: 'T-Mobile', rat: 'NR5G-SA', band: 71, cell: 'A', rsrp: [-110, -100, -95], sinr: [0, 4, 8], ping_n: 60, ping_lost: 3 },
+    { t: t0, secs: 1800, slot: 1, carrier: 'T-Mobile', rat: 'LTE', band: 2, cell: 'B', rsrp: [-90, -85, -80], sinr: [10, 12, 14] },
+    { t: t0 + H, secs: 1200, slot: 1, carrier: 'T-Mobile', rat: 'NR5G-SA', band: 71, cell: 'A', rsrp: [-105, -102, -99], ping_n: 40, ping_lost: 1 },
+    { t: t0 + H, secs: 600, slot: 1, no_service: true },
+    { t: t0 + H, secs: 300, slot: 1, carrier: 'T-Mobile', rat: 'NR5G-SA', band: 71, cell: 'A', rsrp: [-104, -101, -98] },  // a restart mid-hour
+    { t: t0 + 2 * H, secs: 3600, slot: 2, carrier: 'AT&T', rat: 'LTE', band: 66, cell: 'Z', rsrp: [-80, -78, -75] },
+  ];
+}
+
+test('long term: hours merge across cells and restarts, time-weighted; no-service time kept apart', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { samples: seedSamples(), events: [], winW: 60 });
+  vm.lt = { days: 7, lines: ltLines(), loading: false, err: '', now: Date.UTC(2026, 10, 2, 0) };
+  const card = c.render.call(vm, h).children[2];
+  const txt = textOf(card);
+  assert.match(txt, /Long term/);
+  assert.match(txt, /SIM 2/, 'the chart follows the SIM of the newest radio line');
+  // the cells table: most time first, averages weighted by time, loss from the probes
+  const rows = walk(card).filter((n) => n.tag === 'tr').slice(1).map(textOf);
+  assert.match(rows[0], /AT&T · B66 Z · SIM 2.*1 h.*-78 dBm/);
+  assert.match(rows[1], /T-Mobile · n71 A · SIM 1.*55 min.*-100\.8 dBm.*4 dB.*4 %/);
+  assert.match(rows[2], /T-Mobile · B2 B.*30 min.*-85 dBm.*12 dB.*—/);
+});
+
+test('long term: empty, loading and failed states; the range buttons refetch', async () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { samples: seedSamples(), events: [] });
+  vm.lt = { days: 7, lines: [], loading: false, err: '', now: 0 };
+  assert.match(textOf(c.render.call(vm, h).children[2]), /No long-term record yet/);
+  vm.lt = { days: 7, lines: [], loading: false, err: 'no answer', now: 0 };
+  assert.match(textOf(c.render.call(vm, h).children[2]), /Couldn't load the long-term record: no answer/);
+  const calls = [];
+  global.window = { $getCookie: () => 'tok', $axios: { post(url, body) {
+    calls.push(body.params[2], body.params[3]);
+    return Promise.resolve({ data: { result: { lines: ltLines(), now: 5, days: 30 } } });
+  } } };
+  try {
+    const btn = walk(c.render.call(vm, h).children[2]).filter((n) => n.tag === 'button' && textOf(n) === '30 d')[0];
+    btn.data.on.click();
+    assert.strictEqual(vm.lt.loading, true);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    assert.deepStrictEqual(calls, ['get_summary', { days: 30 }]);
+    assert.strictEqual(vm.lt.days, 30);
+    assert.strictEqual(vm.lt.lines.length, 6);
+  } finally { delete global.window; }
+});
+
+// ---- phone layout, event log filter / seek, CSV (audit §2.3, §2.6) ----
+test('the legend is HTML above the chart, not SVG text that runs off a phone', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { samples: seedSamples(), events: [], winW: 60 });
+  const tree = c.render.call(vm, h);
+  const legend = walk(tree).find((n) => n.data && n.data.staticClass === 'mmt-legend');
+  assert.ok(legend, 'mmt-legend div');
+  assert.match(textOf(legend), /RSRP · dBm {2}-120…-80/);
+  const svgText = walk(walk(tree).find((n) => n.tag === 'svg')).filter((n) => n.tag === 'text').map(textOf).join('|');
+  assert.doesNotMatch(svgText, /RSRP · dBm/, 'no legend inside the SVG');
+});
+
+test('on a phone the slice readout sits under the chart, and keeps its place when nothing is pinned', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { samples: seedSamples(), events: [], winW: 60, width: 360 });
+  let nodes = walk(c.render.call(vm, h));
+  assert.ok(!nodes.some((n) => n.data && n.data.staticClass === 'mmt-tip'), 'no overlay on a phone');
+  const ph = nodes.find((n) => n.data && n.data.staticClass === 'mmt-read empty');
+  assert.match(textOf(ph), /Tap the chart/);
+  vm.cursor = -5;
+  nodes = walk(c.render.call(vm, h));
+  const rd = nodes.find((n) => n.data && n.data.staticClass === 'mmt-read');
+  assert.match(textOf(rd), /RSRP/);
+  vm.width = 900;
+  nodes = walk(c.render.call(vm, h));
+  assert.ok(nodes.some((n) => n.data && n.data.staticClass === 'mmt-tip'), 'the overlay stays on a wide screen');
+});
+
+test('event log: sources can be hidden, and a click pins the chart on the event (widening the range)', () => {
+  const c = loadChunk();
+  const now = Date.now();
+  const events = [{ t: now - 3 * 3600e3, kind: 'user', label: 'Bands applied', detail: '' },
+                  { t: now - 5 * 60e3, kind: 'net', label: 'Handover', detail: '' }];
+  const vm = makeVm(c, { samples: seedSamples(), events: events, winW: 15 });
+  vm.fetchHistory = () => {};
+  Object.defineProperty(vm, 'allEvents', { get: () => events, configurable: true });
+  let log = textOf(vm.renderLog(h));
+  assert.match(log, /Bands applied/); assert.match(log, /Handover/);
+  vm.toggleSource('net');
+  log = textOf(vm.renderLog(h));
+  assert.doesNotMatch(log, /Handover/, 'hidden source');
+  assert.match(log, /Bands applied/);
+  vm.toggleSource('net');
+  assert.equal(vm.seekTo(events[0].t), true);
+  assert.equal(vm.winW, 360, 'the smallest range that reaches 3 h back');
+  assert.equal(vm.pinnedT, events[0].t, 'pinned on the event');
+  assert.equal(vm.seekTo(now - 30 * 3600e3), false, 'older than 24 h: nothing to show');
+});
+
+test('CSV export: the samples in range and the event log, quoted properly', () => {
+  const c = loadChunk();
+  const saved = { Blob: global.Blob, URL: global.URL, document: global.document };
+  let got = null, name = null;
+  global.Blob = class { constructor(parts) { this.text = parts.join(''); } };
+  global.URL = { createObjectURL(b) { got = b.text; return 'blob:x'; }, revokeObjectURL() {} };
+  global.document = { createElement() { return { style: {}, click() {}, set download(v) { name = v; } }; },
+                      body: { appendChild() {}, removeChild() {} } };
+  try {
+    const vm = makeVm(c, { samples: seedSamples(), events: [], winW: 60 });
+    assert.equal(vm.exportSamples(), true);
+    const lines = got.replace(/^﻿/, '').trim().split('\r\n');
+    assert.equal(lines[0], 'time_utc,t_ms,sim,carrier,mode,band,pci,cell_id,channel,rsrp_dbm,rsrq_db,sinr_db,down_kbps,up_kbps,ping_ms,ping_lost');
+    assert.equal(lines.length, 22, 'header + 21 samples');
+    assert.match(lines[1], /^\d{4}-\d\d-\d\dT.*,1,T-Mobile,NR5G-SA FDD,n71,,A1,127490,-120,-13,5,,,,$/);
+    assert.match(name, /^mudimodem-rf-\d{8}-\d{4}\.csv$/);
+    const evs = [{ t: 1, kind: 'user', label: 'Bands applied', detail: 'mode "LTE", B66' }];
+    Object.defineProperty(vm, 'allEvents', { get: () => evs, configurable: true });
+    vm.exportEvents();
+    assert.match(got, /User,Bands applied,"mode ""LTE"", B66"/, 'commas and quotes quoted');
+  } finally { Object.assign(global, saved); }
+});
+
+// ---- render cost (audit §5): one frame per data change, hover reuses it, paths thinned ----
+function daySamples() {
+  const now = Date.now(), out = [];
+  for (let i = 8640; i >= 0; i--) {
+    out.push({ t: now - i * 10000, slot: '1', id: 'A1', band: 71, mode: 'NR5G-SA',
+      rsrp: -100 + 15 * Math.sin(i / 7), sinr: 5 + 8 * Math.sin(i / 11), rsrq: -13 + 3 * Math.sin(i / 5),
+      rsrp_level: 3, sinr_level: 2, rsrq_level: 3, carrier: 'T-Mobile', rx_kbps: 1000 + i % 300, tx_kbps: 100 });
+  }
+  return out;
+}
+
+test('hovering reuses the drawing frame; a push (tick) rebuilds it', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { samples: daySamples(), events: [], winW: 1440 });
+  let builds = 0;
+  const orig = vm.computeWin;
+  vm.computeWin = function (now) { builds++; return orig(now); };
+  for (let m = -1400; m < 0; m += 100) { vm.cursor = m; c.render.call(vm, h); }
+  assert.equal(builds, 1, 'fourteen hover renders, one window computed');
+  vm.samples.push(Object.assign({}, vm.samples[vm.samples.length - 1], { t: Date.now() + 10000 }));
+  vm.lastT += 1; vm.tick++;
+  c.render.call(vm, h);
+  assert.equal(builds, 2, 'new data, new frame');
+});
+
+test('a 24 h window draws at most a few points per pixel column, envelope intact', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, { samples: daySamples(), events: [], winW: 1440, width: 900 });
+  const tree = c.render.call(vm, h);
+  const rsrp = walk(tree).find((n) => n.tag === 'path' && n.data.attrs.stroke === 'var(--primary)');
+  const pts = rsrp.data.attrs.d.match(/[ML]/g).length;
+  assert.ok(pts <= 4 * 900, '<= 4 points per column, got ' + pts + ' for 8,641 samples');
+  // thinning keeps every column's extremes: the lowest and highest y of the full run survive
+  const run = []; for (let i = 0; i < 1000; i++) run.push([i / 10, Math.sin(i) * 50]);
+  const thin = vm.thinRun(run);
+  const ys = (a) => a.map((p) => p[1]);
+  assert.equal(Math.min(...ys(thin)), Math.min(...ys(run)));
+  assert.equal(Math.max(...ys(thin)), Math.max(...ys(run)));
+  assert.deepEqual(thin[0], run[0]); assert.deepEqual(thin[thin.length - 1], run[run.length - 1]);
+  for (let i = 1; i < thin.length; i++) assert.ok(thin[i][0] >= thin[i - 1][0], 'drawing order kept');
+  assert.ok(thin.length <= 4 * 100);
+});
+
+test('nearestByT (binary search) agrees with a linear scan', () => {
+  const c = loadChunk();
+  const vm = makeVm(c);
+  const ss = [10, 20, 35, 50, 80].map((t) => ({ t }));
+  for (const [t, want] of [[0, 10], [14, 10], [15, 10], [16, 20], [42, 35], [43, 50], [79, 80], [500, 80]])
+    assert.equal(vm.nearestByT(ss, t).t, want, 't=' + t);
+  assert.strictEqual(vm.nearestByT([], 5), null);
 });

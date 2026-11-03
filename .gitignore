@@ -1,5 +1,4 @@
 build/
-.superpowers/
 .worktrees/
 
 # Vendor manual — copyrighted Quectel PDF, kept locally for reference only.
@@ -10,11 +9,11 @@ docs/*.pdf
 __pycache__/
 *.pyc
 
-# GL firmware images kept locally for analysis — never commit (hundreds of MB).
-# Drop them under firmware/ (see firmware/README.md); only that README is tracked.
-firmware/*
-!firmware/README.md
+# GL firmware lives in the mudi-emu submodule (tools/mudi-emu/firmware, ignored there). Never
+# commit firmware (hundreds of MB); an older checkout's firmware/ drop folder stays ignored.
+/firmware/
 *.img
 
-# Scratch dump older copies of reference/4.10/re-tools/strrefs.py wrote to the cwd.
+# Scratch dump older copies of the RE tools' strrefs.py wrote to the cwd.
 seg.bin
+node_modules/

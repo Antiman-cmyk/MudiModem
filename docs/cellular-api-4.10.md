@@ -1,27 +1,29 @@
-# GL firmware 4.10 — the cellular data contract MudiModem 2.x is built on
+# GL firmware 4.10 — the cellular data contract MudiModem is built on
 
 Every shape below was verified in the official `e5800-4.10.0_release5-1092` image
 (plain-source Lua/JS quoted where it exists; `strings`/`nm` on binaries otherwise) and is
 the ONLY firmware contract the code knows. Marks: 🟢 read in source · 🟡 binary strings ·
-🔴 pin on a live box (listed at the end). Reference copies of the GL files live in
-`reference/4.10/`.
+🔴 pin on a live box (listed at the end). Reference copies of the GL files live in mudi-emu
+(`tools/mudi-emu/reference/e5800-4.10.0/`, checked against the image by `mudi-emu reference check`).
 
 ## 1. Websocket (`/ws`) — status, never RF
 
-`oui-ws.lua` (🟢 `reference/4.10/oui-ws.lua`): on `{"cmd":"subscribe","name":"<mod>.<ev>"}`
+`oui-ws.lua` (🟢 mudi-emu `reference/e5800-4.10.0/oui-ws.lua`): on `{"cmd":"subscribe","name":"<mod>.<ev>"}`
 it sends ONE seed frame from `dofile('/usr/share/gl-ngx/websocket/<mod>.lua')[<ev>]()`, then
 forwards every later frame that `gl-ngx-session` broadcasts under that `name`. Frames are
 `{name, data}` and land in the SPA's Vuex `statusMap`; components read them with
 `this.$store.getters.moduleStatus(name)`. The menu entry's `global_sockets` are subscribed at
 login, for every page.
 
-Only three GL cellular names exist (🟢 `websocket-cellular.lua`):
+Three GL cellular names have seed modules (🟢 `websocket-cellular.lua`); a fourth,
+`cellular.dial_status`, is pushed by `libcmstate_manager.so` ("Push dial websocket status
+successfully" 🟡) without a seed — unused by MudiModem:
 
 | name | source | shape |
 |---|---|---|
 | `cellular.modems_info` | `cellular.modem info` passthrough | `modems[]{bus, name, vendor, type (0 = built-in), band{LTE[],"NR-SA"[],"NR-NSA"[]}, sim_slot_num, slot_support_esim[], supports_ip_type[], …}` |
 | `cellular.modems_status` | `cellular.modem status` ⋈ `cellular.sim status` ⋈ `cellular.network status` | `modems[]{bus, current_sim_slot, slot_switch_status, slot_switch_enable, status, dial_enable, simcard[]{slot, status, dial_status, technology, strength, type, apn, iccid, name, pin_counter, traffic_total, traffic_threshold, unit}}` |
-| `cellular.networks_info` | `cellular.network info` ⋈ `cellular.sim info` | `networks[]{bus, slot, carrier, apn, apn_list[], iccid, imsi, mcc, mnc, phone_number, ip_type, network_mode, network_interface}` |
+| `cellular.networks_info` | `cellular.network info` ⋈ `cellular.sim info` | `networks[]{bus, slot, carrier, apn, apn_list[], iccid, imsi, mcc, mnc, phone_number, ip_type, network_mode, network_interface, ambr_dl, ambr_ul, ipv4{ip, netmask, gateway, dns}, ipv6}` — `ambr_*` is the carrier's max bit rate in Mbps (🟢 GL's cellular-detail shows "Max bit rate dl / ul Mbps" from exactly these keys; on ubus they come from `cellular.sim status`, see §2) |
 
 Rules that follow from the merge code:
 - **`simcard[].dial_status` is `networks[].status` re-keyed** — the CONNECTION enum
@@ -38,14 +40,20 @@ Rules that follow from the merge code:
 ### 1.1 MudiModem's own sockets — the whole live path, no polling anywhere
 | name | seed (`/usr/share/gl-ngx/websocket/mudimodem.lua`) | pushed by | consumer |
 |---|---|---|---|
-| `mudimodem.collect` | `collect()` = `/tmp/mudimodem/latest.json` | collectd, every RF sample (10 s) | status strip, Tracking (+ console labels via the parent) |
-| `mudimodem.battery` | `battery()` = `/tmp/mudimodem/battery-latest.json` | collectd, every battery sample (20 s) | Battery tab |
+| `mudimodem.collect` | `collect()` = `/tmp/mudimodem/latest.json` | the collector (`mudimodemd`), every RF sample (10 s) | status strip, Tracking (+ console labels via the parent) |
+| `mudimodem.battery` | `battery()` = `/tmp/mudimodem/battery-latest.json` | the collector, every battery sample (20 s) | Battery tab |
 | `mudimodem.event` | `event()` = `{}` (history comes over RPC) | backend `append_event` (Keep/Revert/lock) and `mudimodem-revert` (auto-revert) | Tracking timeline |
 
 Pushes are `ubus call gl-session notify '{"name":…,"data":…}'` — the bus `cellular_manager`
 itself uses for `cellular.modems_status` (🟢 `gl-ngx-session.lua`, 🟡 `libcmstate_manager.so`);
-`notify` is a no-op inside gl-session when no browser is attached, so it is called
-unconditionally. `get_history` / `get_battery_history` remain only for the one-time window
+`notify` is a no-op inside gl-session when no browser is attached; the collector probes
+`has_websocket` (every 30 s idle / 60 s attached) and skips the push while nobody listens.
+**Wire shape** (🟢 `usr/sbin/gl-ngx-session` `notify` = `cjson.encode(msg)` of the eco.ubus-decoded
+message; reproduced end to end on the image's ubus/ubusd/eco in `test/collectd-emu.test.py`): a
+pushed frame has **no `null` keys** (absent instead) and an **empty array arrives as `{}`** (a
+no-service sample's `signals`). The /ws seed reads `latest.json` and keeps both. Page code must
+therefore test `x == null` and `Array.isArray(x)`, never `=== null` / `.length` on a sample field.
+`get_history` / `get_battery_history` remain only for the one-time window
 preload and range backfill; each chart keeps a 30–45 s stall guard that fetches the tail once
 if pushes stop (websocket reconnect, collector restart). The 1.x `collectd.sock` Unix socket is
 gone with the LCD renderer it fed.
@@ -54,13 +62,15 @@ gone with the LCD renderer it fed.
 
 | call | notes |
 |---|---|
-| `cellular.modem status` (no args) | `{modems:[{bus, current_sim_slot, slot_switch_enable, …}]}` — GL's canonical form; `lib/functions/modem.sh get_current_sim_slot`, `websocket/cellular.lua` and `internet.js` all parse `.modems[]`. **The only shape the code accepts** (`cellular_compat.pick_modem` / Lua `pick_modem` select the built-in modem by `bus == "cpu"` / `type == 0`). The bus-scoped call form is never used. |
+| `cellular.modem status` (no args) | `{modems:[{bus, current_sim_slot, slot_switch_enable, …}]}` — GL's canonical form; `lib/functions/modem.sh get_current_sim_slot`, `websocket/cellular.lua` and `internet.js` all parse `.modems[]`. **The only shape the code accepts** (`cellular_compat.lua` `pick_modem` and the plugin's own `pick_modem` select the built-in modem by `bus == "cpu"` / `type == 0`). The bus-scoped call form is never used. |
 | `cellular.modem info` (no args) | `modems[]` with `.band` (module-supported sets) |
-| `cellular.sim info` (no args) | `sims[]{slot, mcc, mnc, iccid, …}` — PLMN for the sub_id resolver |
+| `cellular.sim info` (no args) | `sims[]{slot, bus, iccid, imsi, mcc, mnc, phone_number}` — PLMN for the sub_id resolver. **No `ambr_*`** (🟢 run: GL's `cellular_manager` under mudi-emu) |
+| `cellular.sim status` (no args) | `sims[]{slot, bus, iccid, carrier, name, status, ambr_dl, ambr_ul, strength, type, technology, apn}` for both slots (🟢 run, same harness; built by `libcm_sim.so` `fill_ubus_sim_status`). `ambr_*` = the carrier's max bit rate in Mbps: GL's `rg650v_get_ambr` parses `+QNWCFG: "lte_ambr","<apn>",<dl>,<ul>` (kbps, ÷1000) and `+QNWCFG: "nr5g_ambr","<dnn>",<unit>,<dl>,<unit>,<ul>` (value × 4^(unit−1) kbps, ÷1000) — both formats are in the baseband (`modem.b24`). GL takes the line whose APN is the SIM's data APN (`AT+CGDCONT?`, also `apn` here) and skips `ims`; with no APN known it reports no `ambr_*` at all (🟢 run). `test/gl-real.test.py` pins all of this. The speed test records them per result |
 | `cellular.network info` | `networks[]{bus, slot, carrier, …}` — carrier/identity, read every 60 s by collectd |
-| `cellular.network cell_info {"bus":"cpu","slot":N}` | `{network_type, tac, cell_id, signal[]{ca, network_type, band, earfcn, pci, bandwidth, rsrp, rsrq, sinr, rssi, rscp, ecio, snr, rsrp_level…snr_level (7), strength}}` — EVERY row carries `network_type` and `pci` (🟢 handler `libcm_network.so` @0x8284, both row emitters @0x88d4/@0x8ab0, ≤5 rows). EN-DC: QCAINFO `PCC` = LTE anchor → row 4, `SCC` lines whose band token starts with `N` → row 51 (`libcm_modem.so` parse_qcainfo_line @0x27bd4), cell 51; plain LTE CA → 41. ⚠️ When QCAINFO yields no carriers the handler emits ONE fallback row from the QENG servingcell struct (LTE-anchor band/pci/earfcn) stamped with the CELL's code — `cellular_compat._row_network_type` re-tags an NR-coded row on an E-UTRA channel as LTE. Top-level code: `modem_network_mode_to_public_code` (`libcmutils.so` table @0x10db7: 6→4, 7→41, 8→51, 9→5). **Executes `AT+QENG`/`AT+QCAINFO` on every call** (🟢 `libcm_modem.so` quectel_get_qcainfo_signal @0x2710c: templates @0x271dc/@0x274ec; no `AT+QNWINFO` anywhere) — collectd is the only caller, at 10 s, and everything else (speed test, cell lock) reuses its `latest.json` while it is < 30 s old |
+| `cellular.network cell_info {"bus":"cpu","slot":N}` | `{network_type, tac, cell_id, signal[]{ca, network_type, band, earfcn, pci, bandwidth, rsrp, rsrq, sinr, rssi, rscp, ecio, snr, rsrp_level…snr_level (7), strength}}` — EVERY row carries `network_type` and `pci` (🟢 handler `libcm_network.so` @0x8284, both row emitters @0x88d4/@0x8ab0, ≤5 rows). EN-DC: QCAINFO `PCC` = LTE anchor → row 4, `SCC` lines whose band token starts with `N` → row 51 (`libcm_modem.so` parse_qcainfo_line @0x27bd4), cell 51; plain LTE CA → 41. Where the numbers come from (🟢 run: GL against a model fed variant lines, mudi-emu): the PCC row's RSRP/RSRQ/SINR come from `QENG servingcell`, QCAINFO gives its bandwidth only; an SCC row takes RSRP/RSRQ (+RSSI on LTE) from its QCAINFO line and **never a SINR** (-32768, LTE or NR); NR lines are read by field count (8 → pci@4, rsrp@5, rsrq@6; ≥ 9 → pci@5, rsrp@9, rsrq@10 — the baseband's 9/12-field NR SCC forms). ⚠️ When QCAINFO yields no carriers the handler emits ONE fallback row from the QENG servingcell struct (LTE-anchor band/pci/earfcn) stamped with the CELL's code — `cellular_compat.lua` `row_network_type` re-tags an NR-coded row on an E-UTRA channel as LTE. Top-level code: `modem_network_mode_to_public_code` (`libcmutils.so` table @0x10db7: 6→4, 7→41, 8→51, 9→5). **Executes `AT+QENG`/`AT+QCAINFO` on every call** (🟢 `libcm_modem.so` quectel_get_qcainfo_signal @0x2710c: templates @0x271dc/@0x274ec; no `AT+QNWINFO` anywhere). Within MudiModem collectd is the only caller (10 s); everything else (speed test, cell lock) reuses its `latest.json` while it is < 30 s old. ⚠️ It is NOT the only caller on the box: GL's own collector runs the same QENG+QCAINFO every 10 s (next row), and GL's cellular-detail page polls `modem.get_cell_info` every 20 s while it is open (🟢 `getCellInfoTimeout(2e4)`) |
+| `cellular.collect get_signals {time, slot}` / `get_traffic {bus}` / `clean_traffic {bus, slot, type}` | GL's own sampler (`libcmcollect.so`, inside `cellular_manager`): on because `e5800` is in `support_historical_signal` (🟢 `/lib/modem_data/product_baseline.json`); defaults `signal_info {interval:10, max_count:180}` (= 30 min, RAM only) written to `/etc/config/collection.json` only when that file is missing (🟡 `init_collection_config`). 🟢 **Run, not read**: GL's own `cellular_manager` under emulation (`mudi-emu up`, the RG650V model on `/dev/smd9`) samples **both SIMs** every 10 s (`AT+QUIMSUB=1`, QENG + QCAINFO, `AT+QUIMSUB=2`, QENG + QCAINFO) and `get_signals {bus, time, slot}` returns `{signals:[{slot, timestamp (epoch s), signal:[{ca, network_type, band, bandwidth, pci, earfcn, rsrp, rsrq, rssi, sinr, rscp, ecio, snr}]}]}` — one entry per 10 s, the newest ≤ 10 s old — whose rows are exactly `cell_info`'s rows **without** the `*_level` / `strength` keys, and no cell_id / TAC (EN-DC: the same two rows, 4 + 51; no service: one row, network_type 0, every metric -32768). Traffic (`AT+QGDCNT?` / `AT+QGDNRCNT?` → `/tmp/gl_modem_traffic/<bus>/total_sim<N>`, one `%llu`) is sampled only while a data call is up (QMI; `get_traffic` is `{}` in emulation). **mudimodemd's RF source** since 3.0: get_signals each tick, `cell_info` only for the identity (serving carrier changed, once a minute, or no fresh row) — `test/gl-real.test.py` drives it against GL's stack |
 | `modem.CPU.AT get_result_AT {cmd, timeout, sub_id}` | provider `/usr/bin/modem_AT` (spawned per bus by `cellular_manager`); the only path with an explicit `sub_id` — used for `policy_band` / `ue_capability_band` / `QNWLOCK` reads. **`sub_id` = slot (1 or 2) for the built-in modem** 🟢 — see §2.1 |
-| `gl-session notify {name, data}` / `has_websocket` / `call {module, func, params}` | push bus; browser-attached probe; root loop-back into `/rpc` (`is_local` + `glinet` header) — how the watchdog restores bands from a shell |
+| `gl-session notify {name, data}` / `has_websocket` / `call {module, func, params}` | push bus; browser-attached probe; root loop-back into `/rpc` (`is_local` + `glinet` header; its HTTP client gives up after 30 s) — how the watchdog restores bands from a shell. mudimodemd's cell scan makes the same loop-back request itself, with a 330 s timeout |
 
 ### 2.1 `sub_id` ↔ slot, settled from GL's own code (2026-10-28) 🟢
 - `libcm_network.so` `cell_info` handler @0x8384–0x86e4: slot (parsed, else
@@ -85,10 +95,11 @@ No-service `cell_info`: `network_type 0`, empty `cell_id`/`tac`, `signal[]` rows
 map), `formatBand {4:"B",41:"B",5:"n",51:"n"}`, `hasRssi [4,41,51]` (RSSI exists for LTE and
 for NSA's LTE anchor, never for SA). Two live captures agree: issue #5's NSA sample was `51`
 with an LTE B3 anchor (EARFCN 1700); the EU unit's SA n78 sample was `5`. ⚠️ GL's OTHER map
-(`getNetworkType`) has 5/51 swapped — a GL bug; physics + captures win. Ours:
+(`getNetworkType`: `{1:GSM, 2:WCDMA, 3:LTE, 4:LTE, 41:LTE, 5:NR5G-NSA, 6:EVDO, 51:NR5G-SA}`) has 5/51
+swapped and 2/3 shifted — a GL bug; physics + captures win. Ours:
 `1 GSM · 2 2G · 3 3G · 4 LTE · 41 LTE+ · 5 NR5G-SA · 51 NR5G-NSA · 6 EVDO`.
 
-## 3. The normalized sample (`src/lib/cellular_compat.py` → every consumer)
+## 3. The normalized sample (`src/lib/cellular_compat.lua` → every consumer)
 
 ```json
 {"t": 1700000000000, "slot": 1, "registered": true, "carrier": "CHN-UNICOM",
@@ -102,15 +113,21 @@ with an LTE B3 anchor (EARFCN 1700); the EU unit's SA n78 sample was `5`. ⚠️
  "rsrp_level": 4, "rsrq_level": null, "sinr_level": null}
 ```
 `signals[]` is the full CA picture (`signal[0]` = PCC, others SCCn); the flattened keys are
-the PCC aliases so single-carrier consumers (LCD, strip, tracking, speedtest) need no CA
-awareness. Written to `/tmp/mudimodem/samples.jsonl` + `latest.json`, broadcast on
-`collectd.sock`, pushed as `mudimodem.collect`.
+the PCC aliases so single-carrier consumers (strip, tracking, speedtest, cell lock) need no CA
+awareness. The collector adds `rx_kbps` / `tx_kbps`: the cellular data device's kbit/s since the
+previous RF tick, from `/sys/class/net/<dev>/statistics/{rx,tx}_bytes`, the device re-resolved from
+`network.interface dump` (the non-`_6` `proto: rmnet` interface's `l3_device`) at most once a
+minute; absent on the first tick, when no cellular interface exists, and across a device change or a
+counter reset (reconnect). The connectivity probe's result rides on the first sample after it:
+`ping_ms` (round trip, integer ms) or `ping_lost: true` (no target answered); about one sample in
+three carries one (§5, connectivity). Written to `/tmp/mudimodem/samples.jsonl` + `latest.json` and
+pushed as `mudimodem.collect`.
 
 ## 4. GL web RPC used by MudiModem (undotted `modem.*`, browser- or glc-callable)
 
 | method | args (exactly what GL's own UI sends) | used by |
 |---|---|---|
-| `get_band_config` | `{bus, slot}` → `{band_enable, network_mode:"AUTO"\|"NR5G"\|"LTE", band_filter_mode (echo), supports_band, band_list?}`. **Not a ubus method**: `glc` `dlsym()`s the C function `get_band_config` exported by `libcm_modem.so`, which reads `cellular.modem get_feature_config` and re-keys it (`reference/4.10/re-notes.md`). glc is therefore the only server-side transport. | backend `get_bands` (via glc) |
+| `get_band_config` | `{bus, slot}` → `{band_enable, network_mode:"AUTO"\|"NR5G"\|"LTE", band_filter_mode (echo), supports_band, band_list?}`. **Not a ubus method**: `glc` `dlsym()`s the C function `get_band_config` exported by `libcm_modem.so`, which reads `cellular.modem get_feature_config` and re-keys it (mudi-emu `docs/re-notes-4.10.md`). glc is therefore the only server-side transport. | backend `get_bands` (via glc) |
 | `set_band_config` | `{bus, slot, band_enable, network_mode, band_list:{LTE:[], "NR-NSA":[], "NR-SA":[]}}` — no `band_filter_mode`; mode `LTE` ⇒ NR lists empty; `band_enable:false` ⇒ no `band_list` (filtering off = GL's default) | backend `set_bands` / watchdog restore + panic |
 | `get_cell_tower {bus}` / `set_cell_tower {bus, slot, lock, network_type, pci, freq, scs?, band?, …}` / `scan_cell_tower {bus, slot}` / `get_operator_config {bus, slot}` | cell lock (glc). 🟢 read in the image (`libcm_network.so` set_cell_tower @0x11e18 → `libcm_modem.so` quectel_set_tower @0x2adbc): the handler reads bus (required, else 20002001), slot, lock, network_type, pci, freq, band, scs, mnc, mcc, srxlev, squal, bandwidth, cellid, tac, carrier; the record lives in `/etc/config/cellular/slot_map.json` → `slot_feature.<name>.tower` (deleted on unlock). **lock=false clears ONE family, chosen by `network_type`** (`"NR5G"` → `AT+QNWLOCK="common/5g",0`, anything else → `"common/4g",0`; skipped when that family reads unlocked), then `save_ctrl,0,0` + `AT+QEFSSYNC=1`. lock=true: 5G `QNWLOCK="common/5g",pci,freq,scs,band`, 4G `"common/4g",1,freq,pci`, then `save_ctrl,1,1`. **Neither lock nor unlock sends `mode_pref`/`nr5g_disable_mode`** (no such reference in quectel_set_tower — the 4.8-era "lock forces mode_pref" is the module's own behaviour, not GL's). **Success (lock or unlock) sleeps 2 s then `cellular.cm cm_start_dial {bus, slot, source:9}` — a redial.** `slot != current_sim` → record saved only, no AT. Errors: 20002044 lock, 20002050 unlock, 20002052 save-only. |
 | `get_sim_config {slot, bus, iccid}` / `set_sim_config {… apn, protocol, auth, username, password, dial_number, ip_type:Number, roaming, rrc_seg, ttl, ttl_ipv6, hl, mtu}` | SIM tab (read-modify-write; **no band fields any more**) |
@@ -122,7 +139,28 @@ awareness. Written to `/tmp/mudimodem/samples.jsonl` + `latest.json`, broadcast 
   `oui.ubus.call` is still a cosocket (never `pcall` it) and now proxies through
   `/var/run/ngx-ubus-proxy.sock` to `gl-ngx-session` (optional 4th arg `timeout` ms).
 - `gl_modem` is a one-shot CLI now; `cellular_manager` → `modem_AT` is the AT poller.
-  `/dev/at_mdm0` (bridged by `port-bridge at_mdm0 at_usb0 0`) remains our own AT channel.
+  `/dev/at_mdm0` (bridged by `port-bridge at_mdm0 at_usb0 0`) remains the console's fallback channel.
+- **nginx runs ONE worker** (🟢 `etc/nginx/nginx.conf` `worker_processes 1`; GL's
+  `lib/functions/gl_util.sh set_nginx_thread` rewrites it only for other models). Anything that
+  blocks inside an oui plugin (`os.execute`, `io.popen`) stalls every `/rpc` and `/ws` client of
+  the admin for that long; cosocket calls yield. `location /cgi-bin/` (glc) has
+  `fastcgi_read_timeout 300` (🟢 `etc/nginx/conf.d/gl.conf`), so no glc call — `scan_cell_tower`
+  included — can outlast 5 minutes, whatever timeout the browser sets.
+- **i18n** (🟢 `www/js/app.*.js`): vue-i18n 8.28.2 as `window.$i18n` (`fallbackLocale:"en"`,
+  initial locale from `navigator.language`); `$loadLang` calls `ui.load_locales {locale}`, which
+  merges every `/www/i18n/*.<locale>.json`, and **retries forever on failure** — one malformed file
+  there hangs the admin. Bundled: en, de, es, it, ja, zh-cn, zh-tw; `www/js/langs-label.json` lists
+  82 more that `ui.update_langs` downloads. A chunk can add strings with
+  `window.$i18n.mergeLocaleMessage(locale, {...})`; a menu title can be `{"translate": "<key>"}`
+  (`displaymanagement.json`).
+- **Runtimes in the image** (🟢 `usr/lib/opkg/info`, survive upgrades): lua 5.1 (LNUM) and 5.4,
+  **lua-eco 3.19.1** (`/usr/bin/eco`; `eco.ubus` add/subscribe/listen/notify/call, `eco.time`,
+  `eco.sys`, `eco.file`, `eco.http`+`eco.ssl`, `eco.socket`, `eco.termios`; GL's own
+  `/usr/sbin/gl-ngx-session` is an eco script), libubus-lua, uloop, luaposix, luasocket, lsqlite3,
+  lua-cjson (5.1 + 5.4), sqlite3-cli, curl, jsonfilter. No Python.
+- `modemsignallog` (GL's old signal-log page, menu level 0) is dead on 4.10: it reads flat
+  `network_type`/`rsrp` from `modem.get_signals` (4.10 rows are nested under `signal[]`) and the
+  dead `cellular.sims_status` (🟢 its chunk).
 - busybox (1.36.1, applet list read by running it under qemu) has no `pkill` (use `pgrep` +
   `kill`); `pgrep -f` is regex (the `[t]` self-exclusion trick works), `sleep` takes
   fractions, `gzip -t`, `readlink -f`, `flock`, `nohup`, `timeout`, `start-stop-daemon` are
@@ -134,7 +172,7 @@ awareness. Written to `/tmp/mudimodem/samples.jsonl` + `latest.json`, broadcast 
 - `port-bridge at_mdm0 at_usb0 0` (`/usr/bin/port-bridge`): its modem→USB thread
   (`modem_to_usb_bridge_*`) opens `at_mdm0`, then loops `poll()` → `read()` → write to the USB
   port, holding its mutex only around each call — it reads `at_mdm0` continuously, USB host
-  attached or not. A reply that lands after `mudimodem-at.py` gave up is therefore normally
+  attached or not. A reply that lands after the direct port (`mudimodemd/atport.lua`) gave up is therefore normally
   consumed by port-bridge, not left for the next invocation (the AT tool keeps only the known
   minutes-long commands "owed"). ⇒ The AT console no longer reads this port in normal operation:
 - `modem_AT` (`/usr/bin/modem_AT`, gl-sdk4-cellular 2026.236; `modem.CPU.AT get_result_AT
@@ -147,11 +185,37 @@ awareness. Written to `/tmp/mudimodem/samples.jsonl` + `latest.json`, broadcast 
   CFUN, COPS, QSCAN, QUIMSLOT, CLCK/CPIN/CPWD, EGMR, …) triggers `ubus call cellular.status
   get_event` so GL's state manager refreshes. GL's own web AT console
   (`libcm_network.so send_at_command` @0x14230) goes through it with `source_flag 1`,
-  `sub_id = slot` and a 4095-byte reply buffer — MudiModem's `at_console` now sends the same.
+  `sub_id = slot` and a 4095-byte reply buffer — MudiModem's console sends the same (from
+  mudimodemd's AT queue, `src/lib/mudimodemd/atq.lua`; the plugin's `at_console` forwards to it).
+- **Signal levels** (`rsrp_level` / `rsrq_level` / `sinr_level` in `cell_info`, 1–4, 0 = no value):
+  🟢 measured by feeding GL's own `cellular_manager` every value through the fake modem (emulation).
+  RSRP ≥ −100 → 4, ≥ −105 → 3, ≥ −110 → 2, else 1; SINR ≥ 12 / 6 / 0; RSRQ NR (row type 5, 51)
+  ≥ −12 / −16 / −20, LTE (4, 41) ≥ −6 / −10 / −14 — per ROW, so an EN-DC LTE anchor uses LTE's.
+  `cellular_compat.with_levels` reproduces it for `get_signals` rows.
 - `cell_info` failure reply: `{"ret": <code>, "resp": "<text>"}` and no `network_type`
   (handler @0x85dc–0x8624) — what `cellular_compat.cell_info_failed` keys on.
-- GL's opkg feed (`/etc/opkg/distfeeds.conf`) carries `python3-light 3.11.7-1`; every module
-  MudiModem's Python imports is in it (checked by importing them with that interpreter).
+- **Connectivity: GL already tracks it, we keep the history.** 🟢 GL's multi-WAN (`kmwan`, a
+  kernel module + `etc/init.d/kmwan`) tracks every WAN member, the modem's included:
+  `lib/functions/modem.sh generate_kmwan_config` adds the modem interface as a `passive` member
+  whose `tracks` are `ping,<ip>` for each `glconfig.general.track_ip` (the "tracking IP" list of
+  GL's Multi-WAN page, rpc `kmwan` `track_ipv4`; per-region defaults in
+  `etc/uci-defaults/15_fix_glconfig_track_ip`: 1.1.1.1, 8.8.8.8, 208.67.222.222/220.220, or
+  Alibaba/Tencent DNS when `country_code` is CN). The verdict is a boolean per interface in
+  `/proc/gl-kmwan/config` (`<iface>:<status>` lines, as `usr/lib/lua/gl/kmwan.lua` parses them);
+  no latency, no history. GL's own modem check (`__check_modem_kmwan_network`) is
+  `/bin/ping -I <data ifname> -c 1 -W 1 <ip>` over each tracking IP until one answers.
+  mudimodemd's probe (`src/lib/mudimodemd/link.lua`) does exactly that — the cellular
+  `l3_device`, GL's tracking IPs (up to 3), `-W 2` — every 30 s, every 10 s while failing; two
+  misses in a row after the link was seen working = an `Offline` event (kind `link`), the next
+  reply `Back online` with `secs`. The probe leaves the box only over the cellular device, so it
+  measures that link even while wired WAN carries the traffic. ~1 KB of ICMP per minute.
+- **Modem crash dumps** 🟢: `/etc/init.d/gl_check_crash` (START=99) runs
+  `/usr/bin/check_modem_crash.sh` ONLY when `AT+QCFG="modemrstlevel"` and `"aprstlevel"` are both
+  1 (the modem restarts on its own instead of taking the AP down); it then enables remoteproc
+  coredumps and, every 60 s, moves `/data/vendor/ramdump/*` into a freshly re-created
+  `/data/vendor/modem_crash_log/`. mudimodemd lists that directory once a minute: a changed
+  listing = one `Modem crash` event (kind `modem`); the first look after boot only remembers it
+  (`/tmp/mudimodem/crash-seen`). Without the directory (other reset levels) there is no event.
 - `quec_battery` (START=04) actively manages `vreg/charge_en/hiz_mode` on the same sysfs
   nodes `glbattlimit` writes. Read in the binary: `thermal_battery_state_change →
   set_sgm41542s_func` writes `vreg = full_volt_mv*1000` — **4180 mV when warm, charge
@@ -163,11 +227,18 @@ awareness. Written to `/tmp/mudimodem/samples.jsonl` + `latest.json`, broadcast 
 
 ## 6. What the image settled, and the short list that only a running box can answer
 
+Settled by RUNNING GL (2026-11-02, `mudi-emu up`: the image's cellular_manager, modem_AT
+and glc under qemu against an RG650V model that logs every AT command): `get_signals` (§2), the
+signal levels (§5), `set_band_config` per slot and the dial-time band restore
+(`docs/knowledge.md` §4.2). Settled from the baseband (`NON-HLOS_RG650VNA01AC.bin`, FAT16 →
+`image/modem.b24`; `mudi-emu extract-baseband`): the `QENG` neighbour formats (LTE + WCDMA
+only), `nr5g_disable_mode` (0-2, readable), `+QGDCNT: %llu,%llu`.
+
 Settled from the image (second pass, 2026-09-02):
 - **`cellular.modem status` wrapper:** GL's own `lib/functions/modem.sh get_current_sim_slot`
   parses the NO-ARG form as `@.modems[@.bus='…'].current_sim_slot`, as does `websocket/
   cellular.lua` and `internet.js`. The code calls it with NO arguments and accepts ONLY that
-  `modems[]` form (`cellular_compat.pick_modem` / Lua `pick_modem` select the built-in modem by
+  `modems[]` form (`cellular_compat.lua` `pick_modem` and the plugin's own `pick_modem` select the built-in modem by
   `bus == "cpu"` / `type == 0`); no flat-object shape is parsed.
 - **`network_type` enum:** §2 (GL's own maps + two live captures).
 - **`set_band_config` applies to the modem AND redials** 🟢 (`libcm_modem.so` @0x223fc): it
@@ -181,9 +252,9 @@ Settled from the image (second pass, 2026-09-02):
   string into `AT+QNWPREFCFG="mode_pref",%s` (≤15 bytes) — so a non-enum value is reachable by
   construction (our `mode_raw` passthrough) even though GL's own writers only ever store
   AUTO/NR5G/LTE. The dropped-reply handling in the UI (Keep/Revert offered) covers the redial.
-- **Backlight:** the E5800 DTB in `boot.img` (`model = "GL.iNet E5800, …"`) puts the
-  `pwm-backlight` node at `/soc/backlight` → sysfs `soc:backlight`, 120-entry brightness table
-  (= the 20..120 range the LCD tab uses). `/proc/device-tree/model` contains `E5800`.
+- **Device tree:** the E5800 DTB in `boot.img` says `model = "GL.iNet E5800, …"`, so
+  `/proc/device-tree/model` contains `E5800` (the install guard). (Its `pwm-backlight` node at
+  `/soc/backlight` mattered only to the 1.x LCD renderer, which is gone.)
 - **Charger/gauge hardware is the 4.8 set:** DTB nodes `sgm41542S`, `sgm,sgm41600`,
   `cellwise,cw2217`, `qcom,battery-charger`, `awinic,aw35615` — the same drivers whose sysfs
   (`online/status/charge_type`, mA `current_now`) was measured live on 4.8; kernel line 5.15.170
@@ -199,11 +270,23 @@ Settled from the image (second pass, 2026-09-02):
    it existed on 4.8 too, where glbattlimit demonstrably held). The *value* conflict is
    settled from the image (§5: glbattlimit hands GL's own vreg back); only how often
    quec_battery re-asserts while gated is runtime.
-3. `cellular.collect` / `modem.get_signals` cadence — `interval`/`max_count` come from a
-   runtime-generated `/etc/config/collection.json`; only matters for the optional cheaper
-   signal source, nothing depends on it.
+3. ~~`cellular.collect get_signals` freshness / shape~~ — settled by running GL's own
+   `cellular_manager` (§2 row; `test/gl-real.test.py`).
 4. `get_band_config` response extras (`supports_band`, `band_filter_mode` echo) — keys exist
    in `libcm_modem.so`; the code ignores extras either way.
+5. How long `scan_cell_tower` really takes — it must finish inside the 300 s glc timeout (§5).
+6. The nginx worker count on a running box (`ps | grep "nginx: worker"`) — the image says 1.
+7. `mudimodemd` on a real box: `ubus call mudimodem health` answers and `rf_samples` grows by
+   ~6/min (`tools/verify.sh` steps 7, 8c, 8d1, read-only). Everything it calls and writes is
+   covered in emulation on the image's own eco/ubusd; only the live process is runtime — plus
+   the scan's loop-back into GL's real `/rpc` (emulated by a fake HTTP endpoint), which the
+   next scan someone runs on a box confirms, and the first Apply / Revert now on a box after
+   3.0 (the daemon arming the watchdog; restore-now --reconcile clearing GL's store) — both
+   drilled end to end in emulation (`test/change-emu.test.py`).
+8. The connectivity probe on a box: `ping -I <rmnet_dataN>` from mudimodemd answers like GL's
+   own check (`ubus call mudimodem health` → `link: "up"`, `link_probes` growing, `link_lost`
+   near 0), and the names a real modem crash leaves in `/data/vendor/modem_crash_log/`
+   (any change to the listing counts, so the names only matter for the docs).
 
 Closed by binary analysis (was "needs `ubus -v list`"): **band config has no dotted ubus
 object to call directly** — `get/set_band_config` are in-process C functions reached through

@@ -1,5 +1,5 @@
 -- On-box test for mudimodem.get_battery_history. The backend pulls oui.ubus ->
--- resty.http which indexes ngx at load, so we stub ngx (CLAUDE.md §8).
+-- resty.http which indexes ngx at load, so we stub ngx (docs/knowledge.md §7).
 -- get_battery_history touches no ubus — it only reads battery.jsonl under
 -- MUDIMODEM_HIST.
 -- Run: MUDIMODEM_HIST=/tmp/mmbat-test lua test/backend-battery-history.test.lua

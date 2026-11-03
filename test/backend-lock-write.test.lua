@@ -9,6 +9,8 @@ local no_plmn = false      -- cellular.sim info carries no mcc/mnc (SIM searchin
 local lock5_reply = '\r\n+QNWLOCK: "common/5g",0\r\n\r\nOK\r\n'
 local lock4_reply = '\r\n+QNWLOCK: "common/4g",0\r\n\r\nOK\r\n'
 local setfeat_calls = {}
+local job_calls = {}
+local daemon_arm, daemon_restore = nil, nil     -- nil: mudimodemd absent (the in-process fallback)
 package.loaded["oui.ubus"] = {
   call = function(object, method, params)
     if object == "modem.CPU.AT" and method == "get_result_AT" then
@@ -34,6 +36,28 @@ package.loaded["oui.ubus"] = {
     elseif object == "cellular.sim" and method == "info" then
       if no_plmn then return { sims = { { slot = 1, mcc = "", mnc = "" } } } end
       return { sims = { { slot = 1, mcc = "310", mnc = "260" } } }
+    elseif object == "mudimodem" then          -- mudimodemd (scan job, change_arm, restore job)
+      job_calls[#job_calls + 1] = { method = method, params = params }
+      if method == "change_arm" then
+        if daemon_arm == nil then return nil, "not found" end           -- daemon absent: fallback
+        if daemon_arm then local f = io.open(ARMED, "w"); f:write("77"); f:close(); return { armed = true } end
+        return { armed = false, error = "revert watchdog failed to arm" }
+      end
+      if method == "job_start" then
+        if params.kind == "restore" then
+          if daemon_restore == nil then return nil, "not found" end
+          return { id = 10 }
+        end
+        return { id = 9 }
+      end
+      if method == "job_wait" then
+        if params.id == 10 then
+          if daemon_restore == "slow" then return { done = false, pending = true, id = 10, kind = "restore" } end
+          os.remove(PENDING); os.remove(ARMED)           -- what restore-now --reconcile did
+          return { done = true, id = 10, ok = true, reverted = true, gl_reconciled = daemon_restore == true }
+        end
+        return { done = false, pending = true, id = params.id, kind = "scan" }
+      end
     end
     return {}
   end
@@ -286,5 +310,49 @@ assert(M.scan_cells({}).error:find("no active SIM"), "scan_cells must refuse wit
 assert(M.set_bands({ sa = { 71 } }).error:find("no active SIM"), "set_bands must refuse without a slot")
 for _, c in ipairs(glc_calls) do assert(not c:find("set_cell_tower") and not c:find("scan_cell_tower") and not c:find("set_band_config"), "nothing may be written without a slot") end
 assert(not io.open(PENDING, "r"), "no pending may remain")
+
+-- 12. The scan is a mudimodemd job for the ACTIVE slot (minutes long; GL's scan_cell_tower is
+--     called by the daemon, never inline here): {pending, id} comes back for job_result.
+no_slot = false; job_calls = {}; glc_calls = {}
+local sc = M.scan_cells({})
+assert(sc.pending and sc.id == 9, "scan comes back pending with the job id")
+assert(job_calls[1].method == "job_start" and job_calls[1].params.kind == "scan" and job_calls[1].params.args.slot == 1,
+       "a scan job for the active slot")
+for _, c in ipairs(glc_calls) do assert(not c:find("scan_cell_tower"), "the plugin never scans inline") end
+
+-- 13. With mudimodemd running: the watchdog is armed by the daemon (no `sleep 1` holding the
+--     nginx worker, no spawn from here), and a refused arm still means no write.
+reset(); daemon_arm = true; job_calls = {}
+r = M.set_cell_lock({ rat = "5g", pci = 516, freq = 127490, scs = 15, band = 71 })
+assert(r.ok, "set_cell_lock via the daemon arm: " .. tostring(r.error))
+for _, c in ipairs(exec_cmds) do
+  assert(not c:find("sleep") and not c:find("watch"), "the daemon arms; the plugin neither spawns nor sleeps: " .. c)
+end
+assert(job_calls[1].method == "change_arm", "armed through change_arm")
+M.confirm({})
+reset(); daemon_arm = false
+r = M.set_cell_lock({ rat = "5g", pci = 516, freq = 127490, scs = 15, band = 71 })
+assert(r.error and r.error:find("failed to arm"), "a refused arm refuses the write: " .. tostring(r.error))
+for _, c in ipairs(glc_calls) do assert(not c:find("set_cell_tower"), "no write without an armed watchdog") end
+assert(not io.open(PENDING, "r"), "no pending left after a refused arm")
+for _, c in ipairs(exec_cmds) do assert(not c:find("watch"), "no fallback spawn once the daemon said no") end
+daemon_arm = nil
+
+-- 14. Revert now (cell) through the daemon's restore job: its answer verbatim, no popen, and
+--     GL's store is reconciled THERE (restore-now --reconcile), not by a glc call from here.
+reset(); daemon_arm = true
+assert(M.set_cell_lock({ rat = "5g", pci = 516, freq = 127490, scs = 15, band = 71 }).ok)
+daemon_restore = true; glc_calls = {}; popen_cmds = {}
+r = M.revert_now({})
+assert(r.ok and r.reverted and r.gl_reconciled == true and r.done, "restore job result passed through")
+assert(#popen_cmds == 0, "no restore-now popen in the worker")
+for _, c in ipairs(glc_calls) do assert(not c:find("set_cell_tower"), "the daemon reconciles GL's store") end
+-- a restore still running after one slice comes back {pending, id} for job_result
+reset(); assert(M.set_cell_lock({ rat = "5g", pci = 516, freq = 127490, scs = 15, band = 71 }).ok)
+daemon_restore = "slow"
+r = M.revert_now({})
+assert(r.pending and r.id == 10, "pending restore -> {pending, id}")
+daemon_arm, daemon_restore = nil, nil
+os.remove(PENDING); os.remove(ARMED)
 
 print("backend-lock-write.test.lua: all ok")

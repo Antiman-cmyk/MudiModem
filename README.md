@@ -11,8 +11,9 @@ MudiModem uses GL's built in modem commands to accomplish what it does so should
 
 MudiModem is a tabbed page. Every screen anchors to a persistent **live signal strip** across the top
 (RSRP, updating in real time) so you can always see what a change did to the connection. The tabs
-documented below are Tracking, Bands, Cell lock, AT console, SIM, Speedtest and Battery; there is
-also a Config tab (version / self-update). Everything live on the page is pushed by the router
+documented below are Tracking, Bands, Cell lock, AT console, Speedtest and Battery; there is
+also a Config tab (version / self-update, history-on-flash). SIM and APN settings are not here on
+purpose: GL 4.10's own Internet page covers them completely. Everything live on the page is pushed by the router
 (GL's websocket bus) — the page never polls.
 
 ### 📈 Tracking
@@ -22,7 +23,11 @@ also a Config tab (version / self-update). Everything live on the page is pushed
 Watch the radio over time. RSRP, SINR, and RSRQ share one time axis so you can see them move together,
 with lanes below showing exactly when the **band**, **cell**, or **SIM** changed — and an **event log**
 that records every change with a timestamp and who caused it (*you*, the *network*, or the safety
-watchdog). Pick a window from 15 minutes to 24 hours. Two badges on the signal strip show at a glance
+watchdog). Under the signal, a **throughput** lane (down / up) and a **ping** lane: the router pings
+out of the cellular interface every 30 s, so "signal fine but no internet" shows up, and losing and
+regaining the internet is logged with how long it lasted (as are modem crashes). Pick a window from
+15 minutes to 24 hours; the **Long term** card below keeps 30 days of hourly summaries per cell.
+Two badges on the signal strip show at a glance
 whether a **mode lock** (Auto / 4G-only / 5G-only) or a **tower lock** is in force; click either to jump
 to its tab.
 
@@ -33,7 +38,9 @@ to its tab.
 Choose which cellular bands the modem may use. Each band is colored for its **real** state — *active*,
 *permitted but not selected*, or **blocked by carrier policy** (shown and explained, but not selectable,
 because the modem will never use it ). A network-mode selector (Auto /
-5G only / 4G only) sits on top.
+5G only / 4G only) sits on top, and a **5G** selector — SA + NSA, **NSA only** or **SA only** — which
+GL's stock page does not offer. With two SIMs you can also edit the **standby SIM's** bands: they are
+stored and GL applies them the next time that SIM connects (a SIM switch or failover).
 
 Band changes are **confirm-or-revert**: applying one starts a ~60-second countdown and automatically
 rolls back unless you confirm you want to keep it — so a bad lock can't strand the cellular link you're
@@ -45,7 +52,9 @@ administering over.
 
 Pin the modem to a specific cell so it won't hand over. The tab shows your current serving cell and can
 **scan for nearby lockable cells**, listed with your **serving carrier's cells first** and **5G above
-LTE**, each with a one-click Lock. Same confirm-or-revert safety as Bands.
+LTE**, each with a one-click Lock. Same confirm-or-revert safety as Bands. A scan takes the modem
+offline for minutes; **Read neighbours** instead asks the modem once which other cells it measures
+(LTE and 5G NSA; 5G SA has no such list) and keeps the connection up.
 
 ⚠️ A kept cell lock lives in the modem's own memory and survives reboot, reflash, *and* factory reset 
 
@@ -53,7 +62,10 @@ LTE**, each with a one-click Lock. Same confirm-or-revert safety as Bands.
 
 ![AT console tab](docs/screenshots/04-at-console.jpg)
 
-A raw AT terminal to the modem, on its **own** channel so it doesn't collide with GL's polling. Alongside
+A raw AT terminal to the modem. Commands go through GL's own AT service — the same call GL's web
+console makes, addressed to the **active SIM** and queued with GL's own polling so replies never
+cross — with the modem's direct AT port only as a fallback while GL's cellular stack is down. Commands run in
+MudiModem's background service, so GL's admin pages stay responsive while the modem answers. Alongside
 it, a searchable **community command library** where every entry carries a **risk badge** — `read` (query
 only), `set` (runtime, gone on reboot), or `nv` (**writes permanent memory; survives factory reset**).
 Nothing ever runs by itself: clicking a library entry just fills the prompt, and `set`/`nv` commands stay
@@ -80,10 +92,16 @@ connected)* rather than letting you start a test doomed to fail. The history gra
 interface filter, because wired and cellular differ by enough that plotting them together would flatten
 the cellular trend into a line along the bottom.
 
+Each test runs several connections at once for a few seconds and measures the steady rate after
+TCP's slow start, so a fast 5G link is not under-read. **Quick** (2 connections, at most ~29 MB of
+data) or **Thorough** (4 connections, at most ~290 MB); the test server is Cloudflare, or your own
+**LibreSpeed** server where Cloudflare is slow or blocked. A cellular result also records the
+carrier's cap (AMBR) and says when a test ran at it.
+
 Optional **automatic background tests** on a 30 m – 24 h interval build the history while you're not
-looking; **off by default**, because each test spends about 22 MiB of your data plan. Results are
-capped at the last 500 and stored in `/etc/mudimodem`, so unlike the RF history they **survive a
-reboot**.
+looking; **off by default**, because each test spends real data (the tab shows how much a day).
+Results are capped at the last 500 and stored in `/etc/mudimodem`, so unlike the RF history they
+**survive a reboot**.
 
 ### 🔋 Battery
 
@@ -123,9 +141,10 @@ From a **root shell on the router**
 curl -fsSL https://raw.githubusercontent.com/Antiman-cmyk/MudiModem/main/install.sh | sh
 ```
 
-The installer downloads every file from GitHub, gzips the page chunks with the box's own `gzip`, and drops
-them into place — no toolchain, nothing to build. Then **reload the GL admin in your browser** and a
-**MODEM** item appears in the top navigation. There's no reboot. It refuses firmware older than 4.10.
+The installer first downloads everything it needs from GitHub (so a dropped connection leaves the
+router untouched), then puts the files in place, gzipping the page chunks with the box's own `gzip` —
+no toolchain, nothing to build. Then **reload the GL admin in your browser** and a **MODEM** item
+appears in the top navigation. There's no reboot. It refuses firmware older than 4.10.
 
 **Installing from a fork or branch** (e.g. before a change is merged upstream): point the installer at
 that tree's raw URL. The source is recorded on the box, so the Config tab's update check and
@@ -143,9 +162,9 @@ curl -fsSL https://raw.githubusercontent.com/Antiman-cmyk/MudiModem/main/uninsta
 ```
 
 **GL firmware upgrades:** leave **Keep Settings** on and MudiModem comes back with the new firmware.
-The upgrade does remove opkg packages, so on the first boot afterwards MudiModem reinstalls Python by
-itself once the router is online; live data returns a little later than the rest of the admin. With
-Keep Settings off, GL keeps nothing at all, so run the installer again.
+MudiModem runs only on what the firmware itself ships (its shell, Lua and lua-eco), so there is
+nothing to reinstall afterwards and live data is back as soon as the router has booted. With Keep
+Settings off, GL keeps nothing at all, so run the installer again.
 
 Both scripts **refuse to run against anything that isn't a GL-E5800** on firmware 4.10 or newer.
 (This tree's default source is `Antiman-cmyk/MudiModem`; the original project by kevinherzig is the
@@ -168,3 +187,24 @@ Both scripts **refuse to run against anything that isn't a GL-E5800** on firmwar
 
 The firmware contract 2.x relies on is documented in `docs/cellular-api-4.10.md`. The band model
 and AT commands are Quectel- and firmware-specific; treat other hardware as untested.
+
+## Development
+
+No router is needed to work on MudiModem. The firmware and emulation tooling is
+[mudi-emu](https://github.com/Antiman-cmyk/mudi-emu), pinned as a submodule in `tools/mudi-emu`
+(`git submodule update --init`). `tools/mudi-emu/bin/mudi-emu fetch && tools/mudi-emu/bin/mudi-emu extract`
+unpacks GL's official 4.10.0 image, and `tools/test-local.sh` runs every test suite on the dev box —
+including passes under the **router's own** Lua, busybox shell and tools via qemu, and against
+GL's own cellular stack with a modem model on its AT port — and renders every tab of the page in
+headless Chromium with GL's own theme (`tools/preview.js`). What ships where is listed once, in `manifest.txt`; `tools/deploy.sh` pushes a
+working tree to a real box over ssh when one is genuinely needed.
+
+The page is written as ES modules under `src/web` and built with esbuild (`npm ci && npm run
+build:web`) into `dist/views`, which is committed so the installer can fetch it; the router never
+builds anything. The interface follows GL's language setting — English and Simplified Chinese
+today (`src/web/locales/`).
+
+Start with `CLAUDE.md` (rules of the road), then `docs/architecture.md` (structure and the
+refactor plan), `docs/cellular-api-4.10.md` (every GL interface used, with evidence) and
+`docs/knowledge.md` (platform and modem knowledge). `docs/audit-2026-11-02.md` is the open
+improvement list; `docs/design/` and `docs/history/` are background.

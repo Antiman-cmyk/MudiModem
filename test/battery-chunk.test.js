@@ -3,11 +3,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
-const SRC = path.join(__dirname, '..', 'src', 'views', 'mudimodem-battery.js');
+const SRC = path.join(__dirname, '..', 'src', 'web', 'tabs', 'battery.js');          // source (static checks)
+const CHUNK = path.join(__dirname, '..', 'dist', 'views', 'gl-sdk4-ui-mudimodem-battery.common.js');  // what ships (eval)
 
 function loadChunk() {
   const module = { exports: {} };   // eslint-disable-line no-unused-vars
-  return eval(fs.readFileSync(SRC, 'utf8'));
+  return eval(fs.readFileSync(CHUNK, 'utf8'));
 }
 function makeVm(c, over) {
   const vm = Object.assign({}, c.data());
@@ -25,7 +26,7 @@ function seed(now, n, step, fn) {
     out.push(Object.assign({ t, cap: 70, volt: 4010, cur: -363, temp: 31.6,
       online: 0, status: 'Discharging', ctype: 'N/A', cycles: 4, health: 'Good',
       // glbattlimit's watcher exits on unplug, so an unplugged sample carries
-      // lim: 0. See read_limiter in src/sbin/mudimodem-collectd.
+      // lim: 0. See read_limiter in src/lib/mudimodemd/battery.lua.
       lim: 0, lim_gauge: null },
       fn ? fn(n - 1 - i, t) : {}));
   }
@@ -249,7 +250,7 @@ test('voltage lane is fixed to the Li-ion range but expands rather than clipping
 // cell (a full cell here reads ~86 gauge). Keying "full" off `status` inverts
 // the label exactly when the feature has something to show, which is why the
 // discriminator is the limiter's own per-sample state (lim / lim_gauge).
-// test/collectd.test.py asserts the same fixture from the collector's side.
+// test/collectd-emu.test.py asserts the same fixture from the collector's side.
 // ---------------------------------------------------------------------------
 test('chargeState reads current and online for the unambiguous states', () => {
   const c = loadChunk();
@@ -835,7 +836,7 @@ test('renderLimitCard: shows the form fields once bl has loaded', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Target slider (spec: docs/superpowers/specs/2026-07-28-charge-limit-slider-design.md).
+// Target slider (spec: docs/design/2026-07-28-charge-limit-slider-design.md).
 // The old number input accepted GUI 20-100 while the backend rejects anything
 // below GUI 50 (glbattlimit's gauge>=50 floor), so ~30% of its range was dead.
 // The slider makes that range unreachable rather than merely validated-against.
@@ -1008,7 +1009,7 @@ test('renderLimitCard: Charging stopped only when a fresh sample confirms 0 mA',
 
 // ---------------------------------------------------------------------------
 // Runtime / charge-time estimate (spec:
-// docs/superpowers/specs/2026-07-28-battery-runtime-estimate-design.md).
+// docs/design/2026-07-28-battery-runtime-estimate-design.md).
 //
 // SoC-slope based, because the box exposes NO charge_full/energy_* node - the
 // pack capacity in mAh does not exist anywhere on the device, so the obvious
@@ -1308,7 +1309,7 @@ test('the hover readout fits inside the svg height', () => {
 
 // ---------------------------------------------------------------------------
 // Chart hybrid craft (2026-07-29) — jayck88 hover/range presentation on our
-// data plane. Spec: docs/superpowers/specs/2026-07-29-battery-chart-hybrid-design.md
+// data plane. Spec: docs/design/2026-07-29-battery-chart-hybrid-design.md
 // ---------------------------------------------------------------------------
 
 test('chartBounds stretches when retained history is shorter than the selected range', () => {

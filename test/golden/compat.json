@@ -1,0 +1,3695 @@
+{
+ "cases": [
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "slot_switch_enable": true,
+       "status": 0
+      }
+     ]
+    },
+    {
+     "bus": "cpu",
+     "cell_id": "DE017C015",
+     "network_type": 5,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 78,
+       "bandwidth": 100,
+       "earfcn": 627264,
+       "pci": 142,
+       "rsrp": -94,
+       "rsrp_level": 4,
+       "rsrq": -10,
+       "rsrq_level": 3,
+       "rssi": -32768,
+       "sinr": 12,
+       "sinr_level": 3
+      }
+     ],
+     "slot": 1,
+     "tac": "DE0000"
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "slot_switch_enable": true,
+       "status": 0
+      }
+     ]
+    },
+    {
+     "bus": "cpu",
+     "cell_id": "DF30C",
+     "network_type": 51,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 3,
+       "earfcn": 1700,
+       "rsrp": -97,
+       "rsrp_level": 4,
+       "rsrq": -9,
+       "rssi": -67,
+       "sinr": 17,
+       "strength": 4
+      }
+     ],
+     "slot": 1,
+     "tac": "41"
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "slot_switch_enable": true,
+       "status": 0
+      }
+     ]
+    },
+    {
+     "bus": "cpu",
+     "cell_id": "DF30C",
+     "network_type": 51,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 3,
+       "ca": 0,
+       "earfcn": 1700,
+       "rsrp": -97,
+       "rsrp_level": 4,
+       "rsrq": -9,
+       "rssi": -67,
+       "sinr": 17,
+       "strength": 4
+      },
+      {
+       "band": 78,
+       "bandwidth": 100,
+       "ca": 1,
+       "earfcn": 627264,
+       "network_type": 5,
+       "pci": 142,
+       "rsrp": -99,
+       "rsrq": -11,
+       "sinr": 8
+      }
+     ],
+     "slot": 1,
+     "tac": "41"
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "slot_switch_enable": true,
+       "status": 0
+      }
+     ]
+    },
+    {
+     "bus": "cpu",
+     "cell_id": "DF30C",
+     "network_type": 51,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 3,
+       "bandwidth": 20,
+       "ca": 0,
+       "earfcn": 1700,
+       "ecio": -32768,
+       "ecio_level": 0,
+       "network_type": 4,
+       "pci": 61,
+       "rscp": -32768,
+       "rscp_level": 0,
+       "rsrp": -97,
+       "rsrp_level": 4,
+       "rsrq": -9,
+       "rsrq_level": 4,
+       "rssi": -67,
+       "rssi_level": 4,
+       "sinr": 17,
+       "sinr_level": 4,
+       "snr": -32768,
+       "snr_level": 0,
+       "strength": 4
+      },
+      {
+       "band": 78,
+       "bandwidth": 100,
+       "ca": 1,
+       "earfcn": 627264,
+       "ecio": -32768,
+       "ecio_level": 0,
+       "network_type": 51,
+       "pci": 142,
+       "rscp": -32768,
+       "rscp_level": 0,
+       "rsrp": -99,
+       "rsrp_level": 3,
+       "rsrq": -11,
+       "rsrq_level": 3,
+       "rssi": -32768,
+       "rssi_level": 0,
+       "sinr": 8,
+       "sinr_level": 3,
+       "snr": -32768,
+       "snr_level": 0,
+       "strength": 3
+      }
+     ],
+     "slot": 1,
+     "tac": "41"
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "slot_switch_enable": true,
+       "status": 0
+      }
+     ]
+    },
+    {
+     "bus": "cpu",
+     "cell_id": "DF30C",
+     "network_type": 51,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 3,
+       "bandwidth": 20,
+       "ca": 0,
+       "earfcn": 1700,
+       "network_type": 51,
+       "pci": 61,
+       "rsrp": -97,
+       "rsrp_level": 4,
+       "rsrq": -9,
+       "rssi": -67,
+       "sinr": 17,
+       "strength": 4
+      }
+     ],
+     "slot": 1,
+     "tac": "41"
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "slot_switch_enable": true,
+       "status": 0
+      }
+     ]
+    },
+    {
+     "bus": "cpu",
+     "cell_id": "",
+     "network_type": 0,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 0,
+       "bandwidth": 0,
+       "earfcn": 0,
+       "pci": 0,
+       "rsrp": -32768,
+       "rsrq": -32768,
+       "rssi": -32768,
+       "sinr": -32768
+      }
+     ],
+     "slot": 2,
+     "tac": ""
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "slot_switch_enable": true,
+       "status": 0
+      }
+     ]
+    },
+    {
+     "cell_id": "AB",
+     "network_type": "41",
+     "signal": [
+      {
+       "band": "66",
+       "bandwidth": 1.4,
+       "pci": "0",
+       "rsrp": "-101.5",
+       "rsrq": null,
+       "tx_channel": "66986"
+      },
+      {
+       "band": 2,
+       "ca": 2,
+       "earfcn": null,
+       "rsrp": -110,
+       "tx_channel": 900
+      }
+     ],
+     "tac": 0
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "slot_switch_enable": true,
+       "status": 0
+      }
+     ]
+    },
+    {
+     "cell_id": "Z",
+     "network_type": 99,
+     "signal": [
+      {
+       "band": 1,
+       "rsrp": -80
+      }
+     ]
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "slot_switch_enable": true,
+       "status": 0
+      }
+     ]
+    },
+    {
+     "cell_id": "",
+     "network_type": 5,
+     "signal": []
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "slot_switch_enable": true,
+       "status": 0
+      }
+     ]
+    },
+    {
+     "network_type": 51,
+     "signal": [
+      {
+       "band": 71,
+       "earfcn": 126400,
+       "rsrp": -90
+      },
+      {
+       "band": 2,
+       "earfcn": 900,
+       "rsrp": -95
+      }
+     ]
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "1-1.2",
+       "current_sim_slot": 2,
+       "type": 1
+      },
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "type": 0
+      }
+     ]
+    },
+    {
+     "bus": "cpu",
+     "cell_id": "DE017C015",
+     "network_type": 5,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 78,
+       "bandwidth": 100,
+       "earfcn": 627264,
+       "pci": 142,
+       "rsrp": -94,
+       "rsrp_level": 4,
+       "rsrq": -10,
+       "rsrq_level": 3,
+       "rssi": -32768,
+       "sinr": 12,
+       "sinr_level": 3
+      }
+     ],
+     "slot": 1,
+     "tac": "DE0000"
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "1-1.2",
+       "current_sim_slot": 2,
+       "type": 1
+      },
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "type": 0
+      }
+     ]
+    },
+    {
+     "bus": "cpu",
+     "cell_id": "DF30C",
+     "network_type": 51,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 3,
+       "earfcn": 1700,
+       "rsrp": -97,
+       "rsrp_level": 4,
+       "rsrq": -9,
+       "rssi": -67,
+       "sinr": 17,
+       "strength": 4
+      }
+     ],
+     "slot": 1,
+     "tac": "41"
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "1-1.2",
+       "current_sim_slot": 2,
+       "type": 1
+      },
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "type": 0
+      }
+     ]
+    },
+    {
+     "bus": "cpu",
+     "cell_id": "DF30C",
+     "network_type": 51,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 3,
+       "ca": 0,
+       "earfcn": 1700,
+       "rsrp": -97,
+       "rsrp_level": 4,
+       "rsrq": -9,
+       "rssi": -67,
+       "sinr": 17,
+       "strength": 4
+      },
+      {
+       "band": 78,
+       "bandwidth": 100,
+       "ca": 1,
+       "earfcn": 627264,
+       "network_type": 5,
+       "pci": 142,
+       "rsrp": -99,
+       "rsrq": -11,
+       "sinr": 8
+      }
+     ],
+     "slot": 1,
+     "tac": "41"
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "1-1.2",
+       "current_sim_slot": 2,
+       "type": 1
+      },
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "type": 0
+      }
+     ]
+    },
+    {
+     "bus": "cpu",
+     "cell_id": "DF30C",
+     "network_type": 51,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 3,
+       "bandwidth": 20,
+       "ca": 0,
+       "earfcn": 1700,
+       "ecio": -32768,
+       "ecio_level": 0,
+       "network_type": 4,
+       "pci": 61,
+       "rscp": -32768,
+       "rscp_level": 0,
+       "rsrp": -97,
+       "rsrp_level": 4,
+       "rsrq": -9,
+       "rsrq_level": 4,
+       "rssi": -67,
+       "rssi_level": 4,
+       "sinr": 17,
+       "sinr_level": 4,
+       "snr": -32768,
+       "snr_level": 0,
+       "strength": 4
+      },
+      {
+       "band": 78,
+       "bandwidth": 100,
+       "ca": 1,
+       "earfcn": 627264,
+       "ecio": -32768,
+       "ecio_level": 0,
+       "network_type": 51,
+       "pci": 142,
+       "rscp": -32768,
+       "rscp_level": 0,
+       "rsrp": -99,
+       "rsrp_level": 3,
+       "rsrq": -11,
+       "rsrq_level": 3,
+       "rssi": -32768,
+       "rssi_level": 0,
+       "sinr": 8,
+       "sinr_level": 3,
+       "snr": -32768,
+       "snr_level": 0,
+       "strength": 3
+      }
+     ],
+     "slot": 1,
+     "tac": "41"
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "1-1.2",
+       "current_sim_slot": 2,
+       "type": 1
+      },
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "type": 0
+      }
+     ]
+    },
+    {
+     "bus": "cpu",
+     "cell_id": "DF30C",
+     "network_type": 51,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 3,
+       "bandwidth": 20,
+       "ca": 0,
+       "earfcn": 1700,
+       "network_type": 51,
+       "pci": 61,
+       "rsrp": -97,
+       "rsrp_level": 4,
+       "rsrq": -9,
+       "rssi": -67,
+       "sinr": 17,
+       "strength": 4
+      }
+     ],
+     "slot": 1,
+     "tac": "41"
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "1-1.2",
+       "current_sim_slot": 2,
+       "type": 1
+      },
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "type": 0
+      }
+     ]
+    },
+    {
+     "bus": "cpu",
+     "cell_id": "",
+     "network_type": 0,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 0,
+       "bandwidth": 0,
+       "earfcn": 0,
+       "pci": 0,
+       "rsrp": -32768,
+       "rsrq": -32768,
+       "rssi": -32768,
+       "sinr": -32768
+      }
+     ],
+     "slot": 2,
+     "tac": ""
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "1-1.2",
+       "current_sim_slot": 2,
+       "type": 1
+      },
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "type": 0
+      }
+     ]
+    },
+    {
+     "cell_id": "AB",
+     "network_type": "41",
+     "signal": [
+      {
+       "band": "66",
+       "bandwidth": 1.4,
+       "pci": "0",
+       "rsrp": "-101.5",
+       "rsrq": null,
+       "tx_channel": "66986"
+      },
+      {
+       "band": 2,
+       "ca": 2,
+       "earfcn": null,
+       "rsrp": -110,
+       "tx_channel": 900
+      }
+     ],
+     "tac": 0
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "1-1.2",
+       "current_sim_slot": 2,
+       "type": 1
+      },
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "type": 0
+      }
+     ]
+    },
+    {
+     "cell_id": "Z",
+     "network_type": 99,
+     "signal": [
+      {
+       "band": 1,
+       "rsrp": -80
+      }
+     ]
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "1-1.2",
+       "current_sim_slot": 2,
+       "type": 1
+      },
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "type": 0
+      }
+     ]
+    },
+    {
+     "cell_id": "",
+     "network_type": 5,
+     "signal": []
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "1-1.2",
+       "current_sim_slot": 2,
+       "type": 1
+      },
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "type": 0
+      }
+     ]
+    },
+    {
+     "network_type": 51,
+     "signal": [
+      {
+       "band": 71,
+       "earfcn": 126400,
+       "rsrp": -90
+      },
+      {
+       "band": 2,
+       "earfcn": 900,
+       "rsrp": -95
+      }
+     ]
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": "2"
+      }
+     ]
+    },
+    {
+     "bus": "cpu",
+     "cell_id": "DE017C015",
+     "network_type": 5,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 78,
+       "bandwidth": 100,
+       "earfcn": 627264,
+       "pci": 142,
+       "rsrp": -94,
+       "rsrp_level": 4,
+       "rsrq": -10,
+       "rsrq_level": 3,
+       "rssi": -32768,
+       "sinr": 12,
+       "sinr_level": 3
+      }
+     ],
+     "slot": 1,
+     "tac": "DE0000"
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": "2"
+      }
+     ]
+    },
+    {
+     "bus": "cpu",
+     "cell_id": "DF30C",
+     "network_type": 51,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 3,
+       "earfcn": 1700,
+       "rsrp": -97,
+       "rsrp_level": 4,
+       "rsrq": -9,
+       "rssi": -67,
+       "sinr": 17,
+       "strength": 4
+      }
+     ],
+     "slot": 1,
+     "tac": "41"
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": "2"
+      }
+     ]
+    },
+    {
+     "bus": "cpu",
+     "cell_id": "DF30C",
+     "network_type": 51,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 3,
+       "ca": 0,
+       "earfcn": 1700,
+       "rsrp": -97,
+       "rsrp_level": 4,
+       "rsrq": -9,
+       "rssi": -67,
+       "sinr": 17,
+       "strength": 4
+      },
+      {
+       "band": 78,
+       "bandwidth": 100,
+       "ca": 1,
+       "earfcn": 627264,
+       "network_type": 5,
+       "pci": 142,
+       "rsrp": -99,
+       "rsrq": -11,
+       "sinr": 8
+      }
+     ],
+     "slot": 1,
+     "tac": "41"
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": "2"
+      }
+     ]
+    },
+    {
+     "bus": "cpu",
+     "cell_id": "DF30C",
+     "network_type": 51,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 3,
+       "bandwidth": 20,
+       "ca": 0,
+       "earfcn": 1700,
+       "ecio": -32768,
+       "ecio_level": 0,
+       "network_type": 4,
+       "pci": 61,
+       "rscp": -32768,
+       "rscp_level": 0,
+       "rsrp": -97,
+       "rsrp_level": 4,
+       "rsrq": -9,
+       "rsrq_level": 4,
+       "rssi": -67,
+       "rssi_level": 4,
+       "sinr": 17,
+       "sinr_level": 4,
+       "snr": -32768,
+       "snr_level": 0,
+       "strength": 4
+      },
+      {
+       "band": 78,
+       "bandwidth": 100,
+       "ca": 1,
+       "earfcn": 627264,
+       "ecio": -32768,
+       "ecio_level": 0,
+       "network_type": 51,
+       "pci": 142,
+       "rscp": -32768,
+       "rscp_level": 0,
+       "rsrp": -99,
+       "rsrp_level": 3,
+       "rsrq": -11,
+       "rsrq_level": 3,
+       "rssi": -32768,
+       "rssi_level": 0,
+       "sinr": 8,
+       "sinr_level": 3,
+       "snr": -32768,
+       "snr_level": 0,
+       "strength": 3
+      }
+     ],
+     "slot": 1,
+     "tac": "41"
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": "2"
+      }
+     ]
+    },
+    {
+     "bus": "cpu",
+     "cell_id": "DF30C",
+     "network_type": 51,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 3,
+       "bandwidth": 20,
+       "ca": 0,
+       "earfcn": 1700,
+       "network_type": 51,
+       "pci": 61,
+       "rsrp": -97,
+       "rsrp_level": 4,
+       "rsrq": -9,
+       "rssi": -67,
+       "sinr": 17,
+       "strength": 4
+      }
+     ],
+     "slot": 1,
+     "tac": "41"
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": "2"
+      }
+     ]
+    },
+    {
+     "bus": "cpu",
+     "cell_id": "",
+     "network_type": 0,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 0,
+       "bandwidth": 0,
+       "earfcn": 0,
+       "pci": 0,
+       "rsrp": -32768,
+       "rsrq": -32768,
+       "rssi": -32768,
+       "sinr": -32768
+      }
+     ],
+     "slot": 2,
+     "tac": ""
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": "2"
+      }
+     ]
+    },
+    {
+     "cell_id": "AB",
+     "network_type": "41",
+     "signal": [
+      {
+       "band": "66",
+       "bandwidth": 1.4,
+       "pci": "0",
+       "rsrp": "-101.5",
+       "rsrq": null,
+       "tx_channel": "66986"
+      },
+      {
+       "band": 2,
+       "ca": 2,
+       "earfcn": null,
+       "rsrp": -110,
+       "tx_channel": 900
+      }
+     ],
+     "tac": 0
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": "2"
+      }
+     ]
+    },
+    {
+     "cell_id": "Z",
+     "network_type": 99,
+     "signal": [
+      {
+       "band": 1,
+       "rsrp": -80
+      }
+     ]
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": "2"
+      }
+     ]
+    },
+    {
+     "cell_id": "",
+     "network_type": 5,
+     "signal": []
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": "2"
+      }
+     ]
+    },
+    {
+     "network_type": 51,
+     "signal": [
+      {
+       "band": 71,
+       "earfcn": 126400,
+       "rsrp": -90
+      },
+      {
+       "band": 2,
+       "earfcn": 900,
+       "rsrp": -95
+      }
+     ]
+    },
+    {
+     "networks": [
+      {
+       "apn": "3gnet",
+       "bus": "cpu",
+       "carrier": "CHN-UNICOM",
+       "iccid": "8986011",
+       "imsi": "460011",
+       "mcc": "460",
+       "mnc": "01",
+       "slot": 1
+      },
+      {
+       "bus": "cpu",
+       "carrier": "",
+       "iccid": "",
+       "slot": 2
+      }
+     ]
+    },
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": []
+    },
+    {
+     "bus": "cpu",
+     "cell_id": "DE017C015",
+     "network_type": 5,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 78,
+       "bandwidth": 100,
+       "earfcn": 627264,
+       "pci": 142,
+       "rsrp": -94,
+       "rsrp_level": 4,
+       "rsrq": -10,
+       "rsrq_level": 3,
+       "rssi": -32768,
+       "sinr": 12,
+       "sinr_level": 3
+      }
+     ],
+     "slot": 1,
+     "tac": "DE0000"
+    },
+    null,
+    1700000000000
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "slot_switch_enable": true,
+       "status": 0
+      }
+     ]
+    },
+    {
+     "bus": "cpu",
+     "cell_id": "DE017C015",
+     "network_type": 5,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 78,
+       "bandwidth": 100,
+       "earfcn": 627264,
+       "pci": 142,
+       "rsrp": -94,
+       "rsrp_level": 4,
+       "rsrq": -10,
+       "rsrq_level": 3,
+       "rssi": -32768,
+       "sinr": 12,
+       "sinr_level": 3
+      }
+     ],
+     "slot": 1,
+     "tac": "DE0000"
+    },
+    null,
+    1700000000000,
+    "cpu",
+    "Given"
+   ],
+   "fn": "build_sample"
+  },
+  {
+   "args": [
+    null
+   ],
+   "fn": "cell_info_failed"
+  },
+  {
+   "args": [
+    {}
+   ],
+   "fn": "cell_info_failed"
+  },
+  {
+   "args": [
+    {
+     "resp": "x",
+     "ret": 1
+    }
+   ],
+   "fn": "cell_info_failed"
+  },
+  {
+   "args": [
+    {
+     "network_type": ""
+    }
+   ],
+   "fn": "cell_info_failed"
+  },
+  {
+   "args": [
+    {
+     "network_type": 0
+    }
+   ],
+   "fn": "cell_info_failed"
+  },
+  {
+   "args": [
+    {
+     "bus": "cpu",
+     "cell_id": "DE017C015",
+     "network_type": 5,
+     "resp": "Success",
+     "ret": 0,
+     "signal": [
+      {
+       "band": 78,
+       "bandwidth": 100,
+       "earfcn": 627264,
+       "pci": 142,
+       "rsrp": -94,
+       "rsrp_level": 4,
+       "rsrq": -10,
+       "rsrq_level": 3,
+       "rssi": -32768,
+       "sinr": 12,
+       "sinr_level": 3
+      }
+     ],
+     "slot": 1,
+     "tac": "DE0000"
+    }
+   ],
+   "fn": "cell_info_failed"
+  },
+  {
+   "args": [
+    null
+   ],
+   "fn": "nr_arfcn_to_mhz"
+  },
+  {
+   "args": [
+    0
+   ],
+   "fn": "nr_arfcn_to_mhz"
+  },
+  {
+   "args": [
+    1
+   ],
+   "fn": "nr_arfcn_to_mhz"
+  },
+  {
+   "args": [
+    126400
+   ],
+   "fn": "nr_arfcn_to_mhz"
+  },
+  {
+   "args": [
+    599999
+   ],
+   "fn": "nr_arfcn_to_mhz"
+  },
+  {
+   "args": [
+    600000
+   ],
+   "fn": "nr_arfcn_to_mhz"
+  },
+  {
+   "args": [
+    627264
+   ],
+   "fn": "nr_arfcn_to_mhz"
+  },
+  {
+   "args": [
+    2016666
+   ],
+   "fn": "nr_arfcn_to_mhz"
+  },
+  {
+   "args": [
+    2016667
+   ],
+   "fn": "nr_arfcn_to_mhz"
+  },
+  {
+   "args": [
+    2100000
+   ],
+   "fn": "nr_arfcn_to_mhz"
+  },
+  {
+   "args": [
+    "627264"
+   ],
+   "fn": "nr_arfcn_to_mhz"
+  },
+  {
+   "args": [
+    -5
+   ],
+   "fn": "nr_arfcn_to_mhz"
+  },
+  {
+   "args": [
+    3,
+    1700
+   ],
+   "fn": "lte_earfcn_to_mhz"
+  },
+  {
+   "args": [
+    71,
+    68761
+   ],
+   "fn": "lte_earfcn_to_mhz"
+  },
+  {
+   "args": [
+    66,
+    66986
+   ],
+   "fn": "lte_earfcn_to_mhz"
+  },
+  {
+   "args": [
+    99,
+    1
+   ],
+   "fn": "lte_earfcn_to_mhz"
+  },
+  {
+   "args": [
+    null,
+    5
+   ],
+   "fn": "lte_earfcn_to_mhz"
+  },
+  {
+   "args": [
+    "2",
+    "900"
+   ],
+   "fn": "lte_earfcn_to_mhz"
+  },
+  {
+   "args": [
+    1,
+    0
+   ],
+   "fn": "lte_earfcn_to_mhz"
+  },
+  {
+   "args": [
+    "NR5G-SA",
+    78
+   ],
+   "fn": "format_band"
+  },
+  {
+   "args": [
+    "LTE",
+    3
+   ],
+   "fn": "format_band"
+  },
+  {
+   "args": [
+    "NR5G-NSA",
+    null
+   ],
+   "fn": "format_band"
+  },
+  {
+   "args": [
+    null,
+    7
+   ],
+   "fn": "format_band"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "slot_switch_enable": true,
+       "status": 0
+      }
+     ]
+    }
+   ],
+   "fn": "active_slot"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "1-1.2",
+       "current_sim_slot": 2,
+       "type": 1
+      },
+      {
+       "bus": "cpu",
+       "current_sim_slot": 1,
+       "type": 0
+      }
+     ]
+    }
+   ],
+   "fn": "active_slot"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "cpu",
+       "current_sim_slot": "2"
+      }
+     ]
+    }
+   ],
+   "fn": "active_slot"
+  },
+  {
+   "args": [
+    {}
+   ],
+   "fn": "active_slot"
+  },
+  {
+   "args": [
+    {
+     "modems": [
+      {
+       "bus": "x"
+      }
+     ]
+    }
+   ],
+   "fn": "active_slot"
+  }
+ ],
+ "generated_from": "src/lib/cellular_compat.py (python reference, retired in R3 \u2464)",
+ "want": [
+  {
+   "band": 78,
+   "carrier": "CHN-UNICOM",
+   "cell_id": "DE017C015",
+   "dl_bandwidth": "100MHz",
+   "id": "DE017C015",
+   "mode": "NR5G-SA",
+   "network_type": 5,
+   "pcc_network_type": 5,
+   "pcc_rat": "NR5G-SA",
+   "pci": 142,
+   "rat": "NR5G-SA",
+   "registered": true,
+   "rsrp": -94,
+   "rsrp_level": 4,
+   "rsrq": -10,
+   "rsrq_level": 3,
+   "rssi": null,
+   "signals": [
+    {
+     "band": 78,
+     "bandwidth_mhz": 100,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 627264,
+     "network_type": 5,
+     "pci": 142,
+     "rat": "NR5G-SA",
+     "role": "PCC",
+     "rsrp": -94,
+     "rsrp_level": 4,
+     "rsrq": -10,
+     "rsrq_level": 3,
+     "rssi": null,
+     "sinr": 12,
+     "sinr_level": 3
+    }
+   ],
+   "sinr": 12,
+   "sinr_level": 3,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": "DE0000",
+   "tx_channel": 627264
+  },
+  {
+   "band": 3,
+   "carrier": "CHN-UNICOM",
+   "cell_id": "DF30C",
+   "dl_bandwidth": null,
+   "id": "DF30C",
+   "mode": "NR5G-NSA",
+   "network_type": 51,
+   "pcc_network_type": 4,
+   "pcc_rat": "LTE",
+   "pci": null,
+   "rat": "NR5G-NSA",
+   "registered": true,
+   "rsrp": -97,
+   "rsrp_level": 4,
+   "rsrq": -9,
+   "rsrq_level": null,
+   "rssi": -67,
+   "signals": [
+    {
+     "band": 3,
+     "bandwidth_mhz": null,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 1700,
+     "network_type": 4,
+     "pci": null,
+     "rat": "LTE",
+     "role": "PCC",
+     "rsrp": -97,
+     "rsrp_level": 4,
+     "rsrq": -9,
+     "rsrq_level": null,
+     "rssi": -67,
+     "sinr": 17,
+     "sinr_level": null
+    }
+   ],
+   "sinr": 17,
+   "sinr_level": null,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": "41",
+   "tx_channel": 1700
+  },
+  {
+   "band": 3,
+   "carrier": "CHN-UNICOM",
+   "cell_id": "DF30C",
+   "dl_bandwidth": null,
+   "id": "DF30C",
+   "mode": "NR5G-NSA",
+   "network_type": 51,
+   "pcc_network_type": 4,
+   "pcc_rat": "LTE",
+   "pci": null,
+   "rat": "NR5G-NSA",
+   "registered": true,
+   "rsrp": -97,
+   "rsrp_level": 4,
+   "rsrq": -9,
+   "rsrq_level": null,
+   "rssi": -67,
+   "signals": [
+    {
+     "band": 3,
+     "bandwidth_mhz": null,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 1700,
+     "network_type": 4,
+     "pci": null,
+     "rat": "LTE",
+     "role": "PCC",
+     "rsrp": -97,
+     "rsrp_level": 4,
+     "rsrq": -9,
+     "rsrq_level": null,
+     "rssi": -67,
+     "sinr": 17,
+     "sinr_level": null
+    },
+    {
+     "band": 78,
+     "bandwidth_mhz": 100,
+     "bandwidth_ul_mhz": null,
+     "ca": 1,
+     "earfcn": 627264,
+     "network_type": 5,
+     "pci": 142,
+     "rat": "NR5G-SA",
+     "role": "SCC1",
+     "rsrp": -99,
+     "rsrp_level": null,
+     "rsrq": -11,
+     "rsrq_level": null,
+     "rssi": null,
+     "sinr": 8,
+     "sinr_level": null
+    }
+   ],
+   "sinr": 17,
+   "sinr_level": null,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": "41",
+   "tx_channel": 1700
+  },
+  {
+   "band": 3,
+   "carrier": "CHN-UNICOM",
+   "cell_id": "DF30C",
+   "dl_bandwidth": "20MHz",
+   "id": "DF30C",
+   "mode": "NR5G-NSA",
+   "network_type": 51,
+   "pcc_network_type": 4,
+   "pcc_rat": "LTE",
+   "pci": 61,
+   "rat": "NR5G-NSA",
+   "registered": true,
+   "rsrp": -97,
+   "rsrp_level": 4,
+   "rsrq": -9,
+   "rsrq_level": 4,
+   "rssi": -67,
+   "signals": [
+    {
+     "band": 3,
+     "bandwidth_mhz": 20,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 1700,
+     "network_type": 4,
+     "pci": 61,
+     "rat": "LTE",
+     "role": "PCC",
+     "rsrp": -97,
+     "rsrp_level": 4,
+     "rsrq": -9,
+     "rsrq_level": 4,
+     "rssi": -67,
+     "sinr": 17,
+     "sinr_level": 4
+    },
+    {
+     "band": 78,
+     "bandwidth_mhz": 100,
+     "bandwidth_ul_mhz": null,
+     "ca": 1,
+     "earfcn": 627264,
+     "network_type": 51,
+     "pci": 142,
+     "rat": "NR5G-NSA",
+     "role": "SCC1",
+     "rsrp": -99,
+     "rsrp_level": 3,
+     "rsrq": -11,
+     "rsrq_level": 3,
+     "rssi": null,
+     "sinr": 8,
+     "sinr_level": 3
+    }
+   ],
+   "sinr": 17,
+   "sinr_level": 4,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": "41",
+   "tx_channel": 1700
+  },
+  {
+   "band": 3,
+   "carrier": "CHN-UNICOM",
+   "cell_id": "DF30C",
+   "dl_bandwidth": "20MHz",
+   "id": "DF30C",
+   "mode": "NR5G-NSA",
+   "network_type": 51,
+   "pcc_network_type": 4,
+   "pcc_rat": "LTE",
+   "pci": 61,
+   "rat": "NR5G-NSA",
+   "registered": true,
+   "rsrp": -97,
+   "rsrp_level": 4,
+   "rsrq": -9,
+   "rsrq_level": null,
+   "rssi": -67,
+   "signals": [
+    {
+     "band": 3,
+     "bandwidth_mhz": 20,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 1700,
+     "network_type": 4,
+     "pci": 61,
+     "rat": "LTE",
+     "role": "PCC",
+     "rsrp": -97,
+     "rsrp_level": 4,
+     "rsrq": -9,
+     "rsrq_level": null,
+     "rssi": -67,
+     "sinr": 17,
+     "sinr_level": null
+    }
+   ],
+   "sinr": 17,
+   "sinr_level": null,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": "41",
+   "tx_channel": 1700
+  },
+  {
+   "band": null,
+   "carrier": "CHN-UNICOM",
+   "cell_id": null,
+   "dl_bandwidth": null,
+   "id": null,
+   "mode": null,
+   "network_type": null,
+   "pcc_network_type": null,
+   "pcc_rat": null,
+   "pci": null,
+   "rat": null,
+   "registered": false,
+   "rsrp": null,
+   "rsrp_level": null,
+   "rsrq": null,
+   "rsrq_level": null,
+   "rssi": null,
+   "signals": "[]",
+   "sinr": null,
+   "sinr_level": null,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": null,
+   "tx_channel": null
+  },
+  {
+   "band": 66,
+   "carrier": "CHN-UNICOM",
+   "cell_id": "AB",
+   "dl_bandwidth": "1.4MHz",
+   "id": "AB",
+   "mode": "LTE+",
+   "network_type": 41,
+   "pcc_network_type": 41,
+   "pcc_rat": "LTE+",
+   "pci": 0,
+   "rat": "LTE+",
+   "registered": true,
+   "rsrp": -101.5,
+   "rsrp_level": null,
+   "rsrq": null,
+   "rsrq_level": null,
+   "rssi": null,
+   "signals": [
+    {
+     "band": 66,
+     "bandwidth_mhz": 1.4,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 66986,
+     "network_type": 41,
+     "pci": 0,
+     "rat": "LTE+",
+     "role": "PCC",
+     "rsrp": -101.5,
+     "rsrp_level": null,
+     "rsrq": null,
+     "rsrq_level": null,
+     "rssi": null,
+     "sinr": null,
+     "sinr_level": null
+    },
+    {
+     "band": 2,
+     "bandwidth_mhz": null,
+     "bandwidth_ul_mhz": null,
+     "ca": 2,
+     "earfcn": null,
+     "network_type": 41,
+     "pci": null,
+     "rat": "LTE+",
+     "role": "SCC2",
+     "rsrp": -110,
+     "rsrp_level": null,
+     "rsrq": null,
+     "rsrq_level": null,
+     "rssi": null,
+     "sinr": null,
+     "sinr_level": null
+    }
+   ],
+   "sinr": null,
+   "sinr_level": null,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": null,
+   "tx_channel": 66986
+  },
+  {
+   "band": 1,
+   "carrier": "CHN-UNICOM",
+   "cell_id": "Z",
+   "dl_bandwidth": null,
+   "id": "Z",
+   "mode": "type 99",
+   "network_type": 99,
+   "pcc_network_type": 99,
+   "pcc_rat": "type 99",
+   "pci": null,
+   "rat": "type 99",
+   "registered": true,
+   "rsrp": -80,
+   "rsrp_level": null,
+   "rsrq": null,
+   "rsrq_level": null,
+   "rssi": null,
+   "signals": [
+    {
+     "band": 1,
+     "bandwidth_mhz": null,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": null,
+     "network_type": 99,
+     "pci": null,
+     "rat": "type 99",
+     "role": "PCC",
+     "rsrp": -80,
+     "rsrp_level": null,
+     "rsrq": null,
+     "rsrq_level": null,
+     "rssi": null,
+     "sinr": null,
+     "sinr_level": null
+    }
+   ],
+   "sinr": null,
+   "sinr_level": null,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": null,
+   "tx_channel": null
+  },
+  {
+   "band": null,
+   "carrier": "CHN-UNICOM",
+   "cell_id": null,
+   "dl_bandwidth": null,
+   "id": null,
+   "mode": "NR5G-SA",
+   "network_type": 5,
+   "pcc_network_type": null,
+   "pcc_rat": null,
+   "pci": null,
+   "rat": "NR5G-SA",
+   "registered": true,
+   "rsrp": null,
+   "rsrp_level": null,
+   "rsrq": null,
+   "rsrq_level": null,
+   "rssi": null,
+   "signals": "[]",
+   "sinr": null,
+   "sinr_level": null,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": null,
+   "tx_channel": null
+  },
+  {
+   "band": 71,
+   "carrier": "CHN-UNICOM",
+   "cell_id": null,
+   "dl_bandwidth": null,
+   "id": null,
+   "mode": "NR5G-NSA",
+   "network_type": 51,
+   "pcc_network_type": 4,
+   "pcc_rat": "LTE",
+   "pci": null,
+   "rat": "NR5G-NSA",
+   "registered": true,
+   "rsrp": -90,
+   "rsrp_level": null,
+   "rsrq": null,
+   "rsrq_level": null,
+   "rssi": null,
+   "signals": [
+    {
+     "band": 71,
+     "bandwidth_mhz": null,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 126400,
+     "network_type": 4,
+     "pci": null,
+     "rat": "LTE",
+     "role": "PCC",
+     "rsrp": -90,
+     "rsrp_level": null,
+     "rsrq": null,
+     "rsrq_level": null,
+     "rssi": null,
+     "sinr": null,
+     "sinr_level": null
+    },
+    {
+     "band": 2,
+     "bandwidth_mhz": null,
+     "bandwidth_ul_mhz": null,
+     "ca": 1,
+     "earfcn": 900,
+     "network_type": 4,
+     "pci": null,
+     "rat": "LTE",
+     "role": "SCC1",
+     "rsrp": -95,
+     "rsrp_level": null,
+     "rsrq": null,
+     "rsrq_level": null,
+     "rssi": null,
+     "sinr": null,
+     "sinr_level": null
+    }
+   ],
+   "sinr": null,
+   "sinr_level": null,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": null,
+   "tx_channel": 126400
+  },
+  {
+   "band": 78,
+   "carrier": "CHN-UNICOM",
+   "cell_id": "DE017C015",
+   "dl_bandwidth": "100MHz",
+   "id": "DE017C015",
+   "mode": "NR5G-SA",
+   "network_type": 5,
+   "pcc_network_type": 5,
+   "pcc_rat": "NR5G-SA",
+   "pci": 142,
+   "rat": "NR5G-SA",
+   "registered": true,
+   "rsrp": -94,
+   "rsrp_level": 4,
+   "rsrq": -10,
+   "rsrq_level": 3,
+   "rssi": null,
+   "signals": [
+    {
+     "band": 78,
+     "bandwidth_mhz": 100,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 627264,
+     "network_type": 5,
+     "pci": 142,
+     "rat": "NR5G-SA",
+     "role": "PCC",
+     "rsrp": -94,
+     "rsrp_level": 4,
+     "rsrq": -10,
+     "rsrq_level": 3,
+     "rssi": null,
+     "sinr": 12,
+     "sinr_level": 3
+    }
+   ],
+   "sinr": 12,
+   "sinr_level": 3,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": "DE0000",
+   "tx_channel": 627264
+  },
+  {
+   "band": 3,
+   "carrier": "CHN-UNICOM",
+   "cell_id": "DF30C",
+   "dl_bandwidth": null,
+   "id": "DF30C",
+   "mode": "NR5G-NSA",
+   "network_type": 51,
+   "pcc_network_type": 4,
+   "pcc_rat": "LTE",
+   "pci": null,
+   "rat": "NR5G-NSA",
+   "registered": true,
+   "rsrp": -97,
+   "rsrp_level": 4,
+   "rsrq": -9,
+   "rsrq_level": null,
+   "rssi": -67,
+   "signals": [
+    {
+     "band": 3,
+     "bandwidth_mhz": null,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 1700,
+     "network_type": 4,
+     "pci": null,
+     "rat": "LTE",
+     "role": "PCC",
+     "rsrp": -97,
+     "rsrp_level": 4,
+     "rsrq": -9,
+     "rsrq_level": null,
+     "rssi": -67,
+     "sinr": 17,
+     "sinr_level": null
+    }
+   ],
+   "sinr": 17,
+   "sinr_level": null,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": "41",
+   "tx_channel": 1700
+  },
+  {
+   "band": 3,
+   "carrier": "CHN-UNICOM",
+   "cell_id": "DF30C",
+   "dl_bandwidth": null,
+   "id": "DF30C",
+   "mode": "NR5G-NSA",
+   "network_type": 51,
+   "pcc_network_type": 4,
+   "pcc_rat": "LTE",
+   "pci": null,
+   "rat": "NR5G-NSA",
+   "registered": true,
+   "rsrp": -97,
+   "rsrp_level": 4,
+   "rsrq": -9,
+   "rsrq_level": null,
+   "rssi": -67,
+   "signals": [
+    {
+     "band": 3,
+     "bandwidth_mhz": null,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 1700,
+     "network_type": 4,
+     "pci": null,
+     "rat": "LTE",
+     "role": "PCC",
+     "rsrp": -97,
+     "rsrp_level": 4,
+     "rsrq": -9,
+     "rsrq_level": null,
+     "rssi": -67,
+     "sinr": 17,
+     "sinr_level": null
+    },
+    {
+     "band": 78,
+     "bandwidth_mhz": 100,
+     "bandwidth_ul_mhz": null,
+     "ca": 1,
+     "earfcn": 627264,
+     "network_type": 5,
+     "pci": 142,
+     "rat": "NR5G-SA",
+     "role": "SCC1",
+     "rsrp": -99,
+     "rsrp_level": null,
+     "rsrq": -11,
+     "rsrq_level": null,
+     "rssi": null,
+     "sinr": 8,
+     "sinr_level": null
+    }
+   ],
+   "sinr": 17,
+   "sinr_level": null,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": "41",
+   "tx_channel": 1700
+  },
+  {
+   "band": 3,
+   "carrier": "CHN-UNICOM",
+   "cell_id": "DF30C",
+   "dl_bandwidth": "20MHz",
+   "id": "DF30C",
+   "mode": "NR5G-NSA",
+   "network_type": 51,
+   "pcc_network_type": 4,
+   "pcc_rat": "LTE",
+   "pci": 61,
+   "rat": "NR5G-NSA",
+   "registered": true,
+   "rsrp": -97,
+   "rsrp_level": 4,
+   "rsrq": -9,
+   "rsrq_level": 4,
+   "rssi": -67,
+   "signals": [
+    {
+     "band": 3,
+     "bandwidth_mhz": 20,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 1700,
+     "network_type": 4,
+     "pci": 61,
+     "rat": "LTE",
+     "role": "PCC",
+     "rsrp": -97,
+     "rsrp_level": 4,
+     "rsrq": -9,
+     "rsrq_level": 4,
+     "rssi": -67,
+     "sinr": 17,
+     "sinr_level": 4
+    },
+    {
+     "band": 78,
+     "bandwidth_mhz": 100,
+     "bandwidth_ul_mhz": null,
+     "ca": 1,
+     "earfcn": 627264,
+     "network_type": 51,
+     "pci": 142,
+     "rat": "NR5G-NSA",
+     "role": "SCC1",
+     "rsrp": -99,
+     "rsrp_level": 3,
+     "rsrq": -11,
+     "rsrq_level": 3,
+     "rssi": null,
+     "sinr": 8,
+     "sinr_level": 3
+    }
+   ],
+   "sinr": 17,
+   "sinr_level": 4,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": "41",
+   "tx_channel": 1700
+  },
+  {
+   "band": 3,
+   "carrier": "CHN-UNICOM",
+   "cell_id": "DF30C",
+   "dl_bandwidth": "20MHz",
+   "id": "DF30C",
+   "mode": "NR5G-NSA",
+   "network_type": 51,
+   "pcc_network_type": 4,
+   "pcc_rat": "LTE",
+   "pci": 61,
+   "rat": "NR5G-NSA",
+   "registered": true,
+   "rsrp": -97,
+   "rsrp_level": 4,
+   "rsrq": -9,
+   "rsrq_level": null,
+   "rssi": -67,
+   "signals": [
+    {
+     "band": 3,
+     "bandwidth_mhz": 20,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 1700,
+     "network_type": 4,
+     "pci": 61,
+     "rat": "LTE",
+     "role": "PCC",
+     "rsrp": -97,
+     "rsrp_level": 4,
+     "rsrq": -9,
+     "rsrq_level": null,
+     "rssi": -67,
+     "sinr": 17,
+     "sinr_level": null
+    }
+   ],
+   "sinr": 17,
+   "sinr_level": null,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": "41",
+   "tx_channel": 1700
+  },
+  {
+   "band": null,
+   "carrier": "CHN-UNICOM",
+   "cell_id": null,
+   "dl_bandwidth": null,
+   "id": null,
+   "mode": null,
+   "network_type": null,
+   "pcc_network_type": null,
+   "pcc_rat": null,
+   "pci": null,
+   "rat": null,
+   "registered": false,
+   "rsrp": null,
+   "rsrp_level": null,
+   "rsrq": null,
+   "rsrq_level": null,
+   "rssi": null,
+   "signals": "[]",
+   "sinr": null,
+   "sinr_level": null,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": null,
+   "tx_channel": null
+  },
+  {
+   "band": 66,
+   "carrier": "CHN-UNICOM",
+   "cell_id": "AB",
+   "dl_bandwidth": "1.4MHz",
+   "id": "AB",
+   "mode": "LTE+",
+   "network_type": 41,
+   "pcc_network_type": 41,
+   "pcc_rat": "LTE+",
+   "pci": 0,
+   "rat": "LTE+",
+   "registered": true,
+   "rsrp": -101.5,
+   "rsrp_level": null,
+   "rsrq": null,
+   "rsrq_level": null,
+   "rssi": null,
+   "signals": [
+    {
+     "band": 66,
+     "bandwidth_mhz": 1.4,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 66986,
+     "network_type": 41,
+     "pci": 0,
+     "rat": "LTE+",
+     "role": "PCC",
+     "rsrp": -101.5,
+     "rsrp_level": null,
+     "rsrq": null,
+     "rsrq_level": null,
+     "rssi": null,
+     "sinr": null,
+     "sinr_level": null
+    },
+    {
+     "band": 2,
+     "bandwidth_mhz": null,
+     "bandwidth_ul_mhz": null,
+     "ca": 2,
+     "earfcn": null,
+     "network_type": 41,
+     "pci": null,
+     "rat": "LTE+",
+     "role": "SCC2",
+     "rsrp": -110,
+     "rsrp_level": null,
+     "rsrq": null,
+     "rsrq_level": null,
+     "rssi": null,
+     "sinr": null,
+     "sinr_level": null
+    }
+   ],
+   "sinr": null,
+   "sinr_level": null,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": null,
+   "tx_channel": 66986
+  },
+  {
+   "band": 1,
+   "carrier": "CHN-UNICOM",
+   "cell_id": "Z",
+   "dl_bandwidth": null,
+   "id": "Z",
+   "mode": "type 99",
+   "network_type": 99,
+   "pcc_network_type": 99,
+   "pcc_rat": "type 99",
+   "pci": null,
+   "rat": "type 99",
+   "registered": true,
+   "rsrp": -80,
+   "rsrp_level": null,
+   "rsrq": null,
+   "rsrq_level": null,
+   "rssi": null,
+   "signals": [
+    {
+     "band": 1,
+     "bandwidth_mhz": null,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": null,
+     "network_type": 99,
+     "pci": null,
+     "rat": "type 99",
+     "role": "PCC",
+     "rsrp": -80,
+     "rsrp_level": null,
+     "rsrq": null,
+     "rsrq_level": null,
+     "rssi": null,
+     "sinr": null,
+     "sinr_level": null
+    }
+   ],
+   "sinr": null,
+   "sinr_level": null,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": null,
+   "tx_channel": null
+  },
+  {
+   "band": null,
+   "carrier": "CHN-UNICOM",
+   "cell_id": null,
+   "dl_bandwidth": null,
+   "id": null,
+   "mode": "NR5G-SA",
+   "network_type": 5,
+   "pcc_network_type": null,
+   "pcc_rat": null,
+   "pci": null,
+   "rat": "NR5G-SA",
+   "registered": true,
+   "rsrp": null,
+   "rsrp_level": null,
+   "rsrq": null,
+   "rsrq_level": null,
+   "rssi": null,
+   "signals": "[]",
+   "sinr": null,
+   "sinr_level": null,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": null,
+   "tx_channel": null
+  },
+  {
+   "band": 71,
+   "carrier": "CHN-UNICOM",
+   "cell_id": null,
+   "dl_bandwidth": null,
+   "id": null,
+   "mode": "NR5G-NSA",
+   "network_type": 51,
+   "pcc_network_type": 4,
+   "pcc_rat": "LTE",
+   "pci": null,
+   "rat": "NR5G-NSA",
+   "registered": true,
+   "rsrp": -90,
+   "rsrp_level": null,
+   "rsrq": null,
+   "rsrq_level": null,
+   "rssi": null,
+   "signals": [
+    {
+     "band": 71,
+     "bandwidth_mhz": null,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 126400,
+     "network_type": 4,
+     "pci": null,
+     "rat": "LTE",
+     "role": "PCC",
+     "rsrp": -90,
+     "rsrp_level": null,
+     "rsrq": null,
+     "rsrq_level": null,
+     "rssi": null,
+     "sinr": null,
+     "sinr_level": null
+    },
+    {
+     "band": 2,
+     "bandwidth_mhz": null,
+     "bandwidth_ul_mhz": null,
+     "ca": 1,
+     "earfcn": 900,
+     "network_type": 4,
+     "pci": null,
+     "rat": "LTE",
+     "role": "SCC1",
+     "rsrp": -95,
+     "rsrp_level": null,
+     "rsrq": null,
+     "rsrq_level": null,
+     "rssi": null,
+     "sinr": null,
+     "sinr_level": null
+    }
+   ],
+   "sinr": null,
+   "sinr_level": null,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": null,
+   "tx_channel": 126400
+  },
+  {
+   "band": 78,
+   "carrier": "",
+   "cell_id": "DE017C015",
+   "dl_bandwidth": "100MHz",
+   "id": "DE017C015",
+   "mode": "NR5G-SA",
+   "network_type": 5,
+   "pcc_network_type": 5,
+   "pcc_rat": "NR5G-SA",
+   "pci": 142,
+   "rat": "NR5G-SA",
+   "registered": true,
+   "rsrp": -94,
+   "rsrp_level": 4,
+   "rsrq": -10,
+   "rsrq_level": 3,
+   "rssi": null,
+   "signals": [
+    {
+     "band": 78,
+     "bandwidth_mhz": 100,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 627264,
+     "network_type": 5,
+     "pci": 142,
+     "rat": "NR5G-SA",
+     "role": "PCC",
+     "rsrp": -94,
+     "rsrp_level": 4,
+     "rsrq": -10,
+     "rsrq_level": 3,
+     "rssi": null,
+     "sinr": 12,
+     "sinr_level": 3
+    }
+   ],
+   "sinr": 12,
+   "sinr_level": 3,
+   "slot": 2,
+   "t": 1700000000000,
+   "tac": "DE0000",
+   "tx_channel": 627264
+  },
+  {
+   "band": 3,
+   "carrier": "",
+   "cell_id": "DF30C",
+   "dl_bandwidth": null,
+   "id": "DF30C",
+   "mode": "NR5G-NSA",
+   "network_type": 51,
+   "pcc_network_type": 4,
+   "pcc_rat": "LTE",
+   "pci": null,
+   "rat": "NR5G-NSA",
+   "registered": true,
+   "rsrp": -97,
+   "rsrp_level": 4,
+   "rsrq": -9,
+   "rsrq_level": null,
+   "rssi": -67,
+   "signals": [
+    {
+     "band": 3,
+     "bandwidth_mhz": null,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 1700,
+     "network_type": 4,
+     "pci": null,
+     "rat": "LTE",
+     "role": "PCC",
+     "rsrp": -97,
+     "rsrp_level": 4,
+     "rsrq": -9,
+     "rsrq_level": null,
+     "rssi": -67,
+     "sinr": 17,
+     "sinr_level": null
+    }
+   ],
+   "sinr": 17,
+   "sinr_level": null,
+   "slot": 2,
+   "t": 1700000000000,
+   "tac": "41",
+   "tx_channel": 1700
+  },
+  {
+   "band": 3,
+   "carrier": "",
+   "cell_id": "DF30C",
+   "dl_bandwidth": null,
+   "id": "DF30C",
+   "mode": "NR5G-NSA",
+   "network_type": 51,
+   "pcc_network_type": 4,
+   "pcc_rat": "LTE",
+   "pci": null,
+   "rat": "NR5G-NSA",
+   "registered": true,
+   "rsrp": -97,
+   "rsrp_level": 4,
+   "rsrq": -9,
+   "rsrq_level": null,
+   "rssi": -67,
+   "signals": [
+    {
+     "band": 3,
+     "bandwidth_mhz": null,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 1700,
+     "network_type": 4,
+     "pci": null,
+     "rat": "LTE",
+     "role": "PCC",
+     "rsrp": -97,
+     "rsrp_level": 4,
+     "rsrq": -9,
+     "rsrq_level": null,
+     "rssi": -67,
+     "sinr": 17,
+     "sinr_level": null
+    },
+    {
+     "band": 78,
+     "bandwidth_mhz": 100,
+     "bandwidth_ul_mhz": null,
+     "ca": 1,
+     "earfcn": 627264,
+     "network_type": 5,
+     "pci": 142,
+     "rat": "NR5G-SA",
+     "role": "SCC1",
+     "rsrp": -99,
+     "rsrp_level": null,
+     "rsrq": -11,
+     "rsrq_level": null,
+     "rssi": null,
+     "sinr": 8,
+     "sinr_level": null
+    }
+   ],
+   "sinr": 17,
+   "sinr_level": null,
+   "slot": 2,
+   "t": 1700000000000,
+   "tac": "41",
+   "tx_channel": 1700
+  },
+  {
+   "band": 3,
+   "carrier": "",
+   "cell_id": "DF30C",
+   "dl_bandwidth": "20MHz",
+   "id": "DF30C",
+   "mode": "NR5G-NSA",
+   "network_type": 51,
+   "pcc_network_type": 4,
+   "pcc_rat": "LTE",
+   "pci": 61,
+   "rat": "NR5G-NSA",
+   "registered": true,
+   "rsrp": -97,
+   "rsrp_level": 4,
+   "rsrq": -9,
+   "rsrq_level": 4,
+   "rssi": -67,
+   "signals": [
+    {
+     "band": 3,
+     "bandwidth_mhz": 20,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 1700,
+     "network_type": 4,
+     "pci": 61,
+     "rat": "LTE",
+     "role": "PCC",
+     "rsrp": -97,
+     "rsrp_level": 4,
+     "rsrq": -9,
+     "rsrq_level": 4,
+     "rssi": -67,
+     "sinr": 17,
+     "sinr_level": 4
+    },
+    {
+     "band": 78,
+     "bandwidth_mhz": 100,
+     "bandwidth_ul_mhz": null,
+     "ca": 1,
+     "earfcn": 627264,
+     "network_type": 51,
+     "pci": 142,
+     "rat": "NR5G-NSA",
+     "role": "SCC1",
+     "rsrp": -99,
+     "rsrp_level": 3,
+     "rsrq": -11,
+     "rsrq_level": 3,
+     "rssi": null,
+     "sinr": 8,
+     "sinr_level": 3
+    }
+   ],
+   "sinr": 17,
+   "sinr_level": 4,
+   "slot": 2,
+   "t": 1700000000000,
+   "tac": "41",
+   "tx_channel": 1700
+  },
+  {
+   "band": 3,
+   "carrier": "",
+   "cell_id": "DF30C",
+   "dl_bandwidth": "20MHz",
+   "id": "DF30C",
+   "mode": "NR5G-NSA",
+   "network_type": 51,
+   "pcc_network_type": 4,
+   "pcc_rat": "LTE",
+   "pci": 61,
+   "rat": "NR5G-NSA",
+   "registered": true,
+   "rsrp": -97,
+   "rsrp_level": 4,
+   "rsrq": -9,
+   "rsrq_level": null,
+   "rssi": -67,
+   "signals": [
+    {
+     "band": 3,
+     "bandwidth_mhz": 20,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 1700,
+     "network_type": 4,
+     "pci": 61,
+     "rat": "LTE",
+     "role": "PCC",
+     "rsrp": -97,
+     "rsrp_level": 4,
+     "rsrq": -9,
+     "rsrq_level": null,
+     "rssi": -67,
+     "sinr": 17,
+     "sinr_level": null
+    }
+   ],
+   "sinr": 17,
+   "sinr_level": null,
+   "slot": 2,
+   "t": 1700000000000,
+   "tac": "41",
+   "tx_channel": 1700
+  },
+  {
+   "band": null,
+   "carrier": "",
+   "cell_id": null,
+   "dl_bandwidth": null,
+   "id": null,
+   "mode": null,
+   "network_type": null,
+   "pcc_network_type": null,
+   "pcc_rat": null,
+   "pci": null,
+   "rat": null,
+   "registered": false,
+   "rsrp": null,
+   "rsrp_level": null,
+   "rsrq": null,
+   "rsrq_level": null,
+   "rssi": null,
+   "signals": "[]",
+   "sinr": null,
+   "sinr_level": null,
+   "slot": 2,
+   "t": 1700000000000,
+   "tac": null,
+   "tx_channel": null
+  },
+  {
+   "band": 66,
+   "carrier": "",
+   "cell_id": "AB",
+   "dl_bandwidth": "1.4MHz",
+   "id": "AB",
+   "mode": "LTE+",
+   "network_type": 41,
+   "pcc_network_type": 41,
+   "pcc_rat": "LTE+",
+   "pci": 0,
+   "rat": "LTE+",
+   "registered": true,
+   "rsrp": -101.5,
+   "rsrp_level": null,
+   "rsrq": null,
+   "rsrq_level": null,
+   "rssi": null,
+   "signals": [
+    {
+     "band": 66,
+     "bandwidth_mhz": 1.4,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 66986,
+     "network_type": 41,
+     "pci": 0,
+     "rat": "LTE+",
+     "role": "PCC",
+     "rsrp": -101.5,
+     "rsrp_level": null,
+     "rsrq": null,
+     "rsrq_level": null,
+     "rssi": null,
+     "sinr": null,
+     "sinr_level": null
+    },
+    {
+     "band": 2,
+     "bandwidth_mhz": null,
+     "bandwidth_ul_mhz": null,
+     "ca": 2,
+     "earfcn": null,
+     "network_type": 41,
+     "pci": null,
+     "rat": "LTE+",
+     "role": "SCC2",
+     "rsrp": -110,
+     "rsrp_level": null,
+     "rsrq": null,
+     "rsrq_level": null,
+     "rssi": null,
+     "sinr": null,
+     "sinr_level": null
+    }
+   ],
+   "sinr": null,
+   "sinr_level": null,
+   "slot": 2,
+   "t": 1700000000000,
+   "tac": null,
+   "tx_channel": 66986
+  },
+  {
+   "band": 1,
+   "carrier": "",
+   "cell_id": "Z",
+   "dl_bandwidth": null,
+   "id": "Z",
+   "mode": "type 99",
+   "network_type": 99,
+   "pcc_network_type": 99,
+   "pcc_rat": "type 99",
+   "pci": null,
+   "rat": "type 99",
+   "registered": true,
+   "rsrp": -80,
+   "rsrp_level": null,
+   "rsrq": null,
+   "rsrq_level": null,
+   "rssi": null,
+   "signals": [
+    {
+     "band": 1,
+     "bandwidth_mhz": null,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": null,
+     "network_type": 99,
+     "pci": null,
+     "rat": "type 99",
+     "role": "PCC",
+     "rsrp": -80,
+     "rsrp_level": null,
+     "rsrq": null,
+     "rsrq_level": null,
+     "rssi": null,
+     "sinr": null,
+     "sinr_level": null
+    }
+   ],
+   "sinr": null,
+   "sinr_level": null,
+   "slot": 2,
+   "t": 1700000000000,
+   "tac": null,
+   "tx_channel": null
+  },
+  {
+   "band": null,
+   "carrier": "",
+   "cell_id": null,
+   "dl_bandwidth": null,
+   "id": null,
+   "mode": "NR5G-SA",
+   "network_type": 5,
+   "pcc_network_type": null,
+   "pcc_rat": null,
+   "pci": null,
+   "rat": "NR5G-SA",
+   "registered": true,
+   "rsrp": null,
+   "rsrp_level": null,
+   "rsrq": null,
+   "rsrq_level": null,
+   "rssi": null,
+   "signals": "[]",
+   "sinr": null,
+   "sinr_level": null,
+   "slot": 2,
+   "t": 1700000000000,
+   "tac": null,
+   "tx_channel": null
+  },
+  {
+   "band": 71,
+   "carrier": "",
+   "cell_id": null,
+   "dl_bandwidth": null,
+   "id": null,
+   "mode": "NR5G-NSA",
+   "network_type": 51,
+   "pcc_network_type": 4,
+   "pcc_rat": "LTE",
+   "pci": null,
+   "rat": "NR5G-NSA",
+   "registered": true,
+   "rsrp": -90,
+   "rsrp_level": null,
+   "rsrq": null,
+   "rsrq_level": null,
+   "rssi": null,
+   "signals": [
+    {
+     "band": 71,
+     "bandwidth_mhz": null,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 126400,
+     "network_type": 4,
+     "pci": null,
+     "rat": "LTE",
+     "role": "PCC",
+     "rsrp": -90,
+     "rsrp_level": null,
+     "rsrq": null,
+     "rsrq_level": null,
+     "rssi": null,
+     "sinr": null,
+     "sinr_level": null
+    },
+    {
+     "band": 2,
+     "bandwidth_mhz": null,
+     "bandwidth_ul_mhz": null,
+     "ca": 1,
+     "earfcn": 900,
+     "network_type": 4,
+     "pci": null,
+     "rat": "LTE",
+     "role": "SCC1",
+     "rsrp": -95,
+     "rsrp_level": null,
+     "rsrq": null,
+     "rsrq_level": null,
+     "rssi": null,
+     "sinr": null,
+     "sinr_level": null
+    }
+   ],
+   "sinr": null,
+   "sinr_level": null,
+   "slot": 2,
+   "t": 1700000000000,
+   "tac": null,
+   "tx_channel": 126400
+  },
+  null,
+  {
+   "band": 78,
+   "carrier": "Given",
+   "cell_id": "DE017C015",
+   "dl_bandwidth": "100MHz",
+   "id": "DE017C015",
+   "mode": "NR5G-SA",
+   "network_type": 5,
+   "pcc_network_type": 5,
+   "pcc_rat": "NR5G-SA",
+   "pci": 142,
+   "rat": "NR5G-SA",
+   "registered": true,
+   "rsrp": -94,
+   "rsrp_level": 4,
+   "rsrq": -10,
+   "rsrq_level": 3,
+   "rssi": null,
+   "signals": [
+    {
+     "band": 78,
+     "bandwidth_mhz": 100,
+     "bandwidth_ul_mhz": null,
+     "ca": 0,
+     "earfcn": 627264,
+     "network_type": 5,
+     "pci": 142,
+     "rat": "NR5G-SA",
+     "role": "PCC",
+     "rsrp": -94,
+     "rsrp_level": 4,
+     "rsrq": -10,
+     "rsrq_level": 3,
+     "rssi": null,
+     "sinr": 12,
+     "sinr_level": 3
+    }
+   ],
+   "sinr": 12,
+   "sinr_level": 3,
+   "slot": 1,
+   "t": 1700000000000,
+   "tac": "DE0000",
+   "tx_channel": 627264
+  },
+  true,
+  true,
+  true,
+  true,
+  false,
+  false,
+  null,
+  null,
+  0.005,
+  632.0,
+  2999.995,
+  3000.0,
+  3408.96,
+  24249.99,
+  24250.08,
+  29250.06,
+  3408.96,
+  null,
+  1855.0,
+  634.5,
+  2165.0,
+  null,
+  null,
+  1960.0,
+  2110.0,
+  "n78",
+  "B3",
+  "\u2014",
+  "B7",
+  1,
+  1,
+  2,
+  null,
+  null
+ ]
+}

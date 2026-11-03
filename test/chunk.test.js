@@ -2,13 +2,21 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { after } = require('node:test');
 
-const SRC = path.join(__dirname, '..', 'src', 'views', 'mudimodem.js');
+// The BUILT chunk (what ships, dist/) is what these tests evaluate; static checks read the
+// sources under src/web/main + src/web/kit (tools/build-web.mjs builds one from the other).
+const CHUNK = path.join(__dirname, '..', 'dist', 'views', 'gl-sdk4-ui-mudimodem.common.js');
+const SRC_DIRS = ['main', 'kit'].map((d) => path.join(__dirname, '..', 'src', 'web', d));
+function srcText() {
+  return SRC_DIRS.flatMap((d) => fs.readdirSync(d).filter((f) => f.endsWith('.js')).sort()
+    .map((f) => fs.readFileSync(path.join(d, f), 'utf8'))).join('\n');
+}
 
 // Mirror GL's loader: `const component = eval(res.data)` with `module` in scope.
 function loadChunk() {
   const module = { exports: {} };
-  const source = fs.readFileSync(SRC, 'utf8');
+  const source = fs.readFileSync(CHUNK, 'utf8');
   return eval(source);
 }
 
@@ -37,8 +45,13 @@ function walk(node, out) {
 
 // Build a working component instance: data + bound methods + computed getters,
 // exactly as Vue would wire them, plus a stub $store feeding the websocket data.
+const MADE = [];   // every instance a test builds: torn down at the end, as Vue would on leave
+after(() => {
+  for (const [component, vm] of MADE) if (component.beforeDestroy) component.beforeDestroy.call(vm);
+});
 function makeVm(component, statusMap) {
   const vm = Object.assign({}, component.data());
+  MADE.push([component, vm]);
   vm.$store = {
     getters: {
       moduleStatus(name) { return (statusMap && statusMap[name]) || {}; }
@@ -244,11 +257,11 @@ test('shows the active SIM when it IS registered, with carrier label', () => {
 test('quality colour comes from GL levels, mapped to GL ramp tokens', () => {
   const c = loadChunk();
   const vm = makeVm(c, LIVE);
-  // rsrp_level 3 -> good -> --info-hover ; sinr_level 2 -> fair -> --warning
+  // rsrp_level 3 -> good -> --secondary ; sinr_level 2 -> fair -> --warning
   const nodes = walk(c.render.call(vm, h));
   const styled = nodes.filter((n) => n.data && n.data.style && n.data.style.color)
     .map((n) => n.data.style.color);
-  assert.ok(styled.includes('var(--info-hover)'), 'rsrp level 3 -> good ramp token');
+  assert.ok(styled.includes('var(--secondary)'), 'rsrp level 3 -> good ramp token');
   assert.ok(styled.includes('var(--warning)'), 'sinr level 2 -> fair ramp token');
 });
 
@@ -592,6 +605,36 @@ function chips(c, vm) {
 }
 function chip(cs, b) { return cs.find((n) => textOf(n.children[0]) === b); }
 
+test('bands footer names the change itself: +n78 −n41, not "2 SA"', () => {
+  const c = loadChunk();
+  const vm = bandsVm(c);                       // config sa = [71]
+  vm.sel.sa = [71, 41];
+  let txt = textOf(c.render.call(vm, h));
+  assert.match(txt, /Changes: SA \+n41\. Applies with a 60s revert\./);
+  vm.sel.sa = [41];
+  txt = textOf(c.render.call(vm, h));
+  assert.match(txt, /Changes: SA \+n41 −n71\./);
+  vm.sel.LTE = [12, 66, 2, 4, 5, 7, 13, 14];   // LTE config [] seeds from policy [12, 66]
+  assert.equal(vm.diffText('LTE'), 'LTE +B2 +B4 +B5 +B7 +B13 +B14', 'six shown in full');
+  vm.sel.LTE.push(17);
+  assert.equal(vm.diffText('LTE'), 'LTE +B2 +B4 +B5 +B7 +B13 +B14 +1 more', 'then "+N more"');
+});
+
+test('one signal scale: scan and neighbour rows are coloured by GL\'s own levels', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, LIVE);
+  assert.deepEqual([-99, -100, -101, -105, -106, -110, -111].map((v) => vm.glLevel('rsrp', v)), [4, 4, 3, 3, 2, 2, 1]);
+  assert.deepEqual([12, 6, 0, -1].map((v) => vm.glLevel('sinr', v)), [4, 3, 2, 1]);
+  assert.equal(vm.glLevel('rsrq', -11, true), 4, 'NR RSRQ: -12 or better');
+  assert.equal(vm.glLevel('rsrq', -11, false), 2, 'LTE RSRQ: -10 is the good line');
+  assert.equal(vm.glLevel('rsrp', null), 0); assert.equal(vm.glLevel('rsrp', ''), 0); assert.equal(vm.glLevel('rsrp', undefined), 0);
+  vm.tab = 'lock';
+  vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+  vm.scan = { towers: [{ pci: 1, freq: 627264, network_type: '5G SA', band: 78, scs: 30, rsrp: -100 }], running: false, error: '', ts: 1, slot: 1 };
+  const span = walk(c.render.call(vm, h)).find((n) => n.tag === 'span' && textOf(n) === '-100 dBm');
+  assert.equal(span.data.style.color, 'var(--success)', '-100 dBm is excellent, as on the strip');
+});
+
 test('SA band chips are interactive: selected / permitted / blocked', () => {
   const c = loadChunk();
   const vm = bandsVm(c);              // selSA seeded to [71]
@@ -603,7 +646,13 @@ test('SA band chips are interactive: selected / permitted / blocked', () => {
   assert.match(chip(cs, 'n41').data.staticClass, /\bunsel\b/, 'n41 permitted, not selected');
   assert.match(chip(cs, 'n78').data.staticClass, /\bblocked\b/, 'n78 blocked by policy');
   assert.ok(chip(cs, 'n41').data.on && chip(cs, 'n41').data.on.click, 'permitted chip is clickable');
-  assert.ok(!(chip(cs, 'n78').data.on && chip(cs, 'n78').data.on.click), 'blocked chip is NOT clickable');
+  // a blocked chip never toggles; a tap only explains it (touch has no hover title)
+  assert.doesNotMatch(chip(cs, 'n78').data.staticClass, /clickable/, 'blocked chip is not a toggle');
+  const before = JSON.stringify(vm.sel);
+  chip(cs, 'n78').data.on.click();
+  assert.equal(JSON.stringify(vm.sel), before, 'tapping a blocked chip changes nothing');
+  assert.deepEqual(vm.bandTip, { group: 'sa', b: 78 });
+  assert.match(textOf(c.render.call(vm, h)), /n78 blocked by carrier policy; selecting has no effect/, 'its explanation shows under the group');
 });
 
 test('toggleBand edits the selection and Apply reflects change/empty', () => {
@@ -653,8 +702,62 @@ test('network mode selector: seeded, changeable, feeds Apply payload', () => {
   assert.strictEqual(vm.changedAny(), true, 'Apply enabled by a mode change alone');
   // the mode segmented control renders with the current option marked
   const nodes = walk(c.render.call(vm, h));
-  const on = nodes.filter((n) => n.data.staticClass && /mm-seg-b on/.test(n.data.staticClass));
+  const on = nodes.filter((n) => n.data.staticClass && /mm-seg-b on/.test(n.data.staticClass) &&
+    ['Auto', '5G only', '4G only'].includes(textOf(n)));
   assert.strictEqual(on.length, 1, 'exactly one mode option marked active');
+});
+
+test('5G method: seeded from GL, NSA only sends nr5g and leaves SA out; refused under 5G-only', () => {
+  const c = loadChunk();
+  let vm = bandsVm(c, { meta: { mode: 'AUTO', plmn_matched: true } });
+  vm.bands.config.nr5g = 'both'; vm.selNr5g = 'both';
+  assert.strictEqual(vm.nr5gChanged(), false);
+  vm.setNr5g('nsa');
+  assert.strictEqual(vm.nr5gChanged(), true);
+  assert.strictEqual(vm.offByMethod('sa'), true, 'SA is off under NSA only');
+  vm.toggleBand('sa', vm.sel.sa[0]);                      // an SA edit is held back, never sent
+  assert.strictEqual(vm.sendable('sa'), false);
+  const txt = textOf(c.render.call(vm, h));
+  assert.match(txt, /Off: 5G NSA only/);
+  assert.match(txt, /Changes: 5G NSA only\. Applies with a 60s revert/);
+  const calls = stubRpc([{ ok: true, window: 60, applied: { nr5g: 'nsa' }, slot: 1 }]);
+  try {
+    vm.startCountdown = () => {};
+    vm.applyBands();
+    assert.strictEqual(calls[0].params[2], 'set_bands');
+    assert.strictEqual(calls[0].params[3].nr5g, 'nsa');
+    assert.strictEqual(calls[0].params[3].sa, undefined, 'no SA list with SA off');
+  } finally { unstubRpc(); }
+  vm = bandsVm(c, { meta: { mode: 'NR5G', plmn_matched: true } });
+  const nsaBtn = walk(vm.renderNr5g(h)).filter((n) => n.tag === 'button' && textOf(n) === 'NSA only')[0];
+  assert.ok(nsaBtn.data.attrs.disabled, 'NSA only is not offered under 5G-only');
+  vm.selMode = 'LTE';
+  assert.strictEqual(vm.renderNr5g(h), null, 'no 5G method under 4G-only');
+});
+
+test('standby SIM: the picker reads the other SIM and its Apply is a store, not a countdown', async () => {
+  const c = loadChunk();
+  const vm = bandsVm(c, { meta: { mode: 'AUTO', plmn_matched: true } });
+  assert.strictEqual(vm.standbySlot(), 2, 'the SIM not in use (networks_info)');
+  const calls = stubRpc([
+    Object.assign(JSON.parse(JSON.stringify(vm.bands)), { meta: { mode: 'AUTO', standby: true, slot: 2, active_slot: 1 } }),
+    { ok: true, stored: true, slot: 2, applied: { lte: '66' } },
+    Object.assign(JSON.parse(JSON.stringify(vm.bands)), { meta: { mode: 'AUTO', standby: true, slot: 2, active_slot: 1 } }),
+  ]);
+  try {
+    vm.editStandby(true);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    assert.deepStrictEqual(calls[0].params[3], { slot: 2 }, 'get_bands for the standby SIM');
+    assert.match(textOf(c.render.call(vm, h)), /Editing SIM 2, which is not in use/);
+    vm.toggleBand('LTE', vm.sel.LTE[0]);
+    let started = false; vm.startCountdown = () => { started = true; };
+    vm.applyBands();
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    assert.strictEqual(calls[1].params[3].standby, true);
+    assert.strictEqual(calls[1].params[3].slot, 2);
+    assert.strictEqual(started, false, 'nothing to confirm: no countdown');
+    assert.match(vm.storedNote, /Stored for SIM 2/);
+  } finally { unstubRpc(); }
 });
 
 test('mode gate: NSA is off unless Auto; SA off under 4G-only', () => {
@@ -665,7 +768,7 @@ test('mode gate: NSA is off unless Auto; SA off under 4G-only', () => {
   assert.strictEqual(vm.ratActive('nsa'), false, 'NSA needs Auto');
   assert.strictEqual(vm.ratActive('LTE'), false, 'LTE off under 5G-only');
   let txt = textOf(c.render.call(vm, h));
-  assert.match(txt, /Off under NR5G mode/, 'shows the mode-gate note');
+  assert.match(txt, /Off under 5G only/, 'shows the mode-gate note in the selector words');
   // Auto: everything active, no gate.
   vm = bandsVm(c, { meta: { mode: 'AUTO', plmn_matched: true } });
   assert.ok(vm.ratActive('sa') && vm.ratActive('nsa') && vm.ratActive('LTE'), 'all active under Auto');
@@ -708,15 +811,23 @@ test('revert countdown banner renders with Keep/Revert and locks chips', () => {
   assert.ok(btns.includes('Keep') && btns.includes('Revert now'), 'Keep + Revert now present');
   // chips must be non-clickable while a revert is pending
   const cs = chips(c, vm);
-  assert.ok(cs.every((n) => !(n.data.on && n.data.on.click)), 'chips locked during pending');
+  const before = JSON.stringify(vm.sel);
+  cs.forEach((n) => n.data.on.click());
+  assert.equal(JSON.stringify(vm.sel), before, 'chips locked during pending: a tap explains, never toggles');
+  assert.ok(cs.every((n) => !/clickable/.test(n.data.staticClass)));
   // no Apply button while pending
   assert.ok(!nodes.some((n) => n.data.staticClass && /mm-btn primary/.test(n.data.staticClass)),
     'Apply hidden during pending');
 });
 
+test('lazy tab chunks are fetched from the URL GL serves them at', () => {
+  const kit = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'kit', 'chunks.js'), 'utf8');
+  assert.match(kit, /"\/views\/gl-sdk4-ui-mudimodem-" \+ name \+ "\.common\.js\?_t="/);
+});
+
 test('Tracking is an in-page tab (lazy-loaded graph), not a route change', () => {
-  const src = fs.readFileSync(SRC, 'utf8');
-  assert.match(src, /gl-sdk4-ui-mudimodem-tracking\.common\.js/, 'lazy-loads the tracking chunk');
+  const src = srcText();
+  assert.match(src, /loadChunk\("tracking"\)/, 'lazy-loads the tracking chunk');
   assert.doesNotMatch(src, /\$router\.push\(\s*["']\/mudimodem-tracking/,
     'no longer routes away to the tracking page');
   const c = loadChunk();
@@ -747,7 +858,7 @@ test('loaded tracking chunk renders as an embedded child component', () => {
 });
 
 test('the write calls target the watchdog-protected methods only', () => {
-  const src = fs.readFileSync(SRC, 'utf8');
+  const src = srcText();
   // Writes are allowed now, but ONLY through set_bands/confirm/revert_now.
   assert.match(src, /"set_bands"/, 'Apply calls set_bands');
   assert.match(src, /"confirm"/, 'Keep calls confirm');
@@ -826,6 +937,71 @@ test('lock tab: pin target derives from serving cell with SCS default', () => {
   assert.equal(t.scsAssumed, true); // no scan result to confirm it
 });
 
+// A handover after get_lock: the picture's cell is not the one the modem is on any more.
+function movedSample(pci, earfcn) {
+  const s = JSON.parse(JSON.stringify(SAMPLE));
+  s.pci = pci; s.tx_channel = earfcn; s.signals[0].pci = pci; s.signals[0].earfcn = earfcn;
+  return Object.assign({}, LIVE, { 'mudimodem.collect': s });
+}
+
+test('lock tab: after a handover the pin target is refused and the card says where the modem went', () => {
+  const component = loadChunk();
+  const vm = makeVm(component, movedSample(333, 127490));
+  vm.tab = 'lock';
+  vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));   // read while on PCI 516
+  assert.deepEqual(vm.servingMoved, { slot: 1, pci: 333, arfcn: 127490 });
+  assert.strictEqual(vm.pinTarget(), null, 'never lock to the cell the modem has left');
+  const text = textOf(component.render.call(vm, h));
+  assert.match(text, /moved to PCI 333 \/ ARFCN 127490/);
+  assert.doesNotMatch(text, /Lock to this cell/);
+  assert.doesNotMatch(text, /-101 dBm/, "the new cell's RSRP is not shown against the old cell");
+});
+
+test('lock tab: a handover re-reads the lock picture once per new cell, and drops an armed pin', () => {
+  const component = loadChunk();
+  const vm = makeVm(component, movedSample(333, 127490));
+  vm.tab = 'lock';
+  vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+  vm.lockConfirm = { pin: true };
+  let reads = 0;
+  vm.fetchLock = () => { reads += 1; };
+  component.watch.servingMoved.call(vm, vm.servingMoved);
+  component.watch.servingMoved.call(vm, vm.servingMoved);   // the same cell again: no second read
+  assert.equal(reads, 1);
+  assert.strictEqual(vm.lockConfirm, null, 'an armed "lock to this cell" is dropped');
+});
+
+test('lock tab: same cell, other SIM, or a stale sample is not a handover', () => {
+  const component = loadChunk();
+  let vm = makeVm(component, LIVE);
+  vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+  assert.strictEqual(vm.servingMoved, null, 'live cell = picture cell');
+  const other = movedSample(333, 127490);
+  other['mudimodem.collect'].slot = 2;
+  vm = makeVm(component, other);
+  vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+  assert.strictEqual(vm.servingMoved, null, 'a sample of the other SIM says nothing about this one');
+  const stale = movedSample(333, 127490);
+  stale['mudimodem.collect'].stale = true;
+  vm = makeVm(component, stale);
+  vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+  assert.strictEqual(vm.servingMoved, null, 'a stale seed is not live');
+});
+
+test('lock tab: under EN-DC the live cell is the NR leg, as get_lock reads it', () => {
+  const component = loadChunk();
+  const nsa = JSON.parse(JSON.stringify(SAMPLE));
+  Object.assign(nsa, { rat: 'NR5G-NSA', mode: 'NR5G-NSA', pci: 136, tx_channel: 67036, band: 66 });
+  nsa.signals = [
+    { role: 'PCC', rat: 'LTE', band: 66, earfcn: 67036, pci: 136 },
+    { role: 'SCC', rat: 'NR5G-NSA', band: 78, earfcn: 627264, pci: 516 }];
+  const vm = makeVm(component, Object.assign({}, LIVE, { 'mudimodem.collect': nsa }));
+  vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+  vm.lockData.serving = { rat: 'NR5G-NSA', pci: 516, arfcn: 627264, band: 78 };
+  assert.deepEqual(vm.liveCell, { slot: 1, pci: 516, arfcn: 627264 });
+  assert.strictEqual(vm.servingMoved, null, 'the anchor is not compared against the NR picture');
+});
+
 test('lock tab: pin target prefers a scan-confirmed SCS over the band default', () => {
   const component = loadChunk();
   const vm = makeVm(component, LIVE);
@@ -860,29 +1036,176 @@ test('lock tab: cell pending banner renders on lock tab, not bands tab', () => {
   assert.match(text, /Revert now/);
 });
 
-test('bands tab: cell pending does NOT paint the bands banner', () => {
+test('a pending change shows its banner on EVERY tab (page-wide), never only on its own tab', () => {
   const component = loadChunk();
-  // Use a fully-populated bands model (bandsLoading:false, valid bands shape)
-  // so renderBands actually reaches the `pending.kind !== "cell"` gate instead
-  // of short-circuiting on the loading guard — otherwise this test would pass
-  // even if the gate itself were deleted.
   const vm = bandsVm(component);
-  vm.pending = { kind: 'cell', remaining: 42, window: 60, applied: {} };
-  const text = textOf(component.render.call(vm, h));
-  assert.doesNotMatch(text, /42s/);
+  vm.pending = { kind: 'cell', remaining: 42, window: 60, applied: { rat: '5g', pci: 516, freq: 127490 } };
+  for (const tab of ['bands', 'lock', 'config']) {
+    vm.tab = tab;
+    const text = textOf(component.render.call(vm, h));
+    assert.match(text, /42s/, `countdown visible on the ${tab} tab`);
+    assert.match(text, /Keep/, `Keep reachable from the ${tab} tab`);
+  }
+});
+
+const tick = () => new Promise((r) => setImmediate(r));
+
+test('a change pending on the box is restored on load, counting to the BOX deadline', async () => {
+  const calls = stubRpc([{ now: 1000, pending: { kind: 'bands', deadline: 1037, window: 60, applied: { sa: '71' } } }]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.restoreChange(0);
+    await tick(); await tick();
+    assert.strictEqual(calls[0].params[2], 'change_status');
+    assert.ok(vm.pending && !vm.pending.done, 'banner restored');
+    assert.ok(vm.pending.remaining >= 36 && vm.pending.remaining <= 37, 'remaining from the box clock, got ' + vm.pending.remaining);
+    assert.match(textOf(c.render.call(vm, h)), /5G-SA n71/);
+    vm.clearCountdown();
+  } finally { unstubRpc(); }
+});
+
+test('the banner compares the picture before the change with a sample taken after it', async () => {
+  // box clock: the change went out at 1700000000 - 1 s (deadline - window); SAMPLE.t is after it
+  const before = { t: 1699999990000, registered: true, rat: 'NR5G-SA', band: 41, pci: 7, rsrp: -92, sinr: 9 };
+  const calls = stubRpc([{ now: 1699999999, pending: { kind: 'bands', deadline: 1700000059, window: 60,
+                                                       applied: { sa: '71' }, before } }]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.restoreChange(0);
+    await tick(); await tick();
+    assert.deepEqual(vm.pending.before, before, "the router's BEFORE record, kept across a reload");
+    assert.equal(vm.pending.appliedBox, 1699999999000);
+    const text = textOf(c.render.call(vm, h));
+    assert.match(text, /Before n41 · RSRP -92 · SINR 9 · PCI 7\s+→\s+now n71 · RSRP -101 · SINR 4 · PCI 516/);
+    // the strip marks the moment of the change
+    vm.histNow = 1700000000000; vm.histNowAt = Date.now();
+    const marks = walk(c.render.call(vm, h)).filter((n) => n.tag === 'line');
+    assert.equal(marks.length, 1, 'one apply mark on the strip');
+    vm.clearCountdown();
+  } finally { unstubRpc(); }
+});
+
+test('the banner waits for a sample after the change, and says "no service" plainly', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, LIVE);
+  vm.startCountdown(60, { sa: '71' }, 'bands', { now: 1700000005, deadline: 1700000065,
+    before: { registered: false } });
+  let text = textOf(c.render.call(vm, h));
+  assert.match(text, /Before no service\s+→\s+now waiting for the next sample/, 'SAMPLE.t predates the change');
+  vm.clearCountdown();
+  // no router record: the page's own last sample stands in for "before"
+  const vm2 = makeVm(c, LIVE);
+  vm2.startCountdown(60, { sa: '71' }, 'bands');
+  assert.equal(vm2.pending.before.rsrp, -101);
+  vm2.clearCountdown();
+});
+
+test('lock tab: the scan the router kept comes back with its age and SIM', async () => {
+  const kept = { towers: [{ pci: 101, freq: 627264, network_type: '5G SA', band: 78, scs: 30, rsrp: -90 }],
+                 ts: Date.now() - 12 * 60000, slot: 1 };
+  stubRpc([Object.assign(JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED)), { last_scan: kept })]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.tab = 'lock';
+    vm.fetchLock();
+    await tick(); await tick();
+    assert.equal(vm.scan.towers.length, 1, 'kept scan restored');
+    const text = textOf(c.render.call(vm, h));
+    assert.match(text, /scanned 12 min ago · SIM 1/);
+    assert.match(text, /PCI 101/);
+  } finally { unstubRpc(); }
+});
+
+test('Keep that arrives after the watchdog reverted says "too late" instead of "kept"', async () => {
+  stubRpc([{ ok: false, was_pending: false, error: 'nothing to keep' }, {}]);
+  try {
+    const c = loadChunk();
+    const vm = bandsVm(c);
+    vm.startCountdown(60, { sa: '71' }, 'bands', { now: 0, deadline: 60 });
+    vm.keepBands();
+    await tick(); await tick();
+    assert.ok(vm.pending && vm.pending.done && vm.pending.tooLate, 'too-late state');
+    assert.match(textOf(c.render.call(vm, h)), /Too late to keep/);
+    vm.clearCountdown();
+  } finally { unstubRpc(); }
+});
+
+test('Keep that cannot reach the router keeps the banner and the countdown', async () => {
+  stubRpc([Object.assign(new Error('x'), { type: 'timeout' })]);
+  try {
+    const c = loadChunk();
+    const vm = bandsVm(c);
+    vm.startCountdown(60, { sa: '71' }, 'bands', { now: 0, deadline: 60 });
+    vm.keepBands();
+    await tick(); await tick();
+    assert.ok(vm.pending && !vm.pending.done, 'still pending');
+    assert.ok(vm.cdTimer, 'countdown still running');
+    assert.match(textOf(c.render.call(vm, h)), /Couldn't reach the router to keep it/);
+    vm.clearCountdown();
+  } finally { unstubRpc(); }
+});
+
+test('a refused Revert now is shown, and the banner stays (watchdog still armed)', async () => {
+  stubRpc([{ error: 'restore failed: refused (watchdog still armed)' }]);
+  try {
+    const c = loadChunk();
+    const vm = bandsVm(c);
+    vm.startCountdown(60, { sa: '71' }, 'bands', { now: 0, deadline: 60 });
+    vm.revertBands();
+    await tick(); await tick();
+    assert.ok(vm.pending && !vm.pending.done && !vm.pending.reverting, 'banner stays, not stuck in reverting');
+    assert.match(textOf(c.render.call(vm, h)), /restore failed: refused/);
+    vm.clearCountdown();
+  } finally { unstubRpc(); }
+});
+
+test('a cell Revert now still running on the router is followed through job_result', async () => {
+  const calls = stubRpc([
+    { done: false, pending: true, id: 12, kind: 'restore' },                 // revert_now: first slice
+    { done: true, id: 12, ok: true, reverted: true, gl_reconciled: true },   // job_result
+    {}, {}, {}, {}                                                           // refetches afterwards
+  ]);
+  try {
+    const c = loadChunk();
+    const vm = bandsVm(c);
+    vm.startCountdown(60, { rat: '5g', pci: 516 }, 'cell', { now: 0, deadline: 60 });
+    vm.revertBands();
+    for (let i = 0; i < 12; i++) await tick();
+    assert.deepStrictEqual(calls.slice(0, 2).map((x) => x.params[2]), ['revert_now', 'job_result']);
+    assert.deepStrictEqual(calls[1].params[3], { id: 12 });
+    assert.ok(vm.pending && vm.pending.done && vm.pending.reverted, 'shown as reverted once the job finished');
+    vm.clearCountdown();
+  } finally { unstubRpc(); }
+});
+
+test('at the deadline the page asks the box instead of assuming the revert happened', async () => {
+  const calls = stubRpc([{ now: 100 } /* change_status: nothing pending */, {} /* get_bands */]);
+  try {
+    const c = loadChunk();
+    const vm = bandsVm(c);
+    vm.startCountdown(60, { sa: '71' }, 'bands', { now: 0, deadline: 60 });
+    vm.awaitWatchdog(0);
+    await tick(); await tick();
+    assert.strictEqual(calls[0].params[2], 'change_status');
+    assert.ok(vm.pending && vm.pending.done && vm.pending.reverted, 'reverted, as the box reports');
+  } finally { unstubRpc(); }
 });
 
 // ---- Nearby-cells scan card ----
 
-test('lock tab: scan card empty state is honest about SA + disruption', () => {
+test('lock tab: the no-scan neighbour read comes first; the scan card is honest about disruption', () => {
   const component = loadChunk();
   const vm = makeVm(component, LIVE);
   vm.tab = 'lock';
   vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
   const text = textOf(component.render.call(vm, h));
-  assert.match(text, /no neighbour list/i);
-  assert.match(text, /offline/i);
+  assert.match(text, /Neighbour cells.*the link stays up.*Read neighbours.*Nearby cells/);
+  assert.match(text, /offline for up to ~10 minutes/i);
   assert.match(text, /Scan for cells/);
+  // SA honesty now lives where it applies: the neighbour read's empty answer (tested above)
 });
 
 test('lock tab: scan results float the serving carrier first, then A–Z, then strongest RSRP', () => {
@@ -1004,6 +1327,31 @@ test('lock tab: scan target uses the row scs verbatim', () => {
   assert.deepEqual(t.extra, row);
 });
 
+test('scanCells(): a scan is a router job — {pending} is followed through job_result to the towers', async () => {
+  const towers = [{ pci: 101, freq: 627264, network_type: '5G SA', band: 78 }];
+  const calls = stubRpc([
+    { done: false, pending: true, id: 31, kind: 'scan' },              // scan_cells: first slice
+    { done: false, pending: true, id: 31, kind: 'scan' },              // job_result: still scanning
+    { done: true, id: 31, towers, ts: 1700000000000, slot: 2 },        // job_result: finished
+    {}                                                                 // fetchLock afterwards
+  ]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.pending = null; vm.lockBusy = false;
+    vm.scanCells();
+    assert.strictEqual(vm.scan.running, true, 'running while the job runs');
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    assert.deepStrictEqual(calls.slice(0, 3).map((x) => x.params[2]), ['scan_cells', 'job_result', 'job_result']);
+    assert.deepStrictEqual(calls[1].params[3], { id: 31 }, 'continues with the job id');
+    assert.ok(calls[0].opts.timeout <= 35000, 'each call is one slice, not the whole scan');
+    assert.deepStrictEqual(vm.scan.towers, towers);
+    assert.strictEqual(vm.scan.slot, 2);
+    assert.strictEqual(vm.scan.running, false);
+    assert.strictEqual(vm.scan.error, '');
+  } finally { unstubRpc(); }
+});
+
 test('scanCells() no-ops while an experiment is pending (method-level guard)', () => {
   const component = loadChunk();
   const vm = makeVm(component, LIVE);
@@ -1054,6 +1402,56 @@ test('scanCells() no-ops while an experiment is pending (method-level guard)', (
   }
 });
 
+test('lock tab: a scan-row confirm follows the cell when the list re-sorts', () => {
+  const component = loadChunk();
+  const vm = makeVm(component, LIVE);
+  vm.tab = 'lock';
+  vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+  const a = { network_type: 'NR5G', pci: 516, freq: 127490, band: 71, scs: 15, rsrp: -98, carrier: 'T-Mobile' };
+  const b = { network_type: 'NR5G', pci: 300, freq: 127490, band: 71, scs: 15, rsrp: -90, carrier: 'T-Mobile' };
+  vm.scan = { running: false, error: '', ts: 1, slot: 1, towers: [a, b] };
+  const rowOf = () => walk(component.render.call(vm, h)).filter((n) => n.data && n.data.staticClass === 'mm-scan-row');
+  // arm PCI 516 (sorted second: -98 is weaker than -90)
+  const lockBtn = walk(rowOf()[1]).find((n) => n.tag === 'button' && textOf(n) === 'Lock');
+  lockBtn.data.on.click();
+  b.rsrp = -110;                          // now PCI 516 sorts first
+  const rows = rowOf();
+  assert.match(textOf(rows[0]), /PCI 516/);
+  assert.ok(walk(rows[0]).some((n) => textOf(n) === 'Confirm'), 'the confirm moved with PCI 516');
+  assert.ok(!walk(rows[1]).some((n) => textOf(n) === 'Confirm'), 'and not onto the cell now in its old row');
+});
+
+test('lock tab: PCI / ARFCN / Cell ID can be copied, with feedback', async () => {
+  const component = loadChunk();
+  const vm = makeVm(component, LIVE);
+  vm.tab = 'lock';
+  vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+  const copyBtns = () => walk(component.render.call(vm, h)).filter((n) => n.data && n.data.staticClass === 'mm-copy');
+  assert.equal(copyBtns().length, 3, 'PCI, ARFCN and Cell ID');
+  await vm.copyValue('PCI', '516');      // no clipboard in node: says it failed instead of nothing
+  assert.deepEqual(vm.copied, { k: 'PCI', ok: false });
+  assert.ok(copyBtns().some((n) => textOf(n) === 'copy failed'));
+  clearTimeout(vm.copiedTimer);
+});
+
+test('the page reopens on the tab this browser last used (storage permitting)', () => {
+  const component = loadChunk();
+  const vm = makeVm(component, LIVE);
+  const store = {};
+  global.window = { localStorage: { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } } };
+  try {
+    assert.strictEqual(vm.savedTab(), null);
+    vm.fetchBands = () => {};
+    component.watch.tab.call(vm, 'bands');
+    assert.equal(store['mudimodem.tab'], 'bands');
+    assert.equal(vm.savedTab(), 'bands');
+    store['mudimodem.tab'] = 'nonsense';
+    assert.strictEqual(vm.savedTab(), null, 'only our own tabs');
+    global.window = { get localStorage() { throw new Error('blocked'); } };
+    assert.strictEqual(vm.savedTab(), null, 'blocked storage: no memory, no error');
+  } finally { delete global.window; }
+});
+
 test('lock tab: scan-row Confirm button disabled while pending (confirming branch)', () => {
   const component = loadChunk();
   const vm = makeVm(component, LIVE);
@@ -1062,9 +1460,9 @@ test('lock tab: scan-row Confirm button disabled while pending (confirming branc
   vm.scan = { running: false, error: '', ts: 1, towers: [
     { network_type: 'NR5G', pci: 516, freq: 127490, band: 71, scs: 15, cellid: 'B', strength: 4, rsrp: -98 }
   ] };
-  // Puts renderScanCard's row 0 into the confirming branch (Cancel + Confirm),
-  // which only paints when lockConfirm.scanIdx matches the sorted row index.
-  vm.lockConfirm = { scanIdx: 0 };
+  // Puts the row into the confirming branch (Cancel + Confirm): armed by the CELL
+  // (rat|pci|freq), so a re-sort cannot move the confirm onto another row.
+  vm.lockConfirm = { scanKey: 'NR5G|516|127490' };
 
   function findConfirmBtn() {
     const tree = component.render.call(vm, h);
@@ -1106,8 +1504,8 @@ test('lock tab: recovery card names the ssh panic path', () => {
 });
 
 test('AT console is an in-page tab: lazy-loads its own chunk', () => {
-  const src = fs.readFileSync(SRC, 'utf8');
-  assert.match(src, /gl-sdk4-ui-mudimodem-console\.common\.js/, 'lazy-loads the console chunk');
+  const src = srcText();
+  assert.match(src, /loadChunk\("console"\)/, 'lazy-loads the console chunk');
   const c = loadChunk();
   const vm = makeVm(c, LIVE);
   vm.tab = 'at';
@@ -1121,8 +1519,8 @@ test('AT console is an in-page tab: lazy-loads its own chunk', () => {
 });
 
 test('Speedtest is an in-page tab: lazy-loads its own chunk, embedded like Tracking', () => {
-  const src = fs.readFileSync(SRC, 'utf8');
-  assert.match(src, /gl-sdk4-ui-mudimodem-speedtest\.common\.js/, 'lazy-loads the speedtest chunk');
+  const src = srcText();
+  assert.match(src, /loadChunk\("speedtest"\)/, 'lazy-loads the speedtest chunk');
   const c = loadChunk();
   const vm = makeVm(c, LIVE);
   vm.tab = 'speedtest';
@@ -1449,7 +1847,7 @@ test('config tab: a successful update re-reads the installed version', async (t)
     vm.appVer = { installed: '1.0.0', latest: '1.0.2', update_available: true, checked: true };
     await vm.confirmUpdate();
     t.mock.timers.tick(3000);
-    for (let i = 0; i < 6; i++) await Promise.resolve();
+    for (let i = 0; i < 10; i++) await Promise.resolve();   // app_version follows {pending}: one hop more
     assert.strictEqual(calls[2].params[2], 'app_version', 'version is re-read after the update');
     assert.strictEqual(vm.appVer.installed, '1.0.2', 'card now holds the new version');
     const txt = textOf(c.render.call(vm, h));
@@ -1569,18 +1967,18 @@ test('config tab: device_info retries on a later tab open after a first failure'
 });
 
 test('the Battery tab exists in the tab bar', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'views', 'mudimodem.js'), 'utf8');
+  const src = srcText();
   assert.ok(/\["battery", *"Battery"\]/.test(src), 'Battery tab not registered in TABS');
 });
 
 test('the battery chunk is lazy-loaded like the other tabs', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'views', 'mudimodem.js'), 'utf8');
-  assert.ok(src.includes('gl-sdk4-ui-mudimodem-battery.common.js'), 'no lazy load of the battery chunk');
+  const src = srcText();
+  assert.ok(src.includes('loadChunk("battery")'), 'no lazy load of the battery chunk');
   assert.ok(/loadBattery/.test(src), 'loadBattery() missing');
 });
 
 test('the charge-limit form no longer lives in the main chunk', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'views', 'mudimodem.js'), 'utf8');
+  const src = srcText();
   // It moved to the Battery tab's own chunk. Two owners of one setting is the bug
   // this check prevents.
   assert.ok(!src.includes('applyBattLimit'), 'applyBattLimit still in the main chunk');
@@ -1642,7 +2040,8 @@ test('strip history: the first fetch is the WINDOW even after the immediate serv
 
 test('lock tab: pin target accepts PCI 0 / EARFCN 0 (valid identifiers, not "missing")', () => {
   const c = loadChunk();
-  const vm = makeVm(c, LIVE);
+  const vm = makeVm(c, Object.assign({}, LIVE, { 'mudimodem.collect': Object.assign({}, SAMPLE,
+    { rat: 'LTE', mode: 'LTE', pci: 0, tx_channel: 0, band: 1 }) }));   // live on the same cell
   vm.lockData = { lock: { l4g: { locked: false }, l5g: { locked: false } }, gl: { locked: false },
     serving: { rat: 'LTE', pci: 0, arfcn: 0, band: 1, cell_id: 'A' } };
   const t = vm.pinTarget();
@@ -1902,4 +2301,88 @@ test('strip trace: a SIM switch starts a new line, and the label names the sampl
   const axis = walk(c.render.call(vm, h)).find((n) => n.data.staticClass === 'mm-axis');
   assert.match(textOf(axis), /T-Mobile  SIM 1/, 'the RF readings carry the carrier + SIM they came from');
   assert.doesNotMatch(textOf(axis), /AT&T/, "the active SIM's carrier is not pinned on SIM1's readings");
+});
+
+test('the "?" beside the RSRP label opens a glossary of the readings', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, LIVE);
+  assert.doesNotMatch(textOf(c.render.call(vm, h)), /Received power from the cell/, 'closed by default');
+  const help = walk(c.render.call(vm, h)).find((n) => n.data.staticClass === 'mm-help');
+  assert.ok(help && help.data.on && help.data.on.click, 'help button present');
+  help.data.on.click();
+  const txt = textOf(c.render.call(vm, h));
+  assert.match(txt, /Received power from the cell/);
+  assert.match(txt, /Carrier aggregation/);
+});
+
+// ---- neighbour cells without a scan (src/web/main/neighbours.js) ----
+const QENG_LTE = '\r\n+QENG: "neighbourcell intra","LTE",66786,301,-11,-92,-60,12,38,62,12,10,22\r\n' +
+  '+QENG: "neighbourcell inter","LTE",5230,77,-15,-108,-75,-2,10,3,4,5\r\n' +
+  '+QENG: "neighbourcell inter","LTE",2175,-,-,-,-,-,-,-,-,-\r\n\r\nOK\r\n';
+
+test('readNeighbours(): one read-only AT through the queue, {pending} followed via at_result, LTE parsed', async () => {
+  const calls = stubRpc([
+    { done: false, pending: true, id: 7, steps: [] },                                // at_console: queued
+    { done: true, id: 7, steps: [{ cmd: 'AT+QENG="neighbourcell"', status: 'ok', response: QENG_LTE }] }
+  ]);
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c, LIVE);
+    vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+    vm.pending = null; vm.lockBusy = false;
+    vm.readNeighbours();
+    assert.strictEqual(vm.nb.running, true);
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    assert.deepStrictEqual(calls.map((x) => x.params[2]), ['at_console', 'at_result']);
+    assert.deepStrictEqual(calls[0].params[3], { cmd: 'AT+QENG="neighbourcell"', timeout: 8 }, 'a fixed command');
+    assert.deepStrictEqual(calls[1].params[3], { id: 7 });
+    assert.strictEqual(vm.nb.running, false);
+    assert.strictEqual(vm.nb.error, '');
+    assert.strictEqual(vm.nb.cells.length, 3, 'the three LTE rows');
+    const [a, b, z] = vm.nb.cells;
+    assert.deepStrictEqual([a.kind, a.earfcn, a.pci, a.rsrq, a.rsrp, a.sinr, a.band], ['intra', 66786, 301, -11, -92, 12, 66]);
+    assert.deepStrictEqual([b.kind, b.earfcn, b.band, b.rsrp], ['inter', 5230, 13, -108]);
+    assert.strictEqual(z.rsrp, undefined, '"-" is no reading, never 0');
+    assert.strictEqual(z.band, 4, 'EARFCN 2175 is B4');
+    assert.strictEqual(z.pci, undefined, 'an unmeasured inter-frequency cell has no PCI (baseband: %s fields)');
+    const tree = vm.renderNeighbours(h);
+    const txt = textOf(tree);
+    assert.match(txt, /B66  EARFCN 66786  PCI 301/);
+    const rows = walk(tree).filter((n) => n.data && n.data.staticClass === 'mm-scan-row');
+    assert.strictEqual(textOf(rows[0]).indexOf('PCI 301') >= 0, true, 'strongest first');
+    assert.strictEqual(textOf(rows[2]).indexOf('EARFCN 2175') >= 0, true, 'no RSRP sinks to the bottom');
+    assert.ok(walk(rows[2]).filter((n) => n.tag === 'button')[0].data.attrs.disabled, 'no PCI: nothing to lock to');
+    const t = vm.nbTarget(a);
+    assert.deepStrictEqual([t.rat, t.pci, t.freq, t.band, t.slot], ['4g', 301, 66786, 66, vm.slotOf(vm.lockData)],
+      'a 4G lock target: EARFCN + PCI on the SIM it was read for');
+  } finally { unstubRpc(); }
+});
+
+test('readNeighbours(): 5G SA answers a bare OK -> an honest empty state; a refusal or timeout is an error', async () => {
+  for (const [step, want] of [
+    [{ status: 'ok', response: '\r\nOK\r\n' }, /reports no neighbours/],
+    [{ status: 'error', response: '\r\nERROR\r\n' }, /refused/],
+    [{ status: 'timeout', response: '' }, /did not answer/],
+  ]) {
+    stubRpc([{ done: true, id: 1, steps: [Object.assign({ cmd: 'x' }, step)] }]);
+    try {
+      const c = loadChunk();
+      const vm = makeVm(c, LIVE);
+      vm.lockData = JSON.parse(JSON.stringify(LOCKDATA_UNLOCKED));
+      vm.readNeighbours();
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      assert.match(textOf(vm.renderNeighbours(h)), want);
+    } finally { unstubRpc(); }
+  }
+});
+
+test('a SIM change drops the neighbour list (it belongs to the other SIM)', () => {
+  const c = loadChunk();
+  const vm = makeVm(c, LIVE);
+  vm.nb = { cells: [{ pci: 1 }], running: false, error: '', ts: 1, slot: 1, read: true };
+  vm.nbConfirm = 0;
+  vm.fetchBands = () => {}; vm.fetchLock = () => {};
+  vm.onSlotChange();
+  assert.deepStrictEqual(vm.nb.cells, []);
+  assert.strictEqual(vm.nbConfirm, null);
 });

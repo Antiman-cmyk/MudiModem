@@ -14,8 +14,15 @@ local cjson = require "cjson"
 
 -- ---- shim oui.ubus: canned 4.10 reads (bus-scoped status is FLAT) ----
 local at_cmds = {}
+local sims_info = { { slot = 1, mcc = "460", mnc = "01" } }
+local daemon_arm, arm_calls = nil, 0      -- nil: mudimodemd gives no verdict (the {} below)
 package.loaded["oui.ubus"] = {
   call = function(object, method, params)
+    if object == "mudimodem" and method == "change_arm" and daemon_arm ~= nil then
+      arm_calls = arm_calls + 1
+      if daemon_arm then local f = io.open(ARMED, "w"); f:write("88"); f:close(); return { armed = true } end
+      return { armed = false, error = "revert watchdog failed to arm" }
+    end
     if object == "modem.CPU.AT" and method == "get_result_AT" then
       at_cmds[#at_cmds + 1] = params.cmd
       if params.cmd == "AT+QSPN" then
@@ -28,7 +35,7 @@ package.loaded["oui.ubus"] = {
       return { modems = { { bus = "cpu", type = 0, name = "RG650V-EU",
         band = { LTE = { 1, 3, 7, 8, 20, 28 }, ["NR-NSA"] = { 1, 3, 78 }, ["NR-SA"] = { 1, 3, 28, 78 } } } } }
     elseif object == "cellular.sim" and method == "info" then
-      return { sims = { { slot = 1, mcc = "460", mnc = "01" } } }
+      return { sims = sims_info }
     end
     return {}
   end
@@ -48,7 +55,7 @@ ngx = {
     glc_calls[#glc_calls + 1] = body
     local req = cjson.decode(body)
     if req.method == "get_band_config" then
-      assert(req.args.bus == "cpu" and req.args.slot == 1, "get_band_config needs bus+slot")
+      assert(req.args.bus == "cpu" and (req.args.slot == 1 or req.args.slot == 2), "get_band_config needs bus+slot")
       return { status = 200, body = "0 " .. cjson.encode(band_cfg) }
     elseif req.method == "set_band_config" then
       set_calls[#set_calls + 1] = req.args
@@ -388,4 +395,147 @@ r = M.set_bands({ sa = { 78 } })
 assert(r.error and r.error:find("pending"), "must refuse while pending exists")
 print("  ok  - refuses while pending")
 
-print("ALL SET_BANDS TESTS PASSED")
+-- 9. The page can restore its countdown from the box: set_bands answers with the box clock and
+--    the watchdog's deadline, the pending file carries both, and change_status reports them.
+reset()
+local t0 = os.time()
+r = M.set_bands({ sa = { 78 } })
+assert(r.ok and r.window == 60, "set_bands ok")
+assert(type(r.now) == "number" and math.abs(r.now - t0) <= 2, "set_bands must report the box clock")
+assert(type(r.deadline) == "number" and r.deadline >= t0 + 60 and r.deadline <= t0 + 62,
+       "deadline must be now + window, got " .. tostring(r.deadline))
+assert(pget("DEADLINE") == tostring(r.deadline), "pending file must carry DEADLINE")
+local st = M.change_status({})
+assert(type(st.now) == "number" and st.pending, "change_status must see the pending change")
+assert(st.pending.kind == "bands" and st.pending.deadline == r.deadline and st.pending.window == 60, "change_status fields")
+assert(st.pending.applied and st.pending.applied.sa == r.applied.sa, "change_status must return what was applied")
+print("  ok  - deadline + applied survive a page reload (change_status)")
+
+-- 9b. The radio picture just before the change is recorded with it (the banner's "before"):
+--     from the collector's fresh sample of the same slot only.
+do
+  local lp = assert(os.getenv("MUDIMODEM_LATEST"), "runner sets MUDIMODEM_LATEST")
+  local function latest(slot, age)
+    local lf = assert(io.open(lp, "w"))
+    lf:write(string.format('{"t":%.0f,"slot":%d,"mode":"NR5G-SA","pcc_rat":"NR5G-SA","band":71,"pci":516,'
+      .. '"rsrp":-99,"sinr":4,"rsrq":-13,"carrier":"T-Mobile \'x\'"}', (os.time() - age) * 1000, slot))
+    lf:close()
+  end
+  reset(); latest(1, 5)
+  r = M.set_bands({ sa = { 78 } })
+  assert(r.ok and type(r.before) == "table", "set_bands must answer with the before-picture")
+  assert(r.before.rsrp == -99 and r.before.sinr == 4 and r.before.band == 71 and r.before.pci == 516
+         and r.before.rat == "NR5G-SA" and r.before.registered == true, "before-picture fields")
+  assert(pget("BEFORE"), "pending file must carry BEFORE")
+  assert(M.change_status({}).pending.before.rsrp == -99, "change_status must return the before-picture")
+  reset(); latest(2, 5)
+  assert(M.set_bands({ sa = { 78 } }).before == nil, "another SIM's sample is not this change's before")
+  reset(); latest(1, 300)
+  assert(M.set_bands({ sa = { 78 } }).before == nil, "a stale sample is not a before-picture")
+  os.remove(lp)
+  reset()
+end
+print("  ok  - the before-picture rides with the pending change (same slot, fresh sample only)")
+
+-- 10. Keep after the watchdog already reverted: say so, log no "Kept".
+local f2 = io.open(PENDING, "r"); if f2 then f2:close(); os.remove(PENDING) end
+local hist = os.getenv("MUDIMODEM_HIST")
+local function kept_events()
+  local n = 0
+  local ef = hist and io.open(hist .. "/events.jsonl", "r")
+  if ef then for line in ef:lines() do if line:find('"Kept"', 1, true) then n = n + 1 end end; ef:close() end
+  return n
+end
+local before = kept_events()
+r = M.confirm({})
+assert(r.ok == false and r.was_pending == false and r.error, "confirm with nothing pending must say so")
+assert(kept_events() == before, "a too-late Keep must not log a Kept event")
+assert(M.change_status({}).pending == nil, "nothing pending")
+reset()
+assert(M.set_bands({ sa = { 78 } }).ok)
+r = M.confirm({})
+assert(r.ok and r.was_pending == true and r.kind == "bands", "a timely Keep reports was_pending")
+print("  ok  - confirm reports was_pending; a too-late Keep is not logged as kept")
+
+
+-- D. With mudimodemd: it arms the watchdog (change_arm) — no `sleep 1` in the nginx worker and
+--    no spawn from here; a refused arm writes nothing.
+reset(); daemon_arm = true; arm_calls = 0
+r = M.set_bands({ sa = { 78 } })
+assert(r.ok, "set_bands via the daemon arm: " .. tostring(r.error))
+assert(arm_calls == 1, "armed through change_arm")
+for _, c in ipairs(exec_cmds) do
+  assert(not c:find("sleep") and not c:find("watch"), "the plugin neither spawns nor sleeps: " .. c)
+end
+M.confirm({})
+reset(); daemon_arm = false
+r = M.set_bands({ sa = { 78 } })
+assert(r.error and r.error:find("failed to arm"), "refused arm -> refused write: " .. tostring(r.error))
+assert(#set_calls == 0, "no set_band_config without an armed watchdog")
+assert(not io.open(PENDING, "r"), "no pending left")
+daemon_arm = nil
+
+-- E. The 5G method (docs/knowledge.md §4.2: GL turns an empty NR-SA list into nr5g_disable_mode 1,
+--    an empty NR-NSA list into 2 — measured by running GL's own glc + cellular_manager).
+local function auto_all()
+  band_cfg = { band_enable = true, network_mode = "AUTO", band_filter_mode = 0, supports_band = true,
+               band_list = { LTE = { 3, 7 }, ["NR-NSA"] = { 78 }, ["NR-SA"] = { 28, 78 } } }
+end
+reset(); auto_all()
+r = M.set_bands({ nr5g = "nsa" })
+assert(r.ok, "NSA only: " .. tostring(r.error))
+p = set_calls[1]
+assert(#p.band_list["NR-SA"] == 0 and list(p.band_list["NR-NSA"]) == "78" and list(p.band_list.LTE) == "3,7"
+       and p.network_mode == "AUTO", "NSA only = an empty NR-SA list, the rest kept: " .. cjson.encode(p))
+assert(r.applied.nr5g == "nsa" and pget("KIND") == "bands", "confirm-or-revert as any band change")
+if cjson.empty_array then   -- the router's cjson (the host's has no empty-array marker)
+  assert(pget("APPLIED_BAND_CONFIG"):find('"NR%-SA":%[%]'), "GL is sent [] (not {}): " .. pget("APPLIED_BAND_CONFIG"))
+end
+M.confirm({})
+-- the stored method stays: a later LTE-only change does not refill SA behind the user's back
+reset(); band_cfg = { band_enable = true, network_mode = "AUTO", band_filter_mode = 0, supports_band = true,
+                      band_list = { LTE = { 3, 7 }, ["NR-NSA"] = { 78 }, ["NR-SA"] = {} } }
+assert(M.get_bands({ light = 1 }).config.nr5g == "nsa", "get_bands reads the method back")
+r = M.set_bands({ lte = { 3 } })
+assert(r.ok and #set_calls[1].band_list["NR-SA"] == 0 and r.applied.nr5g == nil, "SA stays off: " .. cjson.encode(set_calls[1]))
+M.confirm({})
+-- "both" turns SA back on (every SA band the module supports: there is no previous list)
+reset(); band_cfg.band_list["NR-SA"] = {}
+r = M.set_bands({ nr5g = "both" })
+assert(r.ok and list(set_calls[1].band_list["NR-SA"]) == "1,3,28,78" and r.applied.nr5g == "both", cjson.encode(set_calls[1]))
+M.confirm({})
+-- SA only
+reset(); auto_all()
+r = M.set_bands({ nr5g = "sa" })
+assert(r.ok and #set_calls[1].band_list["NR-NSA"] == 0 and list(set_calls[1].band_list["NR-SA"]) == "28,78", "SA only")
+M.confirm({})
+-- refusals, nothing armed or written
+for _, a in ipairs({ { nr5g = "nsa", mode = "NR5G" }, { nr5g = "sa", mode = "LTE" }, { nr5g = "nsa", sa = { 78 } },
+                     { nr5g = "sideways" } }) do
+  reset(); auto_all()
+  r = M.set_bands(a)
+  assert(r.error and #set_calls == 0 and #exec_cmds == 0 and not io.open(PENDING, "r"), "refused: " .. cjson.encode(a))
+end
+reset(); band_cfg.network_mode = "NR5G"; band_cfg.band_list["NR-SA"] = {}
+assert(M.set_bands({ lte = { 3 } }).error, "5G-only can never keep SA off (a stored NSA-only + NR5G is refused too)")
+print("  ok  - the 5G method: SA off / NSA off as GL's empty lists, kept across later edits, refusals")
+
+-- F. The standby SIM: stored in GL's per-slot store with no watchdog (GL sends no AT for a slot
+--    that is not in use; it applies the stored bands when it next dials that slot).
+reset(); auto_all(); sims_info = { { slot = 1, iccid = "8901", mcc = "460", mnc = "01" }, { slot = 2, iccid = "8902", mcc = "460", mnc = "11" } }
+r = M.set_bands({ standby = true, slot = 2, lte = { 3 }, nr5g = "nsa" })
+assert(r.ok and r.stored == true and r.slot == 2, "standby store: " .. tostring(r.error))
+assert(#set_calls == 1 and set_calls[1].slot == 2 and #set_calls[1].band_list["NR-SA"] == 0, "one write, to slot 2")
+assert(not io.open(PENDING, "r") and #at_cmds == 0, "no pending, no AT")
+for _, c in ipairs(exec_cmds) do assert(not c:find("watch") and not c:find("sleep"), "no watchdog: " .. c) end
+local gb = M.get_bands({ slot = 2, light = 1 })
+assert(gb.meta.standby == true and gb.meta.slot == 2 and gb.meta.active_slot == 1, "get_bands reads the standby SIM")
+reset(); sims_info = { { slot = 1, iccid = "8901" } }
+assert(M.set_bands({ standby = true, slot = 2, lte = { 3 } }).error, "no SIM in slot 2: refused")
+assert(M.set_bands({ standby = true, slot = 1, lte = { 3 } }).error, "the active SIM is never 'standby'")
+assert(M.get_bands({ slot = 2, light = 1 }).error, "no SIM in slot 2: nothing to read")
+assert(#set_calls == 0, "refusals write nothing")
+sims_info = { { slot = 1, mcc = "460", mnc = "01" } }
+print("  ok  - standby SIM: one store write, no watchdog, refused without a SIM or for the active one")
+
+print("ALL SET_BANDS TESTS PASSED (incl. change status)")

@@ -3,12 +3,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
-const SRC = path.join(__dirname, '..', 'src', 'views', 'mudimodem-console.js');
+const SRC = path.join(__dirname, '..', 'src', 'web', 'tabs', 'console.js');          // source (static checks)
+const CHUNK = path.join(__dirname, '..', 'dist', 'views', 'gl-sdk4-ui-mudimodem-console.common.js');  // what ships (eval)
 
 // Mirror the loader in the main chunk: eval with `module` in scope.
 function loadChunk() {
   const module = { exports: {} };
-  const source = fs.readFileSync(SRC, 'utf8');
+  const source = fs.readFileSync(CHUNK, 'utf8');
   return eval(source);
 }
 
@@ -522,7 +523,7 @@ test('multi-line prompt renders a textarea, single-line an input', () => {
     'multi-line uses <textarea>');
 });
 
-test('send(): RPC timeout scales with the number of steps', async () => {
+test('send(): each RPC waits one daemon slice (35 s), however many steps', async () => {
   const c = loadChunk();
   const vm = makeVm(c, {});
   const saved = global.window;
@@ -536,7 +537,48 @@ test('send(): RPC timeout scales with the number of steps', async () => {
     vm.prompt = 'A\nB\nC'; vm.selId = null;
     await vm.send();
   } finally { global.window = saved; }
-  assert.strictEqual(seenOpts.timeout, (8 * 3 + 10) * 1000, '3 steps -> 8*3+10 s');
+  assert.strictEqual(seenOpts.timeout, 35000, 'a slice is bounded by GL\'s 30 s ubus proxy, not by the steps');
+});
+
+test('send(): a {pending} reply continues with at_result and shows each step once', async () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  const saved = global.window;
+  const sent = [];
+  const s1 = { cmd: 'AT+ONE', status: 'ok', response: '+ONE: 1\r\nOK\r\n' };
+  const s2 = { cmd: 'AT+TWO', status: 'ok', response: '+TWO: 2\r\nOK\r\n' };
+  const replies = [
+    { done: false, pending: true, id: 77, ran: 1, requested: 3, steps: [s1], transport: 'gl' },
+    { done: false, pending: true, id: 77, ran: 1, requested: 3, steps: [s1], transport: 'gl' },
+    { done: true, ok: true, id: 77, ran: 3, requested: 3, aborted: false, transport: 'gl',
+      steps: [s1, s2, { cmd: 'AT+THREE', status: 'ok', response: 'OK\r\n' }] },
+  ];
+  try {
+    global.window = { $rpcRequest: (_m, p) => { sent.push([p[2], p[3]]); return Promise.resolve(replies.shift()); } };
+    vm.prompt = 'AT+ONE\nAT+TWO\nAT+THREE'; vm.selId = null;
+    await vm.send();
+  } finally { global.window = saved; }
+  assert.deepStrictEqual(sent.map((x) => x[0]), ['at_console', 'at_result', 'at_result']);
+  assert.deepStrictEqual(sent[1][1], { id: 77 }, 'continues with the job id');
+  assert.strictEqual(vm.lines.filter((l) => l.text === '+ONE: 1').length, 1, 'a step seen twice is shown once');
+  assert.ok(vm.lines.some((l) => l.text === '+TWO: 2'), 'later steps shown');
+  assert.strictEqual(vm.sending, false, 'done');
+  assert.ok(!vm.lines.some((l) => /skipped/.test(l.text)), 'nothing skipped');
+});
+
+test('send(): an error while waiting ends the send with that error', async () => {
+  const c = loadChunk();
+  const vm = makeVm(c, {});
+  const saved = global.window;
+  const replies = [{ done: false, pending: true, id: 5, steps: {} },   // a non-array (empty list over ubus)
+                   { error: 'unknown AT job (finished long ago, or the daemon restarted)' }];
+  try {
+    global.window = { $rpcRequest: () => Promise.resolve(replies.shift()) };
+    vm.prompt = 'AT'; vm.selId = null;
+    await vm.send();
+  } finally { global.window = saved; }
+  assert.ok(vm.lines.some((l) => l.kind === 'err' && /daemon restarted/.test(l.text)));
+  assert.strictEqual(vm.sending, false);
 });
 
 test('checkLibraryStatus stores the status; render shows "Update available" + button', () => {
@@ -754,4 +796,30 @@ test('the truth line and timeout hint follow the transport the backend reports',
     assert.match(vm.truthLine, /GL's AT service/, 'back on GL');
     assert.match(vm.lines.filter((l) => l.kind === 'err').pop().text, /drops a late answer/, 'GL timeout hint');
   } finally { global.window = saved; }
+});
+
+test('Clear empties the transcript; the risk switch is remembered for this session only', () => {
+  const store = {};
+  global.window = { sessionStorage: { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = v; } },
+                    localStorage: { getItem: () => { throw new Error('must not use localStorage'); }, setItem: () => { throw new Error('must not use localStorage'); } } };
+  try {
+    const c = loadChunk();
+    const vm = makeVm(c);
+    vm.lines.push({ t: '00:00', kind: 'cmd', text: 'ATI' });
+    vm.clearTranscript();
+    assert.strictEqual(vm.lines.length, 0);
+    vm.riskOK = false;
+    vm.toggleGate();
+    assert.strictEqual(store['mudimodem.riskEnabled'], '1');
+  } finally { delete global.window; }
+});
+
+test('Copy without the clipboard API (plain-http admin) still answers', async () => {
+  const c = loadChunk();
+  const vm = makeVm(c);
+  vm.lines.push({ t: '00:00', kind: 'cmd', text: 'ATI' });
+  await vm.copyTranscript();      // no navigator.clipboard, no document in node
+  assert.match(vm.copyNote, /Copy failed/);
+  clearTimeout(vm._copyTimer);
+  vm.lines.splice(0);
 });

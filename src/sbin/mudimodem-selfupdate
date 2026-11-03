@@ -17,7 +17,7 @@ LOG="${MUDIMODEM_UPDATE_LOG:-/var/log/mudimodem-update.log}"
 # The install source recorded by install.sh (/etc/mudimodem/version.json "base");
 # upstream main when absent (a box installed by an older installer) or when the
 # recorded value is not a plain URL. The allowlist is the SAME one the Lua
-# app_version applies (src/rpc/mudimodem read_version_file — keep in sync):
+# app_version applies (src/lib/rpc/config.lua read_version_file — keep in sync):
 # letters, digits, . - _ : / — so the two readers can never follow different
 # sources, and nothing that could mean something to a shell gets through.
 VERSION_FILE="${MUDIMODEM_VERSION_FILE:-/etc/mudimodem/version.json}"
