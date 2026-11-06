@@ -48,7 +48,10 @@ recs | {
 }
 
 # tracked AND new (untracked, not ignored) files: a new file must be checked before its first commit
-for f in $(git ls-files --cached --others --exclude-standard src tools dist 2>/dev/null || find src tools dist -type f); do
+# (no git, e.g. the router pass: find, minus the submodule - its unpacked firmware has names with
+# spaces, which this word-split loop would cut into bogus paths)
+for f in $(git ls-files --cached --others --exclude-standard src tools dist 2>/dev/null ||
+           find src tools dist -type f | grep -v "^tools/mudi-emu/"); do
   case " $UNSHIPPED " in *" $f "*) continue ;; esac
   case "$f" in src/web/*) continue ;; esac   # page sources: built into dist/views (tools/build-web.mjs)
   case "$f" in *.pyc|*/__pycache__/*) continue ;; esac
