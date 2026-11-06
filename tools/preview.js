@@ -194,6 +194,22 @@ async function shot(browser, o) {
     await pg.locator(".mm-tabs .mm-tab").nth(order.indexOf(o.tab)).click();
   }
   await pg.waitForTimeout(700);
+  // The strip's "?" glossary must be a full-width row under the trace + readings (it once landed
+  // beside them as a third flex column and crushed the trace): open it, measure, close it again.
+  if (await pg.locator(".mm-strip .mm-help").count()) {
+    await pg.click(".mm-strip .mm-help");
+    const bad = await pg.evaluate(() => {
+      const box = (el) => el && el.getBoundingClientRect();
+      const s = box(document.querySelector(".mm-strip")), tr = box(document.querySelector(".mm-strip > .mm-trace"));
+      const g = box(document.querySelector(".mm-strip > .mm-gloss"));
+      if (!g) return "the strip's ? opened no glossary";
+      if (Math.abs(g.width - s.width) > 1 || g.top < tr.bottom - 1)
+        return `strip glossary is not a full-width row under the trace (glossary x=${Math.round(g.left)} w=${Math.round(g.width)}, strip w=${Math.round(s.width)}, trace w=${Math.round(tr.width)})`;
+      return "";
+    });
+    if (bad) errors.push(bad);
+    await pg.evaluate(() => document.querySelector(".mm-strip .mm-help").click());   // a crushed trace can cover it
+  }
   const overflow = await pg.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   if (overflow > 1) {   // name the widest offenders, so a layout bug is findable from the log
     const who = await pg.evaluate(() => {

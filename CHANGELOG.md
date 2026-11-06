@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+- The status strip's "?" glossary opens as a full-width row under the RSRP trace and readings.
+  It used to squeeze in beside them as a third column, crushing the trace to a sliver on desktop
+  (the stale-data note did the same); on phones it now has the strip's side padding too. The
+  preview (`tools/preview.js`, run by `tools/test-local.sh`) opens it on every render and fails if
+  it is not a full-width row.
+
 ## 3.0.2 — 2026-11-03
 - Cell lock: the 5G NSA section is titled "5G cell · lock target" instead of the jargon "5G leg",
   and the strip's NSA explanation says plainly that the modem uses an LTE cell (the anchor) and a
