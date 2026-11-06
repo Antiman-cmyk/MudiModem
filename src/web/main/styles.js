@@ -11,7 +11,7 @@ export default {
       if (document.getElementById(this.styleId)) return;
       var css =
         '.mm{color:var(--text-regular);font-variant-numeric:tabular-nums}' +
-        '.mm-strip{display:flex;align-items:stretch;background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);margin-bottom:11px;overflow:hidden}' +
+        '.mm-strip{display:flex;flex-wrap:wrap;align-items:stretch;background:var(--background-card);border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,.06);margin-bottom:11px;overflow:hidden}' +
         '.mm-trace{flex:1;min-width:0;padding:9px 0 6px 13px}' +
         '.mm-eyebrow{font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-badge)}' +
         '.mm-plot{height:40px;margin-top:3px}.mm-plot svg{display:block;width:100%;height:100%;overflow:visible}' +
@@ -88,6 +88,9 @@ export default {
         '.mm-help{margin-left:6px;width:15px;height:15px;line-height:13px;border-radius:50%;border:1px solid var(--border);background:transparent;color:var(--text-weak);font-size:10px;font-weight:700;cursor:pointer;padding:0;vertical-align:1px}' +
         '.mm-gloss{flex-basis:100%;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:4px 16px;font-size:11.5px;color:var(--text-weak);border-top:1px solid var(--divider);padding-top:8px;margin-top:4px}' +
         '.mm-gloss b{color:var(--text-title)}' +
+        // In the strip the glossary and the stale note are full-width rows under trace + readings
+        // (the strip wraps); its children carry their own padding, so these do too.
+        '.mm-strip>.mm-gloss{margin:0;padding:9px 14px 11px 13px}.mm-strip>.mm-stale{padding:0 14px 8px 13px}' +
         '.mm-scan-row{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;padding:7px 4px;border-bottom:1px solid var(--divider);font-size:12px}' +
         '.mm-scan-row>span{min-width:0}.mm-scan-row>span:nth-child(2){flex:1}' +
         '.mm-scan-badge{flex:none;font-size:10px;padding:1px 6px;border:1px solid var(--border);border-radius:3px;color:var(--text-badge)}' +
