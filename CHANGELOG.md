@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.0.3 — 2026-11-06
 - The status strip's "?" glossary opens as a full-width row under the RSRP trace and readings.
   It used to squeeze in beside them as a third column, crushing the trace to a sliver on desktop
   (the stale-data note did the same); on phones it now has the strip's side padding too. The
